@@ -156,11 +156,33 @@ class Enhancer:
         """Build the per-pixel shading map from frames of a uniform-temperature target.
         Removes lens-shading vignette, residual column FPN and blotches that the shutter
         FFC can't (the shutter sits behind the lens). It's an additive (offset) NUC valid
-        near the reference temperature; re-do it if the readout drifts a lot."""
+        near the reference temperature; re-do it if the readout drifts a lot.
+        
+        To avoid baking temporal noise into a permanent spatial grid, we decompose the
+        reference into 3 deterministic components: smooth vignette, column FPN, and row FPN.
+        """
         ref = np.mean([np.asarray(f, np.float32) for f in frames], axis=0)
-        if self.static_bad.any():                  # don't bake bad pixels into the map
-            ref = cv2.medianBlur(ref, 3) * self.static_bad + ref * (~self.static_bad)
-        self.flat_map = (ref - float(ref.mean())).astype(np.float32)
+        
+        # 1. Remove bad pixels before analysis
+        ref_med = cv2.medianBlur(ref, 3)
+        if self.static_bad.any():
+            ref = ref_med * self.static_bad + ref * (~self.static_bad)
+        else:
+            ref = ref_med
+            
+        # 2. Extract smooth vignette (lens shading)
+        vignette = cv2.GaussianBlur(ref, (0, 0), 15.0)
+        
+        # 3. Extract 1D Fixed Pattern Noise (FPN)
+        # Residual contains FPN + random noise
+        resid = ref - vignette
+        col_fpn = np.median(resid, axis=0, keepdims=True)         # (1, W)
+        row_fpn = np.median(resid - col_fpn, axis=1, keepdims=True) # (H, 1)
+        
+        # 4. Reconstruct clean map (noise-free)
+        clean_flat = vignette + col_fpn + row_fpn
+        self.flat_map = (clean_flat - float(clean_flat.mean())).astype(np.float32)
+        
         self.reset_temporal()
         return float(self.flat_map.std())
 
