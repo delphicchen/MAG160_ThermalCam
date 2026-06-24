@@ -1,0 +1,4 @@
+# Magnity / 巨哥科技 thermal camera (Shanghai Magnity Electronics)
+# Gives the 'plugdev' group read/write access to the raw USB device so a
+# non-root user can talk to it with libusb/pyusb.
+SUBSYSTEM=="usb", ATTR{idVendor}=="833c", MODE="0660", GROUP="plugdev", TAG+="uaccess"
