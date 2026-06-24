@@ -42,6 +42,27 @@ class ThermalESPCN(nn.Module):
         self.conv2 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(16, 4, kernel_size=3, padding=1)  # 4 = 1 * 2^2
         self.shuffle = nn.PixelShuffle(2)
+        self._init_weights()
+
+    def _init_weights(self):
+        """ICNR initialisation for PixelShuffle — all sub-pixel copies share the
+        same kernel so the initial output is a smooth bilinear-like upscale
+        instead of a checkerboard of independent random channels."""
+        # early layers: Kaiming (small fan-in keeps the initial response mild)
+        for m in [self.conv1, self.conv2]:
+            nn.init.kaiming_normal_(m.weight, a=0, mode='fan_in', nonlinearity='relu')
+            nn.init.zeros_(m.bias)
+        # last conv → PixelShuffle: ICNR init
+        scale = 2
+        c_out, c_in, kh, kw = self.conv3.weight.shape   # (4, 16, 3, 3)
+        c_base = c_out // (scale * scale)                # 1 (single output channel)
+        # initialise a (c_base, c_in, kh, kw) kernel with Kaiming
+        base_kernel = torch.empty(c_base, c_in, kh, kw)
+        nn.init.kaiming_normal_(base_kernel, a=0, mode='fan_in', nonlinearity='relu')
+        # replicate across the scale² sub-pixel channels
+        with torch.no_grad():
+            self.conv3.weight.copy_(base_kernel.repeat(scale * scale, 1, 1, 1))
+            nn.init.zeros_(self.conv3.bias)
 
     def forward(self, x):
         """x: [N, 1, H, W] → [N, 1, 2H, 2W]"""
@@ -318,7 +339,7 @@ def export_onnx(model=None, trained=True):
         },
     )
     nparams = sum(p.numel() for p in model.parameters())
-    tag = "trained" if trained else "untrained (random weights)"
+    tag = "ICNR-initialised (untrained)" if not trained else "trained"
     print(f"ONNX exported ({tag}) → {ONNX_PATH}")
     print(f"  params: {nparams:,}   input: [N,1,H,W]   output: [N,1,2H,2W]")
     size_kb = os.path.getsize(ONNX_PATH) / 1024
