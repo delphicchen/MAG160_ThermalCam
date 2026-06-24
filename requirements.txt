@@ -1,5 +1,9 @@
 pyusb>=1.2
 numpy
+opencv-python
 pillow
 PySide6
 matplotlib
+onnxruntime
+# training only (not required for viewer):
+# torch

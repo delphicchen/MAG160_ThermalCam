@@ -10,3 +10,6 @@ build/
 .env
 .venv/
 venv/
+# SR training artifacts (large) — the .onnx model is small and tracked
+*.pt
+sr_training_frames.npy

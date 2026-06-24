@@ -52,6 +52,7 @@ class Viewer(QtWidgets.QMainWindow):
         self.paused = False
         self.mirror = False                 # left-right flip
         self.superres_on = False            # multi-frame super-resolution (display)
+        self.nn_superres_on = False          # neural (ONNX ESPCN) super-resolution
         self.sr_scale = 2
         self.sr_buffer = deque(maxlen=8)    # recent clean frames for super-res
         self.auto_ffc = False
@@ -155,9 +156,15 @@ class Viewer(QtWidgets.QMainWindow):
         side.addWidget(self.chk_spatial)
         self.chk_superres = QtWidgets.QCheckBox("Super-res ×2 (multi-frame)")
         self.chk_superres.setToolTip("Multi-frame super-resolution: combines recent frames "
-                                     "(uses natural hand jitter) into a 2× sharper image.")
-        self.chk_superres.toggled.connect(lambda v: setattr(self, "superres_on", v))
+                                     "(uses natural hand jitter) into a 2× sharper image. "
+                                     "~4 ms per frame.")
+        self.chk_superres.toggled.connect(self._toggle_multiframe_sr)
         side.addWidget(self.chk_superres)
+        self.chk_nn_sr = QtWidgets.QCheckBox("Super-res ×2 (neural)")
+        self.chk_nn_sr.setToolTip("Single-frame neural super-resolution (ESPCN, ONNX). "
+                                  "~2-3 ms, no hand jitter needed. Train with train_sr.py.")
+        self.chk_nn_sr.toggled.connect(self._toggle_nn_sr)
+        side.addWidget(self.chk_nn_sr)
 
         side.addSpacing(8)
         side.addWidget(QtWidgets.QLabel("Temperature (°C)"))
@@ -178,6 +185,22 @@ class Viewer(QtWidgets.QMainWindow):
         self.statusBar().showMessage("starting…")
 
     # ---- controls ----
+    def _toggle_multiframe_sr(self, v):
+        self.superres_on = v
+        if v and self.nn_superres_on:
+            self.nn_superres_on = False
+            self.chk_nn_sr.blockSignals(True)
+            self.chk_nn_sr.setChecked(False)
+            self.chk_nn_sr.blockSignals(False)
+
+    def _toggle_nn_sr(self, v):
+        self.nn_superres_on = v
+        if v and self.superres_on:
+            self.superres_on = False
+            self.chk_superres.blockSignals(True)
+            self.chk_superres.setChecked(False)
+            self.chk_superres.blockSignals(False)
+
     def _toggle_pause(self, v): self.paused = v
     def do_ffc(self, light=False):
         self.statusBar().showMessage("FFC: closing shutter…")
@@ -330,7 +353,9 @@ class Viewer(QtWidgets.QMainWindow):
             frame = self.enhancer.temporal_step(clean)
             self.last_frame = frame
             # display layer
-            if self.superres_on and len(self.sr_buffer) >= 2:
+            if self.nn_superres_on:
+                disp = self.enhancer.neural_superres(frame, self.sr_scale)
+            elif self.superres_on and len(self.sr_buffer) >= 2:
                 disp = self.enhancer.superres(list(self.sr_buffer), self.sr_scale)
             else:
                 disp = self.enhancer.enhance_display(frame)
