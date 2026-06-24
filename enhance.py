@@ -19,17 +19,59 @@ import cv2
 
 
 class NeuralSR:
-    """Lightweight ONNX Runtime wrapper for the ESPCN thermal super-resolution model.
-    Loads the model lazily on first call; inference is ~2-3 ms on CPU for 160×120."""
+    """Lightweight inference wrapper for the ESPCN thermal super-resolution model.
+
+    Backend priority:
+      1. OpenVINO  (Intel iGPU → CPU fallback) — best for Intel platforms
+      2. ONNX Runtime CPUExecutionProvider       — portable fallback
+
+    Inference is ~2 ms (OpenVINO GPU) / ~2.7 ms (ONNX Runtime CPU) for 160×120.
+    """
 
     def __init__(self, model_path):
-        import onnxruntime as ort
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = 2
-        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self._sess = ort.InferenceSession(model_path, opts,
-                                          providers=['CPUExecutionProvider'])
-        self._in_name = self._sess.get_inputs()[0].name
+        self._backend = None        # 'openvino' or 'onnxrt'
+        self._infer = None          # callable: np(1,1,H,W) -> np(1,1,2H,2W)
+
+        # --- try OpenVINO first ---
+        try:
+            import openvino as ov
+            core = ov.Core()
+            model = core.read_model(model_path)
+            # prefer GPU (Intel iGPU) for lowest latency, fall back to CPU
+            devices = core.available_devices
+            if 'GPU' in devices:
+                compiled = core.compile_model(model, 'GPU',
+                                              config={'PERFORMANCE_HINT': 'LATENCY'})
+                self._backend = 'openvino-GPU'
+            else:
+                compiled = core.compile_model(model, 'CPU',
+                                              config={'PERFORMANCE_HINT': 'LATENCY',
+                                                      'NUM_STREAMS': '1'})
+                self._backend = 'openvino-CPU'
+            req = compiled.create_infer_request()
+            out_key = compiled.output(0)
+            self._infer = lambda x, _r=req, _k=out_key: _r.infer({'input': x})[_k]
+        except Exception:
+            pass
+
+        # --- fallback: ONNX Runtime ---
+        if self._infer is None:
+            try:
+                import onnxruntime as ort
+                opts = ort.SessionOptions()
+                opts.intra_op_num_threads = 2
+                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                sess = ort.InferenceSession(model_path, opts,
+                                            providers=['CPUExecutionProvider'])
+                in_name = sess.get_inputs()[0].name
+                self._infer = lambda x, _s=sess, _n=in_name: _s.run(None, {_n: x})[0]
+                self._backend = 'onnxrt-CPU'
+            except Exception as e:
+                raise RuntimeError(f"No inference backend available: {e}")
+
+    @property
+    def backend(self):
+        return self._backend
 
     def upscale(self, frame_f32):
         """Upscale a single HxW float32 frame. Values are preserved (not normalised)."""
@@ -38,8 +80,8 @@ class NeuralSR:
         span = max(hi - lo, 1e-6)
         normed = (frame_f32 - lo) / span
         inp = normed[np.newaxis, np.newaxis, :, :].astype(np.float32)  # (1,1,H,W)
-        out = self._sess.run(None, {self._in_name: inp})[0]           # (1,1,2H,2W)
-        return out[0, 0] * span + lo                                  # back to counts
+        out = self._infer(inp)                                         # (1,1,2H,2W)
+        return np.asarray(out[0, 0]) * span + lo                       # back to counts
 
 
 class Enhancer:
@@ -62,7 +104,6 @@ class Enhancer:
         # state
         self._avg = None           # temporal accumulator (float32)
         self._sigma = 30.0         # running noise estimate (counts)
-        self._han = None           # Hanning window cache for phase correlation
         self._nn_sr = None         # lazy-loaded NeuralSR instance (or False if missing)
         # persistent learned bad-pixel mask (optional, OR'd with per-frame detection)
         self.static_bad = np.zeros((H, W), bool)
@@ -145,52 +186,16 @@ class Enhancer:
     def enhance_data(self, raw):
         return self.temporal_step(self.clean(raw))
 
-    # ---- multi-frame super-resolution (Tier 2) ----
-    def superres(self, frames, scale=2, sharpen=0.45, max_shift=2.5):
-        """Shift-and-add (drizzle-style) super-resolution: register each frame to the
-        latest one with sub-pixel phase correlation, splat onto a `scale`× grid and
-        coverage-normalise. Natural hand jitter supplies the sub-pixel diversity; falls
-        back to cubic upscaling when the scene is static. Display-only.
+    # ---- neural super-resolution (ESPCN via OpenVINO / ONNX Runtime) ----
+    def neural_superres(self, frame, scale=2, sharpen=0.15):
+        """Single-frame neural 2× super-resolution using a lightweight ESPCN model.
+        Pre-smooths with bilateral filter to suppress sensor noise *before* the NN
+        (avoids amplifying grain into the upscaled image), then applies mild unsharp
+        masking for perceived detail.
 
-        Optimised to use at most the last 4 frames and simplified weight accumulation
-        (simple average instead of per-pixel coverage map) for ~4× speedup."""
-        # NOTE: cv2.phaseCorrelate MUTATES its src args in place (multiplies them by the
-        # window). Never hand it the originals or the frame buffer gets corrupted into a
-        # radial Hanning halo that compounds every frame. Always pass throwaway copies.
-        use = frames[-4:]                          # at most 4 recent frames for speed
-        ref = np.array(use[-1], np.float32)        # independent copy (np.array copies)
-        H, W = ref.shape
-        Ws, Hs = W * scale, H * scale
-        base = cv2.resize(ref, (Ws, Hs), interpolation=cv2.INTER_CUBIC)
-        if len(use) >= 2:
-            if self._han is None or self._han.shape != ref.shape:
-                self._han = cv2.createHanningWindow((W, H), cv2.CV_32F)
-            acc = base.copy()                      # start with the ref (already upscaled)
-            n_good = 1
-            for fr in use[:-1]:                    # skip last (= ref) to avoid redundancy
-                f = np.asarray(fr, np.float32)
-                try:
-                    (dx, dy), _ = cv2.phaseCorrelate(ref.copy(), f.copy(), self._han)
-                except cv2.error:
-                    continue
-                if abs(dx) > max_shift or abs(dy) > max_shift:
-                    continue                       # reject big motion (not sub-pixel)
-                M = np.float32([[scale, 0, -dx * scale], [0, scale, -dy * scale]])
-                acc += cv2.warpAffine(f, M, (Ws, Hs), flags=cv2.INTER_LINEAR,
-                                      borderMode=cv2.BORDER_REPLICATE)
-                n_good += 1
-            out = acc / n_good
-        else:
-            out = base
-        if sharpen > 0:                            # mild unsharp for perceived detail
-            out = out + sharpen * (out - cv2.GaussianBlur(out, (0, 0), 1.0))
-        return out
-
-    # ---- neural super-resolution (Tier 3, single-frame ONNX ESPCN) ----
-    def neural_superres(self, frame, scale=2, sharpen=0.3):
-        """Single-frame neural 2× super-resolution using a lightweight ESPCN model
-        (ONNX Runtime). ~2-3 ms on CPU for 160×120 → 320×240. Falls back to bicubic
-        + sharpen if the ONNX model is not available."""
+        Backend: OpenVINO GPU → OpenVINO CPU → ONNX Runtime CPU (auto-detected).
+        ~2 ms (iGPU) / ~2.7 ms (CPU) for 160×120 → 320×240.
+        Falls back to bicubic + sharpen if no ONNX model found."""
         f = np.asarray(frame, np.float32)
         H, W = f.shape
         Ws, Hs = W * scale, H * scale
@@ -199,16 +204,24 @@ class Enhancer:
             # lazy-load the ONNX model on first use
             model_dir = os.path.dirname(os.path.abspath(__file__))
             model_path = os.path.join(model_dir, "thermal_espcn_2x.onnx")
-            self._nn_sr = NeuralSR(model_path) if os.path.exists(model_path) else False
+            if os.path.exists(model_path):
+                self._nn_sr = NeuralSR(model_path)
+            else:
+                self._nn_sr = False
+
+        # pre-smooth: light bilateral to remove sensor grain before upscaling
+        # (the NN will amplify whatever noise is in its input)
+        sc = self.spatial_sigma_mult * max(self._sigma, 1.0)
+        f_smooth = cv2.bilateralFilter(f, self.spatial_d, sc, self.spatial_d)
 
         if self._nn_sr:
-            out = self._nn_sr.upscale(f)
+            out = self._nn_sr.upscale(f_smooth)
         else:
             # fallback: bicubic upscale
-            out = cv2.resize(f, (Ws, Hs), interpolation=cv2.INTER_CUBIC)
+            out = cv2.resize(f_smooth, (Ws, Hs), interpolation=cv2.INTER_CUBIC)
 
         if sharpen > 0:
-            out = out + sharpen * (out - cv2.GaussianBlur(out, (0, 0), 1.0))
+            out = out + sharpen * (out - cv2.GaussianBlur(out, (0, 0), 1.2))
         return out
 
     def enhance_display(self, data):

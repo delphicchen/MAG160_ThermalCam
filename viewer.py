@@ -7,7 +7,6 @@ is shown in raw sensor counts plus a user-calibratable linear estimate (absolute
 here lets you anchor it against a known reference in the meantime).
 """
 import sys, time, json, os
-from collections import deque
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 import matplotlib
@@ -51,10 +50,8 @@ class Viewer(QtWidgets.QMainWindow):
         self.hi = 65535
         self.paused = False
         self.mirror = False                 # left-right flip
-        self.superres_on = False            # multi-frame super-resolution (display)
         self.nn_superres_on = False          # neural (ONNX ESPCN) super-resolution
         self.sr_scale = 2
-        self.sr_buffer = deque(maxlen=8)    # recent clean frames for super-res
         self.auto_ffc = False
         self.auto_ffc_interval = 60         # seconds
         self.cursor = None          # (x,y) in frame coords
@@ -154,16 +151,11 @@ class Viewer(QtWidgets.QMainWindow):
         self.chk_spatial = QtWidgets.QCheckBox("Spatial denoise"); self.chk_spatial.setChecked(True)
         self.chk_spatial.toggled.connect(lambda v: setattr(self.enhancer, "spatial", v))
         side.addWidget(self.chk_spatial)
-        self.chk_superres = QtWidgets.QCheckBox("Super-res ×2 (multi-frame)")
-        self.chk_superres.setToolTip("Multi-frame super-resolution: combines recent frames "
-                                     "(uses natural hand jitter) into a 2× sharper image. "
-                                     "~4 ms per frame.")
-        self.chk_superres.toggled.connect(self._toggle_multiframe_sr)
-        side.addWidget(self.chk_superres)
         self.chk_nn_sr = QtWidgets.QCheckBox("Super-res ×2 (neural)")
-        self.chk_nn_sr.setToolTip("Single-frame neural super-resolution (ESPCN, ONNX). "
-                                  "~2-3 ms, no hand jitter needed. Train with train_sr.py.")
-        self.chk_nn_sr.toggled.connect(self._toggle_nn_sr)
+        self.chk_nn_sr.setToolTip("Single-frame neural super-resolution (ESPCN).\n"
+                                  "Pre-smooths then upscales via OpenVINO/ONNX Runtime.\n"
+                                  "~2 ms (Intel iGPU) / ~3 ms (CPU). Train with train_sr.py.")
+        self.chk_nn_sr.toggled.connect(lambda v: setattr(self, 'nn_superres_on', v))
         side.addWidget(self.chk_nn_sr)
 
         side.addSpacing(8)
@@ -185,29 +177,12 @@ class Viewer(QtWidgets.QMainWindow):
         self.statusBar().showMessage("starting…")
 
     # ---- controls ----
-    def _toggle_multiframe_sr(self, v):
-        self.superres_on = v
-        if v and self.nn_superres_on:
-            self.nn_superres_on = False
-            self.chk_nn_sr.blockSignals(True)
-            self.chk_nn_sr.setChecked(False)
-            self.chk_nn_sr.blockSignals(False)
-
-    def _toggle_nn_sr(self, v):
-        self.nn_superres_on = v
-        if v and self.superres_on:
-            self.superres_on = False
-            self.chk_superres.blockSignals(True)
-            self.chk_superres.setChecked(False)
-            self.chk_superres.blockSignals(False)
-
     def _toggle_pause(self, v): self.paused = v
     def do_ffc(self, light=False):
         self.statusBar().showMessage("FFC: closing shutter…")
         QtWidgets.QApplication.processEvents()
         ok = self.cam.trigger_ffc()
         self.enhancer.reset_temporal()      # FFC changed the per-pixel reference
-        self.sr_buffer.clear()
         if not light:
             self.learn_bad_pixels()         # manual FFC also refreshes the bad-pixel map
         self.statusBar().showMessage(("auto-FFC" if light else "FFC") + (" done" if ok else " failed"), 2500)
@@ -348,15 +323,12 @@ class Viewer(QtWidgets.QMainWindow):
             if raw is None:
                 return
             clean = self.enhancer.clean(raw)    # per-frame value-safe (bad-pixel + flat-field)
-            self.sr_buffer.append(clean)
             # measurement-grade frame: + motion-adaptive temporal (value-safe)
             frame = self.enhancer.temporal_step(clean)
             self.last_frame = frame
             # display layer
             if self.nn_superres_on:
                 disp = self.enhancer.neural_superres(frame, self.sr_scale)
-            elif self.superres_on and len(self.sr_buffer) >= 2:
-                disp = self.enhancer.superres(list(self.sr_buffer), self.sr_scale)
             else:
                 disp = self.enhancer.enhance_display(frame)
         f = disp.astype(np.float32)
