@@ -100,8 +100,8 @@ class ThermalSRDataset(Dataset):
                 hr = np.flip(hr, axis=1).copy()   # horizontal flip
             if np.random.rand() > 0.5:
                 hr = np.flip(hr, axis=0).copy()   # vertical flip
-            k = np.random.randint(0, 4)
-            hr = np.rot90(hr, k).copy()            # 0/90/180/270°
+            if np.random.rand() > 0.5:
+                hr = np.rot90(hr, 2).copy()       # 180° only, to keep HxW shape
 
         hr_t = torch.from_numpy(hr).unsqueeze(0).float()  # [1, H, W]
 

@@ -155,7 +155,7 @@ class Viewer(QtWidgets.QMainWindow):
         self.chk_nn_sr.setToolTip("Single-frame neural super-resolution (ESPCN).\n"
                                   "Pre-smooths then upscales via OpenVINO/ONNX Runtime.\n"
                                   "~2 ms (Intel iGPU) / ~3 ms (CPU). Train with train_sr.py.")
-        self.chk_nn_sr.toggled.connect(lambda v: setattr(self, 'nn_superres_on', v))
+        self.chk_nn_sr.toggled.connect(self._toggle_nn_sr)
         side.addWidget(self.chk_nn_sr)
 
         side.addSpacing(8)
@@ -177,6 +177,58 @@ class Viewer(QtWidgets.QMainWindow):
         self.statusBar().showMessage("starting…")
 
     # ---- controls ----
+    def _toggle_nn_sr(self, v):
+        self.nn_superres_on = v
+        if v:
+            # Check if trained model exists
+            model_dir = os.path.dirname(os.path.abspath(__file__))
+            pt_path = os.path.join(model_dir, "thermal_espcn_2x.pt")
+            if not os.path.exists(pt_path):
+                reply = QtWidgets.QMessageBox.question(
+                    self, "Train Neural Network",
+                    "偵測到尚未訓練神經網路模型（目前為預設隨機權重，畫面會較模糊）。\n\n"
+                    "強烈建議使用您的相機資料進行訓練以獲得最佳的高解析度畫質。\n"
+                    "是否現在進行自動採集與訓練？（約需 5-10 分鐘，期間請慢慢移動相機拍攝不同場景）",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.Yes
+                )
+                if reply == QtWidgets.QMessageBox.Yes:
+                    self._collect_and_train()
+
+    def _collect_and_train(self):
+        self.statusBar().showMessage("Collecting 500 frames for training... Please move the camera around slowly.")
+        frames = []
+        t0 = time.time()
+        # Collect 500 frames (approx 20 seconds at 25fps)
+        while len(frames) < 500:
+            r = self._grab(0.2)
+            if r is not None:
+                # Need raw frames for training (not enhanced with flat-field/bpc yet)
+                # We use the raw grabbed frame (mirror applied)
+                frames.append(r)
+                if len(frames) % 25 == 0:
+                    self.statusBar().showMessage(f"Collecting frames: {len(frames)}/500... Keep moving camera.")
+            QtWidgets.QApplication.processEvents()
+            time.sleep(0.02)
+        
+        self.statusBar().showMessage("Saving frames...")
+        QtWidgets.QApplication.processEvents()
+        
+        frames_out = np.stack([x.astype(np.float32) for x in frames])
+        out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sr_training_frames.npy')
+        np.save(out_path, frames_out)
+        
+        self.statusBar().showMessage("Training started...")
+        
+        # Launch training in a separate window
+        dialog = TrainingDialog(self)
+        dialog.start_training()
+        dialog.exec()  # Block until done or closed
+        
+        # Force reload of the ONNX model
+        self.enhancer._nn_sr = None
+        self.statusBar().showMessage("Model reloaded.")
+
     def _toggle_pause(self, v): self.paused = v
     def do_ffc(self, light=False):
         self.statusBar().showMessage("FFC: closing shutter…")
@@ -392,6 +444,50 @@ class Viewer(QtWidgets.QMainWindow):
         try: self.cam.stop(); self.cam.close()
         except Exception: pass
         super().closeEvent(ev)
+
+
+class TrainingDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Training Neural SR Model")
+        self.resize(600, 400)
+        layout = QtWidgets.QVBoxLayout(self)
+        
+        self.log_view = QtWidgets.QTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setStyleSheet("font-family: monospace; background-color: #1e1e1e; color: #d4d4d4;")
+        layout.addWidget(self.log_view)
+        
+        self.btn_close = QtWidgets.QPushButton("Close")
+        self.btn_close.setEnabled(False)
+        self.btn_close.clicked.connect(self.accept)
+        layout.addWidget(self.btn_close)
+        
+        self.process = QtCore.QProcess(self)
+        self.process.readyReadStandardOutput.connect(self.handle_stdout)
+        self.process.readyReadStandardError.connect(self.handle_stderr)
+        self.process.finished.connect(self.process_finished)
+
+    def start_training(self):
+        self.log_view.append("Starting training script (CPU)... This may take 5-10 minutes.")
+        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_sr.py")
+        self.process.start("python3", [script_path, "--train"])
+
+    def handle_stdout(self):
+        data = self.process.readAllStandardOutput()
+        stdout = bytes(data).decode("utf8")
+        self.log_view.insertPlainText(stdout)
+        self.log_view.moveCursor(QtGui.QTextCursor.End)
+
+    def handle_stderr(self):
+        data = self.process.readAllStandardError()
+        stderr = bytes(data).decode("utf8")
+        self.log_view.insertPlainText(stderr)
+        self.log_view.moveCursor(QtGui.QTextCursor.End)
+
+    def process_finished(self):
+        self.log_view.append("\n=== Training Finished ===")
+        self.btn_close.setEnabled(True)
 
 
 def main():
