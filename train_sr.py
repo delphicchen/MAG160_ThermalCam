@@ -27,21 +27,22 @@ from torch.utils.data import Dataset, DataLoader
 # Model
 # ---------------------------------------------------------------------------
 class ThermalESPCN(nn.Module):
-    """Tiny ESPCN for 2× single-channel thermal super-resolution.
+    """Tiny ESPCN for single-channel thermal super-resolution.
 
     Architecture:
         Conv2d(1, 32, 5, pad=2) → ReLU
         Conv2d(32, 16, 3, pad=1) → ReLU
-        Conv2d(16,  4, 3, pad=1) → PixelShuffle(2)
+        Conv2d(16, upscale_factor^2, 3, pad=1) → PixelShuffle(upscale_factor)
 
-    ~6 K parameters.  Input: [N, 1, H, W] float32, output: [N, 1, 2H, 2W].
+    Input: [N, 1, H, W] float32, output: [N, 1, H*scale, W*scale].
     """
-    def __init__(self):
+    def __init__(self, upscale_factor=4):
         super().__init__()
+        self.scale = upscale_factor
         self.conv1 = nn.Conv2d(1, 32, kernel_size=5, padding=2)
         self.conv2 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(16, 4, kernel_size=3, padding=1)  # 4 = 1 * 2^2
-        self.shuffle = nn.PixelShuffle(2)
+        self.conv3 = nn.Conv2d(16, upscale_factor**2, kernel_size=3, padding=1)
+        self.shuffle = nn.PixelShuffle(upscale_factor)
         self._init_weights()
 
     def _init_weights(self):
@@ -53,7 +54,7 @@ class ThermalESPCN(nn.Module):
             nn.init.kaiming_normal_(m.weight, a=0, mode='fan_in', nonlinearity='relu')
             nn.init.zeros_(m.bias)
         # last conv → PixelShuffle: ICNR init
-        scale = 2
+        scale = self.scale
         c_out, c_in, kh, kw = self.conv3.weight.shape   # (4, 16, 3, 3)
         c_base = c_out // (scale * scale)                # 1 (single output channel)
         # initialise a (c_base, c_in, kh, kw) kernel with Kaiming
@@ -80,13 +81,14 @@ class ThermalSRDataset(Dataset):
     """Generates (LR, HR) pairs from a stack of 160×120 thermal frames.
 
     HR = normalised real frame [0, 1].
-    LR = bicubic downsample to 80×60.
-    Augmentations: random horizontal/vertical flips, 90° rotations.
+    LR = bicubic downsample by upscale_factor.
+    Augmentations: random horizontal/vertical flips, 180° rotations.
     """
-    def __init__(self, frames_f32, augment=True):
+    def __init__(self, frames_f32, augment=True, scale=4):
         """frames_f32: [N, 120, 160] float32 already normalised to [0, 1]."""
         self.frames = frames_f32
         self.augment = augment
+        self.scale = scale
 
     def __len__(self):
         return len(self.frames)
@@ -105,14 +107,14 @@ class ThermalSRDataset(Dataset):
 
         hr_t = torch.from_numpy(hr).unsqueeze(0).float()  # [1, H, W]
 
-        # create LR by bicubic downsampling (factor 2)
+        # create LR by bicubic downsampling
         H, W = hr_t.shape[1], hr_t.shape[2]
         lr_t = F.interpolate(
             hr_t.unsqueeze(0),
-            size=(H // 2, W // 2),
+            size=(H // self.scale, W // self.scale),
             mode="bicubic",
             align_corners=False,
-        ).squeeze(0)  # [1, H/2, W/2]
+        ).squeeze(0)
 
         return lr_t, hr_t
 
@@ -218,8 +220,9 @@ def load_and_normalise(path=FRAMES_PATH):
     return normed
 
 
-def train(epochs=200, batch_size=16, lr=2e-3, val_split=0.1, grad_weight=0.5):
+def train(epochs=200, batch_size=16, lr=1e-3, scale=4, val_split=0.1, grad_weight=0.5):
     """Self-supervised training loop."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     frames = load_and_normalise()
     n = len(frames)
     n_val = max(1, int(n * val_split))
@@ -231,14 +234,14 @@ def train(epochs=200, batch_size=16, lr=2e-3, val_split=0.1, grad_weight=0.5):
     val_frames = frames[idx[n_train:]]
     print(f"  train: {n_train}  val: {n_val}")
 
-    train_ds = ThermalSRDataset(train_frames, augment=True)
-    val_ds = ThermalSRDataset(val_frames, augment=False)
+    train_ds = ThermalSRDataset(train_frames, augment=True, scale=scale)
+    val_ds = ThermalSRDataset(val_frames, augment=False, scale=scale)
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
                           num_workers=0, drop_last=True)
     val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                         num_workers=0)
 
-    model = ThermalESPCN()
+    model = ThermalESPCN(upscale_factor=scale).to(device)
     nparams = sum(p.numel() for p in model.parameters())
     print(f"  model parameters: {nparams:,}")
 
@@ -247,7 +250,7 @@ def train(epochs=200, batch_size=16, lr=2e-3, val_split=0.1, grad_weight=0.5):
 
     best_val_loss = float("inf")
     ckpt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "thermal_espcn_2x.pt")
+                             f"thermal_espcn_{scale}x.pt")
 
     t0 = time.time()
     for ep in range(1, epochs + 1):
@@ -255,6 +258,7 @@ def train(epochs=200, batch_size=16, lr=2e-3, val_split=0.1, grad_weight=0.5):
         model.train()
         ep_loss = 0.0
         for lr_batch, hr_batch in train_dl:
+            lr_batch, hr_batch = lr_batch.to(device), hr_batch.to(device)
             pred = model(lr_batch)
             loss = combined_loss(pred, hr_batch, grad_weight)
             optimiser.zero_grad()
@@ -270,6 +274,7 @@ def train(epochs=200, batch_size=16, lr=2e-3, val_split=0.1, grad_weight=0.5):
         val_psnr = 0.0
         with torch.no_grad():
             for lr_b, hr_b in val_dl:
+                lr_b, hr_b = lr_b.to(device), hr_b.to(device)
                 pred = model(lr_b)
                 val_loss += combined_loss(pred, hr_b, grad_weight).item()
                 val_psnr += psnr(pred, hr_b)
@@ -295,6 +300,7 @@ def train(epochs=200, batch_size=16, lr=2e-3, val_split=0.1, grad_weight=0.5):
     n_batches = 0
     with torch.no_grad():
         for lr_b, hr_b in val_dl:
+            lr_b, hr_b = lr_b.to(device), hr_b.to(device)
             pred = model(lr_b)
             total_psnr += psnr(pred, hr_b)
             n_batches += 1
@@ -303,33 +309,32 @@ def train(epochs=200, batch_size=16, lr=2e-3, val_split=0.1, grad_weight=0.5):
     print(f"Checkpoint saved to {ckpt_path}")
 
     # also export ONNX
-    export_onnx(model, trained=True)
+    export_onnx(model, trained=True, scale=scale)
 
 
 # ---------------------------------------------------------------------------
 # ONNX export
 # ---------------------------------------------------------------------------
-ONNX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "thermal_espcn_2x.onnx")
-
-def export_onnx(model=None, trained=True):
+def export_onnx(model=None, trained=True, scale=4):
     """Export model to ONNX with dynamic input shapes."""
+    onnx_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             f"thermal_espcn_{scale}x.onnx")
     if model is None:
-        model = ThermalESPCN()
+        model = ThermalESPCN(upscale_factor=scale)
         if trained:
             ckpt = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "thermal_espcn_2x.pt")
+                                f"thermal_espcn_{scale}x.pt")
             if not os.path.exists(ckpt):
                 print(f"ERROR: checkpoint {ckpt} not found.  Train first.")
                 sys.exit(1)
             model.load_state_dict(torch.load(ckpt, weights_only=True))
     model.eval()
 
-    dummy = torch.randn(1, 1, 60, 80)
+    dummy = torch.randn(1, 1, 120 // scale, 160 // scale)
     torch.onnx.export(
         model,
         dummy,
-        ONNX_PATH,
+        onnx_path,
         opset_version=18,
         input_names=["input"],
         output_names=["output"],
@@ -340,9 +345,9 @@ def export_onnx(model=None, trained=True):
     )
     nparams = sum(p.numel() for p in model.parameters())
     tag = "ICNR-initialised (untrained)" if not trained else "trained"
-    print(f"ONNX exported ({tag}) → {ONNX_PATH}")
-    print(f"  params: {nparams:,}   input: [N,1,H,W]   output: [N,1,2H,2W]")
-    size_kb = os.path.getsize(ONNX_PATH) / 1024
+    print(f"ONNX exported ({tag}) → {onnx_path}")
+    print(f"  params: {nparams:,}   input: [N,1,H,W]   output: [N,1,{scale}H,{scale}W]")
+    size_kb = os.path.getsize(onnx_path) / 1024
     print(f"  file size: {size_kb:.1f} KB")
 
 
@@ -370,17 +375,19 @@ def main():
                         help="Batch size (default: 16)")
     parser.add_argument("--lr", type=float, default=2e-3,
                         help="Learning rate (default: 2e-3)")
+    parser.add_argument("--scale", type=int, default=2,
+                        help="Upscale factor (default: 2)")
 
     args = parser.parse_args()
 
     if args.collect:
         collect_frames(n_frames=args.frames)
     elif args.train:
-        train(epochs=args.epochs, batch_size=args.batch_size, lr=args.lr)
+        train(epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, scale=args.scale)
     elif args.export_untrained:
-        export_onnx(trained=False)
+        export_onnx(trained=False, scale=args.scale)
     elif args.export_trained:
-        export_onnx(trained=True)
+        export_onnx(trained=True, scale=args.scale)
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ class Viewer(QtWidgets.QMainWindow):
         self.paused = False
         self.mirror = False                 # left-right flip
         self.nn_superres_on = False          # neural (ONNX ESPCN) super-resolution
-        self.sr_scale = 2
+        self.sr_scale = 4
         self.auto_ffc = False
         self.auto_ffc_interval = 60         # seconds
         self.cursor = None          # (x,y) in frame coords
@@ -151,12 +151,20 @@ class Viewer(QtWidgets.QMainWindow):
         self.chk_spatial = QtWidgets.QCheckBox("Spatial denoise"); self.chk_spatial.setChecked(True)
         self.chk_spatial.toggled.connect(lambda v: setattr(self.enhancer, "spatial", v))
         side.addWidget(self.chk_spatial)
-        self.chk_nn_sr = QtWidgets.QCheckBox("Super-res ×2 (neural)")
+        sr_layout = QtWidgets.QHBoxLayout()
+        self.chk_nn_sr = QtWidgets.QCheckBox("Neural super-res")
         self.chk_nn_sr.setToolTip("Single-frame neural super-resolution (ESPCN).\n"
                                   "Pre-smooths then upscales via OpenVINO/ONNX Runtime.\n"
-                                  "~2 ms (Intel iGPU) / ~3 ms (CPU). Train with train_sr.py.")
+                                  "Train with train_sr.py.")
         self.chk_nn_sr.toggled.connect(self._toggle_nn_sr)
-        side.addWidget(self.chk_nn_sr)
+        sr_layout.addWidget(self.chk_nn_sr)
+
+        self.cb_sr_scale = QtWidgets.QComboBox()
+        self.cb_sr_scale.addItems(["2x", "4x"])
+        self.cb_sr_scale.setCurrentText(f"{self.sr_scale}x")
+        self.cb_sr_scale.currentTextChanged.connect(self._change_sr_scale)
+        sr_layout.addWidget(self.cb_sr_scale)
+        side.addLayout(sr_layout)
 
         side.addSpacing(8)
         side.addWidget(QtWidgets.QLabel("Temperature (°C)"))
@@ -177,16 +185,23 @@ class Viewer(QtWidgets.QMainWindow):
         self.statusBar().showMessage("starting…")
 
     # ---- controls ----
+    def _change_sr_scale(self, text):
+        new_scale = int(text[0])
+        self.sr_scale = new_scale
+        # If SR is currently active, we need to verify the newly selected scale model is trained
+        if self.nn_superres_on:
+            self._toggle_nn_sr(True)
+
     def _toggle_nn_sr(self, v):
         self.nn_superres_on = v
         if v:
-            # Check if trained model exists
+            # Check if trained model exists for the current scale
             model_dir = os.path.dirname(os.path.abspath(__file__))
-            pt_path = os.path.join(model_dir, "thermal_espcn_2x.pt")
+            pt_path = os.path.join(model_dir, f"thermal_espcn_{self.sr_scale}x.pt")
             if not os.path.exists(pt_path):
                 reply = QtWidgets.QMessageBox.question(
                     self, "Train Neural Network",
-                    "偵測到尚未訓練神經網路模型（目前為預設隨機權重，畫面會較模糊）。\n\n"
+                    f"偵測到尚未訓練 {self.sr_scale}x 神經網路模型（目前為預設隨機權重，畫面會較模糊）。\n\n"
                     "強烈建議使用您的相機資料進行訓練以獲得最佳的高解析度畫質。\n"
                     "是否現在進行自動採集與訓練？（約需 5-10 分鐘，期間請慢慢移動相機拍攝不同場景）",
                     QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
@@ -221,13 +236,13 @@ class Viewer(QtWidgets.QMainWindow):
         self.statusBar().showMessage("Training started...")
         
         # Launch training in a separate window
-        dialog = TrainingDialog(self)
+        dialog = TrainingDialog(self.sr_scale, self)
         dialog.start_training()
         dialog.exec()  # Block until done or closed
         
-        # Force reload of the ONNX model
-        self.enhancer._nn_sr = None
-        self.statusBar().showMessage("Model reloaded.")
+        # Force reload of the ONNX models dict if it was loaded
+        self.enhancer._nn_sr = {}
+        self.statusBar().showMessage(f"{self.sr_scale}x model reloaded.")
 
     def _toggle_pause(self, v): self.paused = v
     def do_ffc(self, light=False):
@@ -447,9 +462,10 @@ class Viewer(QtWidgets.QMainWindow):
 
 
 class TrainingDialog(QtWidgets.QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, scale, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Training Neural SR Model")
+        self.scale = scale
+        self.setWindowTitle(f"Training Neural SR Model ({scale}x)")
         self.resize(600, 400)
         layout = QtWidgets.QVBoxLayout(self)
         
@@ -469,9 +485,9 @@ class TrainingDialog(QtWidgets.QDialog):
         self.process.finished.connect(self.process_finished)
 
     def start_training(self):
-        self.log_view.append("Starting training script (CPU)... This may take 5-10 minutes.")
+        self.log_view.append(f"Starting training script (CPU) for {self.scale}x scale... This may take 5-10 minutes.")
         script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_sr.py")
-        self.process.start("python3", [script_path, "--train"])
+        self.process.start("python3", [script_path, "--train", "--scale", str(self.scale)])
 
     def handle_stdout(self):
         data = self.process.readAllStandardOutput()

@@ -104,7 +104,7 @@ class Enhancer:
         # state
         self._avg = None           # temporal accumulator (float32)
         self._sigma = 30.0         # running noise estimate (counts)
-        self._nn_sr = None         # lazy-loaded NeuralSR instance (or False if missing)
+        self._nn_sr = {}           # lazy-loaded NeuralSR instances by scale
         # persistent learned bad-pixel mask (optional, OR'd with per-frame detection)
         self.static_bad = np.zeros((H, W), bool)
 
@@ -188,34 +188,33 @@ class Enhancer:
 
     # ---- neural super-resolution (ESPCN via OpenVINO / ONNX Runtime) ----
     def neural_superres(self, frame, scale=2, sharpen=0.15):
-        """Single-frame neural 2× super-resolution using a lightweight ESPCN model.
+        """Single-frame neural super-resolution using a lightweight ESPCN model.
         Pre-smooths with bilateral filter to suppress sensor noise *before* the NN
         (avoids amplifying grain into the upscaled image), then applies mild unsharp
         masking for perceived detail.
 
         Backend: OpenVINO GPU → OpenVINO CPU → ONNX Runtime CPU (auto-detected).
-        ~2 ms (iGPU) / ~2.7 ms (CPU) for 160×120 → 320×240.
         Falls back to bicubic + sharpen if no ONNX model found."""
         f = np.asarray(frame, np.float32)
         H, W = f.shape
         Ws, Hs = W * scale, H * scale
 
-        if self._nn_sr is None:
-            # lazy-load the ONNX model on first use
+        if scale not in self._nn_sr:
+            # lazy-load the ONNX model on first use for this scale
             model_dir = os.path.dirname(os.path.abspath(__file__))
-            model_path = os.path.join(model_dir, "thermal_espcn_2x.onnx")
+            model_path = os.path.join(model_dir, f"thermal_espcn_{scale}x.onnx")
             if os.path.exists(model_path):
-                self._nn_sr = NeuralSR(model_path)
+                self._nn_sr[scale] = NeuralSR(model_path)
             else:
-                self._nn_sr = False
+                self._nn_sr[scale] = False
 
         # pre-smooth: light bilateral to remove sensor grain before upscaling
         # (the NN will amplify whatever noise is in its input)
         sc = self.spatial_sigma_mult * max(self._sigma, 1.0)
         f_smooth = cv2.bilateralFilter(f, self.spatial_d, sc, self.spatial_d)
 
-        if self._nn_sr:
-            out = self._nn_sr.upscale(f_smooth)
+        if self._nn_sr[scale]:
+            out = self._nn_sr[scale].upscale(f_smooth)
         else:
             # fallback: bicubic upscale
             out = cv2.resize(f_smooth, (Ws, Hs), interpolation=cv2.INTER_CUBIC)
