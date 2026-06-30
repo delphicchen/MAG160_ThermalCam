@@ -26,6 +26,17 @@ protocol from the APK's native libs + live probing — see **`PROTOCOL.md`**.
     sub-pixel diversity; degrades gracefully to cubic upscale when static). Display-only.
   - Measurement vs display are separated: °C / min / max use the value-safe layer
     (bad-pixel + temporal only); spatial smoothing / super-res are display-only.
+- **Factory NUC (radiometric)** — the camera's own per-pixel, multi-segment
+  piecewise-linear non-uniformity correction, reversed out of `mag_cali.bin` by running
+  the firmware build chain under ARM emulation (the numpy apply is **bit-exact** to the
+  SDK). Tables are pre-stored over a grid of FPA (sensor) temperatures
+  (`factory_nuc_grid.npz`, built with `recon/build_nuc_grid.py`); the viewer reads the
+  **live FPA temp** (frame tail+8) and interpolates the grid, then applies the firmware's
+  exact per-pixel correction. Toggle **“Factory NUC (radiometric)”** — it runs on the
+  uncorrected raw using the shutter dark frame as the offset reference (auto-captured on
+  enable) plus the factory per-pixel gain + piecewise curve, replacing the flat-field /
+  gain stages. On a near-uniform scene it cut column fixed-pattern noise ~**4×** vs the
+  plain FFC. See `recon/EMULATION_NUC.md` for the full reverse-engineering write-up.
 - **View options:** **Auto-FFC** (timer-based, default 60 s — the microbolometer drifts
   so the shutter reference needs periodic refreshing; this re-FFCs for you), and
   **Mirror (left-right)** flip (applied at input so display, cursor and measurement stay

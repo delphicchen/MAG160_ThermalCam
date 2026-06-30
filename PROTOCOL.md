@@ -93,6 +93,15 @@ Working sequence:
   `0x1BB1B11C`.
 - **Raw values are uncorrected** (heavy column fixed-pattern noise; first frames near
   saturation 0xFFFC, settle after ~10 frames to ~16k–48k range). Need FFC.
+- **Per-frame telemetry in the 28-byte header/tail** (found live, `recon/probe_header.py`):
+  - header `+4` (u32) = **frame counter** (+1/frame); rest of header = 0.
+  - tail `+4` (u32) = frame counter; **tail `+8` (u32) = SENSOR / FPA TEMPERATURE (raw
+    counts)** — the firmware's `ctx[0x40]` (`MAG_GetSenorTemperature`). Drifts smoothly as
+    the sensor warms (e.g. ~19250 cold → ~21000 warm). It is in the **same units as the 6
+    factory sensor-temp anchors** in the cali header (table A @off 36 = `[9564, 19330,
+    29108, 34111, 39244, 49091]`), so it directly indexes the NUC blocks. Exposed via
+    `magcam.py sensor_temp_raw()`; viewer shows it (`FPA=…`) and uses its drift to trigger
+    auto-FFC (the firmware's real shutter trigger).
 
 ## REMAINING WORK
 1. **FFC / flat-field correction — DONE** (`magcam.py` `trigger_ffc()`):
@@ -126,9 +135,8 @@ Working sequence:
      646-entry int32 table. `idx = (input + 150000) >> 12` clamped [0,645];
      `out = LUT[idx] + ((LUT[idx+1]-LUT[idx]) * (input+150000 - idx*4096)) >> 12`,
      clamped ≥0. Input spans [-150000, ~2.49M]. The table is loaded PC-relative
-     (`ldr r1,[pc,#0x24]; add r1,pc` at 0x45194; literal 0x451bc) — **address calc still
-     wrong** (computed 0x29D700 is past EOF 0x29CD68); re-derive (maybe the table is in
-     .data.rel.ro; or brute-force search for a ~646-entry monotonic int32 table).
+     (`ldr r1,[pc,#0x24]; add r1,pc`) → **0x29d700 in `.bss`** (runtime-populated; see the
+     RESOLVED note below — this is correct, not "past EOF").
    - **8 built-in Planck LUTs extracted** → `recon/planck_luts.npy` (shape 8×646, int32,
      monotonic radiance curves at fileoff 0x24e718 stride 0xA20). These are the camera's
      radiometric curve family (selected by sensor temp).
@@ -137,15 +145,43 @@ Working sequence:
      binary search + slope-table interp, output `U = idx*4096 - 150000`). Working
      hypothesis: **U ≈ milli-Kelvin** (idx 109 → ~296K ≈ 23°C, plausible) → °C = U/1000-273.15.
      NEEDS verification once raw→radiance is reproduced.
-   - **SNAG**: tables referenced inside `sub_4515c`/`sub_451c0` resolve via GOT/load-time
-     relocation (static PC math lands at 0x29D700, past EOF) — must resolve R_ARM_RELATIVE
-     relocs to bind each function to its table; the brute-found 0x24e718 LUTs may or may
-     not be the exact ones these two funcs use.
-   - REMAINING for absolute °C (LARGE, multi-session): (a) resolve the table relocations,
-     (b) get per-camera gain k=ctx[+0x50] & offset b=ctx[+0x54] — decode cali parser
-     `sub_34832` OR locate them in the cali file, (c) reimplement `sub_3f970`+`sub_455bc`,
-     (d) verify units against physical references. Header hint: cali hdr[3]=6 + 6 rising
-     values hdr[9..14]={9564,19330,29108,34111,39244,49091} = likely 6 sensor-temp points.
+   - **SNAG — NOW RESOLVED (2026-06-26).** The LUT tables are **not past EOF**; the static
+     PC-math target `0x29d700` is correct — it lands in **`.bss`** (`.bss` = 0x29d6f8…
+     0x2cdf00), i.e. the tables are **runtime-populated**, which is why they read as zero
+     statically. Resolved from `sub_3f970`'s own simple path (binary search @0x3fb7e):
+       * `radLUT`  @ **0x29d700** (647×int32) — also the interp base (`baseLUT==radLUT`).
+       * `slopeLUT`@ **0x29e11c** (646×int32).
+       * `threshold`@ **0x29eb34** (scalar; min Δ below which interp is skipped — sub-mK).
+     The firmware fills `radLUT` at init from **one of the 8 static Planck curves in
+     `.rodata`** (already extracted → `recon/planck_luts.npy`) and derives the fixed-point
+     reciprocal slope **`slopeLUT[i] = 2**24 // (radLUT[i+1]-radLUT[i])`** so that
+     `(slope*Δ)>>12` spans one full index step (4095–4096, floor-rounded ≈1 mK).
+     Reconstructing both from `planck_luts.npy` and doing the integer lookup matches the
+     ideal float interpolation to **<0.01 °C** (proof: `recon/resolve_radlut.py`). ✅ U is
+     confirmed **milli-Kelvin** (idx 109 → 23.31 °C for every curve). Reimplemented
+     bit-faithfully in `radiometry.py` (`_U_from_radiance`, reconstructed `self.slopes`).
+   - **k, b are NOT static constants — they are recomputed LIVE every frame** by
+     `sub_3d280` (writes `k`→ctx[0x50] @0x3d32c, `b`→ctx[0x54] @0x3d330) from: the factory
+     **NUC blocks** (per sensor-temperature, stride **0x21c**, fields +0x1730/+0x1734/
+     +0x17a8…+0x1900), the **live sensor temperature** ctx[0x80], and the **live shutter/
+     FFC reference** (`sub_3d9f4`). This is *why* FFC affects temperature and *why* there
+     are no fixed k,b to extract. The `shift` (ctx[0x775c]) folds into the linear term as
+     a `<<(7-shift)` scaling — i.e. `radiance = a*raw + b` with `a=(k+1)<<(7-shift)`.
+   - **Cali parser can't be run offline.** `sub_34832` is a thin shim that immediately
+     delegates to a **PLT import** (`sub_30024`) — the real parse runs in an *external*
+     library behind C++ stream layers (not in libcoresdk.so). So the NUC blocks can't be
+     expanded on x86 (would need full multi-`.so` + libstdc++ dynamic emulation). The raw
+     factory maps themselves ARE plain in `mag_cali.bin` (header 1024 B + **48 maps** of
+     160×120 = 6 sensor-temps × 8 states), but applying them needs the external assembler.
+   - **NET (what is reversed vs. fitted):** the *fixed* radiometric curve (Planck LUT +
+     mK encoding + interpolation) is reversed **exactly** and integrated in
+     `radiometry.py`. The *per-camera* linear term `(a,b)` — which the firmware itself
+     re-derives live — is recovered from 2–3 `(raw, known °C)` references via `calibrate()`
+     over the exact curve. This is the camera's true radiometry, not a guessed shape; it
+     matches the firmware except for re-deriving `(a,b)` as the sensor drifts (handled by
+     periodic re-FFC + re-cal). The header anchor tables (A=hdr[9..14], B=A−500, C) are
+     internal NUC params (near-collinear) — tested, they do **not** form a usable scene-
+     temperature calibration, so a reference-free default is not derivable from them.
    - **FULL FORMULA DECODED** (sub_3f970 + sub_455bc):
      ```
      raw_avg = mean of raw u16 over a small window (sub_45014)
@@ -179,3 +215,68 @@ Working sequence:
 - APK extracted at `/tmp/apk_x` (re-extract: `unzip MAG-Mx.apk -d /tmp/apk_x`).
 - Key `.so` addrs: cmd-transaction `0x49aa0`; bulk_transfer PLT `0x30270`;
   StartTransfer site `0x4a546`; frame reader `0x4a16c`; prepare worker `0x4b03c`.
+
+## FLAT-FIELD / NUC CORRECTION — reverse-engineered (2026-06-26)
+
+The camera's "flat-field" is a standard uncooled-microbolometer pipeline, split across
+the internal frame buffers in the per-device context (stride 0x498 in the device array):
+
+- `ctx[0x208]` = raw input frame (as read off EP 0x81, heavy column FPN, uncorrected).
+- `ctx[0x234]` = filtered/corrected output frame (what `MAG_GetOutputRawData`,
+  `MAG_GetFilteredRaw` return; also the buffer `sub_45014`/temperature read from).
+
+Pipeline (raw -> corrected):
+1. **Shutter one-point NUC (the dominant flat-field).** `SetShutterState`(0x6BB6B672)
+   closes an internal shutter (uniform target); the per-pixel response is captured as the
+   offset reference and subtracted (`MAG_GetCurrentOffset`@0x4c010 -> `sub_486b8` computes
+   the offset). This kills the column FPN. **We replicate this exactly** in
+   `magcam.py trigger_ffc()` (close shutter, average frames, subtract, reopen). It must be
+   re-run periodically because the offset drifts — that is *why* FFC must be pressed often.
+2. **Factory per-pixel NUC + defect map.** `mag_cali.bin` carries **48 plain 160×120 maps**
+   (offset 1024, stride 38400) = a family of per-pixel **offset/reference** frames (smooth
+   vignette + column FPN), interleaved **gain/coefficient** maps, and a **bad-pixel map**
+   (visible as sparse speckle — confirms the original app masks bad pixels). They are
+   organised by **6 sensor-temperatures × 8 gain/range states**. Extracted as-is to
+   `recon/factory_nuc_maps.npy` (+ `recon/factory_nuc_montage.png`).
+3. **Apply step is NOT cleanly runnable offline.** The map selection/blend (by live sensor
+   temperature) and the cali parse run behind the same statically-inlined C++ stream layer
+   as the radiometry parser (`sub_34832` -> PLT import) — so the exact factory application
+   formula can't be executed on x86.
+
+NET: the flat-field *architecture* is reversed and the factory maps are extracted, but the
+bit-exact factory application is locked behind the un-runnable parser. Our pipeline already
+reproduces all three physical effects empirically — shutter FFC (offset NUC), `enhance.py`
+flat-field (residual vignette + column/row FPN, ~11× non-uniformity reduction) and
+bad-pixel correction — so the *result* matches the firmware without using the factory
+coefficients verbatim. The non-redundant piece a factory map *could* add is the fixed
+per-pixel **gain** (responsivity) that shutter-only can't capture; applying it is optional
+and risky (wrong fixed-point/selection would re-introduce non-uniformity), so it is left
+out by default.
+
+### Factory-NUC offline-integration attempt — VERDICT: not viable (2026-06-29)
+Tried to integrate the factory NUC empirically, validating candidates against the live
+shutter-FFC reference (= ground-truth per-pixel offset at the current sensor temp ~23123,
+captured live). Block structure confirmed: **6 sensor-temp blocks × [2 gain maps + 6
+reference frames]**. Results:
+  * full per-pixel factory map vs live FFC offset: corr 0.02–0.26 (no match);
+  * smooth reference frames (systematic) vs FFC: ~0.02 (no match);
+  * gain maps are 0x8000-centred fixed-point (vignette extraction saturates);
+  * only the *column-FPN profile* of the gain maps matched (0.92) — but that is the shared
+    readout-channel structure the live FFC already removes, so redundant.
+Conclusion: the per-pixel gain/offset is derived by the external parser from the 6
+reference frames per block; that derivation can't be reproduced offline, and the live FFC
+(fresh, per-session) already removes the same correctable systematic FPN. So the factory
+NUC is NOT wired into the pipeline (would risk regression). Extraction kept in
+`factory_nuc.py` (research, not imported) + `recon/factory_nuc_maps.npy`. The only reliable
+route to the real factory gain is to run the parser on ARM (android/PLAN.md JNI path).
+
+## EMULATION ROUTE (route A) — see `recon/EMULATION_NUC.md`
+A full Unicorn emulation of libcoresdk.so was built (`recon/emu_harness.py`) and the real
+cali parser `sub_424d0` was driven to completion on `mag_cali.bin` (`recon/emu_parse_nuc.py`),
+decoding the cali structure and the per-pixel NUC apply formula `sub_45ca4`:
+`corrected[i] = clamp(((raw[i]-offset_ref[i])/2 * gain_seg)>>shift + offset_seg)` — a
+**per-pixel multi-segment piecewise-linear** correction (so the factory NUC is NOT two flat
+maps, which is why flat-map subtraction failed). Finishing it (filling the gain/offset
+tables) needs the rest of the StartProcessImage init chain — see `recon/EMULATION_NUC.md`
+for the complete record and resume plan. Route B (empirical two-point) is being used for a
+quick usable result.

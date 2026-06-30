@@ -92,8 +92,15 @@ class Enhancer:
         self.flatfield = True
         self.temporal = True
         self.spatial = True
-        # scene-based flat-field (shading/vignette + column-FPN) correction map
+        # scene-based flat-field (shading/vignette + column-FPN) offset correction map
         self.flat_map = None
+        # two-point per-pixel NUC: an affine map  corrected = gain_a * f + gain_b  measured on
+        # the (FFC-corrected) clean() input. Corrects the RESIDUAL non-uniformity left after the
+        # offset-only FFC/flat-field — i.e. per-pixel responsivity (gain), the genuinely
+        # non-redundant factory bit (see recon/EMULATION_NUC.md: the factory NUC's effective
+        # per-pixel gain near the operating range). Supersedes flat_map (offset+gain vs offset).
+        self.gain_a = None         # per-pixel slope (≈ 1/responsivity)
+        self.gain_b = None         # per-pixel intercept
         # params
         self.bpc_k = 5.0           # per-frame impulse threshold (sigmas); the persistent
                                    # bad pixels are handled by the learned static_bad mask
@@ -188,17 +195,51 @@ class Enhancer:
 
     def clear_flatfield(self):
         self.flat_map = None
+        self.gain_a = self.gain_b = None
+
+    # ---- two-point per-pixel NUC (offset + responsivity gain) ----
+    def capture_flatfield_2pt(self, cold_frames, warm_frames, clamp=(0.6, 1.7)):
+        """Build the per-pixel affine NUC `corrected = a*f + b` from two uniform-target bursts
+        at different levels (e.g. a room-temp wall and a warmer surface/hand), measured on the
+        same FFC-corrected frames clean() sees. Two-point: maps cold->mean(cold) and
+        warm->mean(warm) for every pixel, so a flat scene reads flat across the [cold,warm]
+        range — correcting per-pixel responsivity (gain) that the offset-only FFC leaves.
+        Supersedes the offset-only flat_map. Returns (gain_std, span_counts)."""
+        c = np.mean([np.asarray(f, np.float32) for f in cold_frames], axis=0)
+        w = np.mean([np.asarray(f, np.float32) for f in warm_frames], axis=0)
+        if self.static_bad.any():                      # de-spike ONLY flagged bad pixels;
+            med = lambda x: cv2.medianBlur(x, 3)        # do NOT blur the per-pixel gain away
+            c = np.where(self.static_bad, med(c), c)
+            w = np.where(self.static_bad, med(w), w)
+        Lc, Lw = float(np.median(c)), float(np.median(w))
+        span = abs(Lw - Lc)
+        if span < 200:                                 # the two targets are too close in level
+            return 0.0, span
+        dpix = w - c
+        dpix = np.where(np.abs(dpix) < 1.0, np.sign(dpix) * 1.0 + 1e-3, dpix)
+        a = np.clip((Lw - Lc) / dpix, *clamp).astype(np.float32)   # per-pixel slope (~1/gain)
+        # the bursts are frame-averaged (low estimate noise), so keep the per-pixel slope as-is;
+        # only replace flagged bad pixels with the local median to avoid spikes.
+        if self.static_bad.any():
+            a = np.where(self.static_bad, cv2.medianBlur(a, 3), a)
+        b = (Lc - a * c).astype(np.float32)            # per-pixel intercept
+        self.gain_a, self.gain_b = a, b
+        self.flat_map = None                           # affine supersedes the offset-only map
+        self.reset_temporal()
+        return float(a.std()), span
 
     # ---- public ----
     def clean(self, raw):
-        """Per-frame value-safe cleanup (bad-pixel + flat-field). No temporal blend, so
-        each call is an independent frame — used as the input to super-resolution."""
+        """Per-frame value-safe cleanup (bad-pixel + flat-field). No temporal blend, so each
+        call is an independent frame — used as the input to super-resolution."""
         f = np.asarray(raw, dtype=np.float32)
         nbad = 0
         if self.bpc:
             f, nbad = self._correct_bad(f)
-        if self.flatfield and self.flat_map is not None:
-            f = f - self.flat_map
+        if self.flatfield and self.gain_a is not None:
+            f = self.gain_a * f + self.gain_b          # two-point affine (offset + gain)
+        elif self.flatfield and self.flat_map is not None:
+            f = f - self.flat_map                      # one-point offset-only fallback
         self.last_nbad = nbad
         return f
 

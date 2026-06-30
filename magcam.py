@@ -41,7 +41,10 @@ class MagCamera:
         self._run = False
         self._lock = threading.Lock()
         self._latest = None         # raw uint16 HxW
+        self._latest_hdr = None     # 28-byte frame header (per-frame telemetry)
+        self._latest_tail = None    # 28-byte frame tail
         self._ffc_ref = None        # float32 HxW reference (shutter-closed)
+        self.param1 = self.param2 = b''
         self.frame_count = 0
 
     # ---- low level ----
@@ -96,10 +99,17 @@ class MagCamera:
         self.fps = struct.unpack_from('<I', r, 28)[0]
         self.frame_bytes = self.W * self.H * 2
         self.period = HDR_LEN + self.frame_bytes + TAIL_LEN
+        self.param1 = r                                   # raw GetParameter1 response
         # the app also issues these during init; read their acks
-        self._cmd(GET_PARAM2)
+        self.param2 = self._cmd(GET_PARAM2)               # raw GetParameter2 response
         self._cmd(GET_CALIINFO)
         return self.W, self.H, self.fps
+
+    def get_param2(self, refresh=True):
+        """Raw GetParameter2 response bytes (may carry sensor-temp / shutter telemetry)."""
+        if refresh:
+            self.param2 = self._cmd(GET_PARAM2)
+        return self.param2
 
     def start(self):
         try:
@@ -133,12 +143,32 @@ class MagCamera:
                     if i > 0:
                         del buf[:i]
                     break
+                hdr = bytes(buf[i: i + HDR_LEN])
                 payload = bytes(buf[i + HDR_LEN: i + HDR_LEN + self.frame_bytes])
+                tail = bytes(buf[i + HDR_LEN + self.frame_bytes: i + self.period])
                 del buf[:i + self.period]
                 fr = np.frombuffer(payload, dtype=np.uint16).reshape(self.H, self.W)
                 with self._lock:
                     self._latest = fr
+                    self._latest_hdr = hdr      # 28-byte per-frame header (telemetry)
+                    self._latest_tail = tail    # 28-byte per-frame tail
                     self.frame_count += 1
+
+    def get_telemetry(self):
+        """Latest per-frame header & tail bytes (28 each), or (None, None)."""
+        with self._lock:
+            return self._latest_hdr, self._latest_tail
+
+    def sensor_temp_raw(self):
+        """Live FPA / sensor temperature in raw counts (firmware ctx[0x40]).
+        Located empirically at frame-tail offset 8 (u32); drifts smoothly as the sensor
+        warms. The 6 factory calibration anchors live at cali-header offset 36 (table A),
+        in the same units, so this directly indexes the NUC blocks. None if no frame yet."""
+        with self._lock:
+            t = self._latest_tail
+        if not t or len(t) < 12:
+            return None
+        return struct.unpack_from('<I', t, 8)[0]
 
     def get_raw(self, timeout=2.0):
         """Latest raw uint16 frame (HxW), or None. Checks at least once even if

@@ -13,3 +13,24 @@ venv/
 # SR training artifacts (large) — the .onnx model is small and tracked
 *.pt
 sr_training_frames.npy
+
+# large reverse-engineering artifacts / proprietary blobs (regenerate from the
+# device + the recon scripts; see recon/EMULATION_NUC.md).
+# mag_cali.bin, emu_heap.bin:
+*.bin
+# block montages / scratch renders:
+recon/*.png
+recon/blocks/
+recon/proper_blocks/
+recon/test_offsets/
+# superseded intermediate + single-temp dump (the runtime grid .npz is tracked):
+recon/factory_gain_offset.npz
+recon/factory_nuc_tables.npz
+
+# per-camera / personal captures (not portable between cameras)
+gain_nuc.npz
+flatfield.npy
+*.ddt
+
+# required runtime data, kept despite the blanket *.npy ignore above
+!recon/planck_luts.npy

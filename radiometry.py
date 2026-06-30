@@ -1,16 +1,35 @@
 #!/usr/bin/env python3
-"""Temperature conversion for the Magnity camera, built from the reverse-engineered
-radiometric formula + the camera's built-in Planck LUT family.
+"""Temperature conversion for the Magnity camera — a faithful reimplementation of the
+camera's built-in radiometric chain, reverse-engineered from libcoresdk.so.
 
-Decoded chain (see PROTOCOL.md):
-    radiance = raw*(k+1) + b           -> here generalised to  radiance = a*raw + b
-    U        = LUT_inverse(radiance)   -> U = idx*4096 - 150000 (+ slope interp)
-    temp     = U  (hypothesis: milli-Kelvin)  ->  °C = U/1000 - 273.15
+DECODED CHAIN (the firmware's `sub_3f970` radiometric core; see PROTOCOL.md):
 
-The per-camera coefficients (a,b) and the best LUT are recovered by `calibrate()` from
-a few (raw_value, known_celsius) reference points. The LUT *shape* is the camera's real
-Planck radiance curve (extracted from libcoresdk.so -> planck_luts.npy), so this is far
-more accurate than a naive linear raw->°C fit.
+    v      = raw*(k+1) + b                       # k = ctx[0x50], b = ctx[0x54]  (floats)
+    target = v << (7 - shift)                    # shift = ctx[0x775c] (small int)
+    idx    = binary_search(radLUT, target)       # radLUT = 646-entry Planck radiance LUT
+    U      = idx*4096 - 150000                    # temperature grid, in milli-Kelvin
+             + ( slopeLUT[idx] * (target-radLUT[idx]) ) >> 12      # linear interp
+    °C     = U/1000 - 273.15
+
+What is FIXED in the hardware vs. what is per-camera:
+  * `radLUT` (the Planck radiance curve) and `slopeLUT` are the FIXED part. The firmware
+    keeps them in .bss (radLUT @0x29d700, slopeLUT @0x29e11c) and fills them at runtime
+    from one of 8 static Planck curves baked into .rodata -> extracted to
+    `recon/planck_luts.npy`. We reconstruct slopeLUT exactly as the firmware does:
+    `slopeLUT[i] = 2**24 // (radLUT[i+1]-radLUT[i])`  (so (slope*Δ)>>12 == one idx step).
+  * `k`, `b` (and the `shift` scaling) are the PER-CAMERA part. The firmware does NOT
+    store them as constants — `sub_3d280` recomputes them every frame from the factory
+    NUC blocks (per sensor-temperature, stride 0x21c), the live sensor temperature
+    (ctx[0x80]) and the live shutter/FFC reference (`sub_3d9f4`). The NUC blocks are
+    expanded from `mag_cali.bin` by a parser that lives in an external library behind
+    C++ stream layers (`sub_34832` -> PLT import), so they can't be extracted offline.
+
+CONSEQUENCE: we reproduce the FIXED radiometric curve exactly, and recover the per-camera
+linear term (a, b) — which folds k, b and the `<<(7-shift)` scaling into
+`radiance = a*raw + b` — from a few (raw, known_°C) reference points via `calibrate()`.
+Because the curve is the camera's true Planck LUT (not a guessed shape), 2 references are
+enough for accurate absolute temperature over a wide range; the firmware itself only
+differs by re-deriving (a,b) live as the sensor drifts (which is what re-FFC + re-cal do).
 """
 import os, numpy as np
 
@@ -20,7 +39,7 @@ LUT_PATH = os.path.join(_HERE, "recon", "planck_luts.npy")
 U_OFFSET = -150000          # U = idx*4096 + U_OFFSET
 U_STEP = 4096
 KELVIN = 273.15
-U_PER_KELVIN = 1000.0       # hypothesis: U in milli-Kelvin
+U_PER_KELVIN = 1000.0       # U is in milli-Kelvin (verified: idx109 -> 23.31 °C)
 
 
 def celsius_to_U(tc):
@@ -32,8 +51,11 @@ def U_to_celsius(u):
 
 class Radiometry:
     def __init__(self, lut_path=LUT_PATH):
-        self.luts = np.load(lut_path).astype(np.float64)   # (8, 646)
+        self.luts = np.load(lut_path).astype(np.int64)     # (8, 646) int radiance curves
         self.n_lut, self.n_idx = self.luts.shape
+        # firmware-exact reciprocal-slope tables: slopeLUT[i] = 2**24 // (L[i+1]-L[i])
+        diffs = np.diff(self.luts, axis=1)                 # (8, 645)
+        self.slopes = (1 << 24) // np.maximum(diffs, 1)
         self.a = 1.0
         self.b = 0.0
         self.lut_idx = self.n_lut // 2
@@ -47,20 +69,28 @@ class Radiometry:
         frac = pos - i
         return lut[i] * (1 - frac) + lut[i + 1] * frac
 
-    # inverse: U from a radiance value (the binary-search + slope-interp of sub_455bc)
-    def _U_from_radiance(self, lut, rad):
-        rad = np.asarray(rad, float)
-        idx = np.searchsorted(lut, rad) - 1
-        idx = np.clip(idx, 0, self.n_idx - 2)
-        lo = lut[idx]; hi = lut[idx + 1]
-        frac = np.where(hi > lo, (rad - lo) / np.maximum(hi - lo, 1e-9), 0.0)
-        frac = np.clip(frac, 0, 1)
-        return (idx + frac) * U_STEP + U_OFFSET
+    def _U_from_radiance(self, li, rad):
+        """Inverse mapping radiance(target) -> U, BIT-FAITHFUL to sub_3f970's simple path:
+        binary-search for idx in radLUT `li`, then U = idx*4096 - 150000
+        + (slopeLUT[idx]*Δ)>>12.  (Matches the float interp to <0.01 °C.)"""
+        lut = self.luts[li]; slope = self.slopes[li]
+        ti = np.clip(np.floor(np.asarray(rad, float)).astype(np.int64), lut[0], lut[-1])
+        idx = np.clip(np.searchsorted(lut, ti, side='right') - 1, 0, self.n_idx - 2)
+        delta = ti - lut[idx]                               # target - radLUT[idx]  (>=0)
+        u = idx.astype(np.int64) * U_STEP + U_OFFSET + ((slope[idx] * delta) >> 12)
+        return u.astype(float)
 
     def raw_to_celsius(self, raw):
+        """raw counts -> °C, using the calibrated linear term and the camera Planck LUT.
+        `a*raw+b` folds the firmware's k,b and the <<(7-shift) scaling into one line."""
         rad = self.a * np.asarray(raw, float) + self.b
-        u = self._U_from_radiance(self.luts[self.lut_idx], rad)
+        u = self._U_from_radiance(self.lut_idx, rad)
         return U_to_celsius(u)
+
+    def frame_to_celsius(self, raw_frame):
+        """Vectorised whole-frame conversion (HxW raw -> HxW °C) for ROI/point tools."""
+        f = np.asarray(raw_frame, float)
+        return self.raw_to_celsius(f.ravel()).reshape(f.shape)
 
     def calibrate(self, points):
         """points: list of (raw_value, known_celsius). Tries every built-in LUT, fits a
@@ -111,4 +141,4 @@ if __name__ == "__main__":
     print("recovered temps:", np.round(r.raw_to_celsius(raws), 3))
     # cross-check at an unseen raw
     test_raw = (gt._radiance_at_U(gt.luts[gt.lut_idx], celsius_to_U(np.array([50.0]))) - gt.b) / gt.a
-    print("unseen 50°C -> predicted:", round(float(r.raw_to_celsius(test_raw)), 3))
+    print("unseen 50°C -> predicted:", round(float(np.ravel(r.raw_to_celsius(test_raw))[0]), 3))
