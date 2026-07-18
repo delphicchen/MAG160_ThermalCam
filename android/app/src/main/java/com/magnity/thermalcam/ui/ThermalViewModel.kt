@@ -688,7 +688,7 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
      * NeuralSR then prefers over the shipped asset. Takes a few minutes; the live
      * view keeps running (training runs at low priority on the Default dispatcher).
      */
-    fun trainSrModel(nFrames: Int = 300, epochs: Int = 60) {
+    fun trainSrModel(nFrames: Int = 300, epochs: Int = 40) {
         if (!connected || srTrainingProgress != null) return
         srTrainCancel = false
         val scale = srScale

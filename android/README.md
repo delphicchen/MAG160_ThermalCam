@@ -49,12 +49,19 @@ NUC tables and Planck curves. There is nothing to convert or regenerate.
      reversed from `mag_cali.bin`, interpolated from the FPA-temp grid.
    - **Neural super-res 2×/4×** — ESPCN via ONNX Runtime (NNAPI → XNNPACK → CPU).
    - **On-device SR training** — "Train Nx on device" collects ~300 live frames
-     (pan across varied scenes) and trains the ESPCN **in-process, in pure Kotlin**
-     (same recipe as `train_sr.py`: self-supervised bicubic-pair L1+gradient loss,
-     ICNR init, Adam + cosine schedule; a few minutes on a Dimensity 9200). The
+     (pan across varied scenes) and trains the SR network **in-process, in pure
+     Kotlin** (same recipe as `train_sr.py`: self-supervised bicubic-pair
+     L1+gradient loss, Adam + cosine schedule; minutes on a Dimensity 9200). The
      result is exported as a standard ONNX file (hand-rolled protobuf writer) that
      the app then prefers over the shipped model — inference stays on
      NNAPI/XNNPACK. "Reset model" reverts to the shipped weights.
+     The trained architecture is **v2: 4×Conv3x3(32ch) + PixelShuffle + a global
+     bilinear residual skip** (the net learns only the residual above a bilinear
+     upscale). Selected by benchmarking NNAPI-friendly candidates (ESPCN ± skip,
+     FSRCNN-s, wider variants) on real footage under identical training: the skip
+     alone was worth ~+1.8 dB and this point won overall (~+2.4 dB over the
+     original ESPCN) at ~3.7 ms/frame on 2 CPU threads — far inside the 15 fps
+     budget even without NNAPI.
    - **Temperature**: tap the image to lock a CAL marker on a known-temperature
      object, then *+ Add cal point* and enter its °C (≥2 points calibrates the
      Planck-LUT radiometry; long-press the image clears the marker). Calibration
@@ -124,10 +131,12 @@ against the repository's real assets during the port:
 - `Fusion.composeWide` (wide search) verified on the JVM: the inset placement
   round-trips exactly against the overlay-mode transform, the gray base covers the
   full visible FOV, and rotated mountings swap dimensions correctly.
-- `Espcn` training: hand-written backward passes a 36/36 numerical gradient check;
-  training converges (loss ↓6×, val PSNR 19→32.6 dB on synthetic scenes, above the
-  desktop PyTorch trainer's 28.1 dB on identical data). The Kotlin-written ONNX
-  passes `onnx.checker` and its output matches ONNX Runtime to < 1e-6.
+- `Espcn` (arch v2): forward output, combined loss, ALL parameter gradients and a
+  20-step Adam trajectory are bit-identical to a PyTorch reference implementation
+  (≤1e-6 relative); the numerical gradient check passes; converged val PSNR sits
+  inside the PyTorch seed-variance band on identical data. The Kotlin-written ONNX
+  (incl. the Resize+Add residual-skip nodes) passes `onnx.checker` and matches
+  ONNX Runtime to < 2e-6.
 - CLAHE / guided detail boost: unit-tested (local-contrast amplification vs the
   linear mapping, halo-free edge preservation, box-filter parity vs brute force).
 

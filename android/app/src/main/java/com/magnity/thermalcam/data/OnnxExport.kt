@@ -9,14 +9,16 @@ import java.nio.ByteOrder
 /**
  * Writes an on-device-trained [Espcn] as a standard ONNX file, so inference keeps
  * running through ONNX Runtime's NNAPI/XNNPACK backends exactly like the shipped
- * models. Hand-rolled protobuf encoding — the graph is tiny and fixed:
+ * models. Hand-rolled protobuf encoding — the graph is tiny and fixed (arch v2,
+ * plain4 + global residual skip):
  *
- *   input[N,1,H,W] → Conv(5x5,p2) → Relu → Conv(3x3,p1) → Relu → Conv(3x3,p1)
- *                  → DepthToSpace(blocksize=scale, mode=CRD) → output
+ *   input[N,1,H,W] → Conv(3x3,p1) → Relu ×3 → Conv(3x3,p1)
+ *                  → DepthToSpace(blocksize=scale, mode=CRD) ┐
+ *   input → Resize(linear, half_pixel, ×scale) ──────────────┴→ Add → output
  *
- * DepthToSpace CRD == PyTorch PixelShuffle, matching both train_sr.py's export and
- * our Kotlin forward. Dynamic N/H/W dims (same as the desktop export). Weights are
- * embedded as raw little-endian float32 initializers (~30 KB total).
+ * DepthToSpace CRD == PyTorch PixelShuffle; Resize(linear, half_pixel) == our
+ * ImageOps.resizeBilinear == torch bilinear align_corners=False. Dynamic N/H/W dims.
+ * Weights are embedded as raw little-endian float32 initializers (~80 KB total).
  */
 object OnnxExport {
 
@@ -98,34 +100,42 @@ object OnnxExport {
 
     fun exportEspcn(m: Espcn, out: OutputStream) {
         val s = m.scale.toLong()
+        val c = Espcn.C.toLong()
+        val convAttrs = listOf(
+            attrInts("kernel_shape", longArrayOf(3, 3)),
+            attrInts("pads", longArrayOf(1, 1, 1, 1)),
+        )
         val graph = Pb().apply {
             // nodes (field 1, topological order)
-            msg(1, node("Conv", listOf("input", "w1", "b1"), listOf("c1"), listOf(
-                attrInts("kernel_shape", longArrayOf(5, 5)),
-                attrInts("pads", longArrayOf(2, 2, 2, 2)),
-            )))
+            msg(1, node("Conv", listOf("input", "w1", "b1"), listOf("c1"), convAttrs))
             msg(1, node("Relu", listOf("c1"), listOf("r1")))
-            msg(1, node("Conv", listOf("r1", "w2", "b2"), listOf("c2"), listOf(
-                attrInts("kernel_shape", longArrayOf(3, 3)),
-                attrInts("pads", longArrayOf(1, 1, 1, 1)),
-            )))
+            msg(1, node("Conv", listOf("r1", "w2", "b2"), listOf("c2"), convAttrs))
             msg(1, node("Relu", listOf("c2"), listOf("r2")))
-            msg(1, node("Conv", listOf("r2", "w3", "b3"), listOf("c3"), listOf(
-                attrInts("kernel_shape", longArrayOf(3, 3)),
-                attrInts("pads", longArrayOf(1, 1, 1, 1)),
-            )))
-            msg(1, node("DepthToSpace", listOf("c3"), listOf("output"), listOf(
+            msg(1, node("Conv", listOf("r2", "w3", "b3"), listOf("c3"), convAttrs))
+            msg(1, node("Relu", listOf("c3"), listOf("r3")))
+            msg(1, node("Conv", listOf("r3", "w4", "b4"), listOf("c4"), convAttrs))
+            msg(1, node("DepthToSpace", listOf("c4"), listOf("shuffled"), listOf(
                 attrInt("blocksize", s),
                 attrString("mode", "CRD"),
             )))
+            // global residual skip: bilinear upsample of the input ("" = optional roi)
+            msg(1, node("Resize", listOf("input", "", "up_scales"), listOf("up"), listOf(
+                attrString("mode", "linear"),
+                attrString("coordinate_transformation_mode", "half_pixel"),
+            )))
+            msg(1, node("Add", listOf("shuffled", "up"), listOf("output")))
             str(2, "thermal_espcn_${m.scale}x_local")
             // initializers (field 5)
-            msg(5, tensorF32("w1", longArrayOf(Espcn.C1.toLong(), 1, 5, 5), m.w1))
-            msg(5, tensorF32("b1", longArrayOf(Espcn.C1.toLong()), m.b1))
-            msg(5, tensorF32("w2", longArrayOf(Espcn.C2.toLong(), Espcn.C1.toLong(), 3, 3), m.w2))
-            msg(5, tensorF32("b2", longArrayOf(Espcn.C2.toLong()), m.b2))
-            msg(5, tensorF32("w3", longArrayOf(m.outC.toLong(), Espcn.C2.toLong(), 3, 3), m.w3))
-            msg(5, tensorF32("b3", longArrayOf(m.outC.toLong()), m.b3))
+            msg(5, tensorF32("w1", longArrayOf(c, 1, 3, 3), m.w1))
+            msg(5, tensorF32("b1", longArrayOf(c), m.b1))
+            msg(5, tensorF32("w2", longArrayOf(c, c, 3, 3), m.w2))
+            msg(5, tensorF32("b2", longArrayOf(c), m.b2))
+            msg(5, tensorF32("w3", longArrayOf(c, c, 3, 3), m.w3))
+            msg(5, tensorF32("b3", longArrayOf(c), m.b3))
+            msg(5, tensorF32("w4", longArrayOf(m.outC.toLong(), c, 3, 3), m.w4))
+            msg(5, tensorF32("b4", longArrayOf(m.outC.toLong()), m.b4))
+            msg(5, tensorF32("up_scales", longArrayOf(4),
+                floatArrayOf(1f, 1f, m.scale.toFloat(), m.scale.toFloat())))
             // graph input/output (fields 11/12), dynamic N/H/W like the desktop export
             msg(11, valueInfo("input", listOf(dimParam("batch"), dimValue(1), dimParam("height"), dimParam("width"))))
             msg(12, valueInfo("output", listOf(dimParam("batch"), dimValue(1), dimParam("height2"), dimParam("width2"))))

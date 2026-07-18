@@ -10,34 +10,43 @@ import kotlin.math.sign
 import kotlin.math.sqrt
 
 /**
- * Pure-Kotlin ESPCN — the same tiny network as train_sr.py's ThermalESPCN (~7K params),
- * with on-device training. No PyTorch / no extra dependencies: three conv layers are
- * small enough to train with hand-written forward/backward on a Dimensity-class CPU in
- * a few minutes. Inference of the trained result still runs through ONNX Runtime
- * (NNAPI/XNNPACK) — see OnnxExport, which writes the trained weights as a standard
- * .onnx file.
+ * Pure-Kotlin thermal super-resolution network with on-device training.
  *
- * Architecture (identical to the desktop trainer):
- *   Conv2d(1→32, 5x5, pad 2) → ReLU
- *   Conv2d(32→16, 3x3, pad 1) → ReLU
- *   Conv2d(16→scale², 3x3, pad 1) → PixelShuffle(scale)
- * ICNR initialisation on the last conv (sub-pixel copies share one kernel), Kaiming on
- * the rest. Training: self-supervised (HR = real frame normalised [0,1], LR = bicubic
- * ÷scale), L1 + 0.5·gradient-L1 loss, Adam + cosine LR schedule, flip augmentation.
+ * Architecture v2 ("plain4 + global residual skip") — selected by benchmarking
+ * NNAPI-friendly candidates on real footage (see android/README.md):
+ *
+ *   Conv2d(1→32, 3x3) → ReLU
+ *   Conv2d(32→32, 3x3) → ReLU
+ *   Conv2d(32→32, 3x3) → ReLU
+ *   Conv2d(32→scale², 3x3) → PixelShuffle(scale)  ...plus...
+ *   + bilinear_upsample(input, scale)                 (global residual skip)
+ *
+ * The skip means the network only learns the RESIDUAL above a bilinear upscale —
+ * on identical data/training this gained ~+2.4 dB over the original ESPCN and was
+ * the best quality/latency point among ESPCN/FSRCNN/wider variants (~20K params,
+ * ~3.7 ms per 160x120 frame on 2 CPU threads; far inside the 15 fps budget).
+ * ICNR-style zero-ish init on the head keeps the initial output ≈ plain bilinear.
+ *
+ * Training: self-supervised (HR = real frame normalised [0,1], LR = bicubic ÷scale),
+ * L1 + 0.5·gradient-L1 loss, Adam + cosine LR, flip augmentation — the on-device
+ * counterpart of train_sr.py. Inference of the exported model still runs through
+ * ONNX Runtime (see OnnxExport: Conv/Relu/DepthToSpace/Resize/Add graph).
  */
 class Espcn(val scale: Int, seed: Long = 42) {
 
     companion object {
-        const val C1 = 32; const val C2 = 16
-        const val K1 = 5; const val K2 = 3; const val K3 = 3
+        const val C = 32            // feature width of the three hidden convs
+        const val K = 3             // all kernels 3x3
     }
 
     val outC = scale * scale
-    val w1 = FloatArray(C1 * 1 * K1 * K1); val b1 = FloatArray(C1)
-    val w2 = FloatArray(C2 * C1 * K2 * K2); val b2 = FloatArray(C2)
-    val w3 = FloatArray(outC * C2 * K3 * K3); val b3 = FloatArray(outC)
+    val w1 = FloatArray(C * 1 * K * K); val b1 = FloatArray(C)
+    val w2 = FloatArray(C * C * K * K); val b2 = FloatArray(C)
+    val w3 = FloatArray(C * C * K * K); val b3 = FloatArray(C)
+    val w4 = FloatArray(outC * C * K * K); val b4 = FloatArray(outC)
 
-    val paramCount get() = w1.size + b1.size + w2.size + b2.size + w3.size + b3.size
+    val paramCount get() =
+        w1.size + b1.size + w2.size + b2.size + w3.size + b3.size + w4.size + b4.size
 
     init {
         val rnd = java.util.Random(seed)
@@ -45,28 +54,34 @@ class Espcn(val scale: Int, seed: Long = 42) {
             val std = sqrt(2.0 / fanIn)
             for (i in a.indices) a[i] = (rnd.nextGaussian() * std).toFloat()
         }
-        kaiming(w1, 1 * K1 * K1)
-        kaiming(w2, C1 * K2 * K2)
-        // ICNR: one Kaiming base kernel replicated across the scale² sub-pixel channels
-        val base = FloatArray(C2 * K3 * K3)
-        kaiming(base, C2 * K3 * K3)
-        for (oc in 0 until outC) System.arraycopy(base, 0, w3, oc * base.size, base.size)
+        kaiming(w1, 1 * K * K)
+        kaiming(w2, C * K * K)
+        kaiming(w3, C * K * K)
+        // head: ICNR (one shared base kernel per sub-pixel position) scaled small, so
+        // the initial prediction ≈ the bilinear skip alone (stable start)
+        val base = FloatArray(C * K * K)
+        kaiming(base, C * K * K)
+        for (i in base.indices) base[i] *= 0.1f
+        for (oc in 0 until outC) System.arraycopy(base, 0, w4, oc * base.size, base.size)
     }
 
     fun copyWeightsFrom(o: Espcn) {
         o.w1.copyInto(w1); o.b1.copyInto(b1)
         o.w2.copyInto(w2); o.b2.copyInto(b2)
         o.w3.copyInto(w3); o.b3.copyInto(b3)
+        o.w4.copyInto(w4); o.b4.copyInto(b4)
     }
 
     /** Reusable per-worker activation buffers for one LR geometry. */
     class Acts(w: Int, h: Int, outC: Int) {
-        val a1 = FloatArray(C1 * w * h)
-        val a2 = FloatArray(C2 * w * h)
-        val a3 = FloatArray(outC * w * h)
-        val d1 = FloatArray(C1 * w * h)
-        val d2 = FloatArray(C2 * w * h)
-        val d3 = FloatArray(outC * w * h)
+        val a1 = FloatArray(C * w * h)
+        val a2 = FloatArray(C * w * h)
+        val a3 = FloatArray(C * w * h)
+        val a4 = FloatArray(outC * w * h)
+        val d1 = FloatArray(C * w * h)
+        val d2 = FloatArray(C * w * h)
+        val d3 = FloatArray(C * w * h)
+        val d4 = FloatArray(outC * w * h)
     }
 
     // ---- forward ---------------------------------------------------------------
@@ -107,12 +122,13 @@ class Espcn(val scale: Int, seed: Long = 42) {
 
     /** LR (w x h) → SR (w*scale x h*scale). Pass [acts] to keep buffers for backward. */
     fun forward(x: FloatArray, w: Int, h: Int, acts: Acts = Acts(w, h, outC)): FloatArray {
-        conv(x, 1, w, h, w1, b1, C1, K1, acts.a1, relu = true)
-        conv(acts.a1, C1, w, h, w2, b2, C2, K2, acts.a2, relu = true)
-        conv(acts.a2, C2, w, h, w3, b3, outC, K3, acts.a3, relu = false)
-        // PixelShuffle: out[y*r+i][x*r+j] = a3[c = i*r + j][y][x]
+        conv(x, 1, w, h, w1, b1, C, K, acts.a1, relu = true)
+        conv(acts.a1, C, w, h, w2, b2, C, K, acts.a2, relu = true)
+        conv(acts.a2, C, w, h, w3, b3, C, K, acts.a3, relu = true)
+        conv(acts.a3, C, w, h, w4, b4, outC, K, acts.a4, relu = false)
+        // PixelShuffle + global bilinear residual skip
         val r = scale
-        val out = FloatArray(w * r * h * r)
+        val out = ImageOps.resizeBilinear(x, w, h, w * r, h * r)
         val wr = w * r
         val wh = w * h
         for (i in 0 until r) for (j in 0 until r) {
@@ -120,7 +136,7 @@ class Espcn(val scale: Int, seed: Long = 42) {
             for (y in 0 until h) {
                 val orow = (y * r + i) * wr
                 val irow = cb + y * w
-                for (x in 0 until w) out[orow + x * r + j] = acts.a3[irow + x]
+                for (x2 in 0 until w) out[orow + x2 * r + j] += acts.a4[irow + x2]
             }
         }
         return out
@@ -132,15 +148,15 @@ class Espcn(val scale: Int, seed: Long = 42) {
         val g1 = FloatArray(m.w1.size); val gb1 = FloatArray(m.b1.size)
         val g2 = FloatArray(m.w2.size); val gb2 = FloatArray(m.b2.size)
         val g3 = FloatArray(m.w3.size); val gb3 = FloatArray(m.b3.size)
+        val g4 = FloatArray(m.w4.size); val gb4 = FloatArray(m.b4.size)
         fun clear() {
-            java.util.Arrays.fill(g1, 0f); java.util.Arrays.fill(gb1, 0f)
-            java.util.Arrays.fill(g2, 0f); java.util.Arrays.fill(gb2, 0f)
-            java.util.Arrays.fill(g3, 0f); java.util.Arrays.fill(gb3, 0f)
+            for (a in listOf(g1, gb1, g2, gb2, g3, gb3, g4, gb4)) java.util.Arrays.fill(a, 0f)
         }
         fun add(o: Grads) {
             for (i in g1.indices) g1[i] += o.g1[i]; for (i in gb1.indices) gb1[i] += o.gb1[i]
             for (i in g2.indices) g2[i] += o.g2[i]; for (i in gb2.indices) gb2[i] += o.gb2[i]
             for (i in g3.indices) g3[i] += o.g3[i]; for (i in gb3.indices) gb3[i] += o.gb3[i]
+            for (i in g4.indices) g4[i] += o.g4[i]; for (i in gb4.indices) gb4[i] += o.gb4[i]
         }
     }
 
@@ -185,6 +201,8 @@ class Espcn(val scale: Int, seed: Long = 42) {
     /**
      * Forward + combined loss (L1 + gradWeight·gradient-L1) + full backward for one
      * (LR, HR) pair. Accumulates into [grads]; returns the loss.
+     * The residual skip has no parameters, so dLoss/d(shuffled head output) is just
+     * dY — the skip changes only the forward sum, not the backward flow.
      */
     fun lossAndGrads(
         lr: FloatArray, hr: FloatArray, w: Int, h: Int,
@@ -234,25 +252,28 @@ class Espcn(val scale: Int, seed: Long = 42) {
         glv += gl / nDy
         loss += gradWeight * glv
 
-        // un-shuffle dY -> d3
+        // un-shuffle dY -> d4 (the skip branch has no parameters)
         val wh = w * h
         for (i in 0 until r) for (j in 0 until r) {
             val cb = (i * r + j) * wh
             for (y in 0 until h) {
                 val orow = (y * r + i) * wr
                 val irow = cb + y * w
-                for (x in 0 until w) acts.d3[irow + x] = dY[orow + x * r + j]
+                for (x in 0 until w) acts.d4[irow + x] = dY[orow + x * r + j]
             }
         }
 
-        // conv3 (linear) → d2, then ReLU mask of a2
-        convBackward(acts.a2, C2, w, h, w3, outC, K3, acts.d3, grads.g3, grads.gb3, acts.d2)
+        // conv4 (linear) → d3, ReLU mask a3
+        convBackward(acts.a3, C, w, h, w4, outC, K, acts.d4, grads.g4, grads.gb4, acts.d3)
+        for (i in acts.d3.indices) if (acts.a3[i] <= 0f) acts.d3[i] = 0f
+        // conv3 → d2, mask a2
+        convBackward(acts.a2, C, w, h, w3, C, K, acts.d3, grads.g3, grads.gb3, acts.d2)
         for (i in acts.d2.indices) if (acts.a2[i] <= 0f) acts.d2[i] = 0f
-        // conv2 → d1, ReLU mask of a1
-        convBackward(acts.a1, C1, w, h, w2, C2, K2, acts.d2, grads.g2, grads.gb2, acts.d1)
+        // conv2 → d1, mask a1
+        convBackward(acts.a1, C, w, h, w2, C, K, acts.d2, grads.g2, grads.gb2, acts.d1)
         for (i in acts.d1.indices) if (acts.a1[i] <= 0f) acts.d1[i] = 0f
         // conv1 (no dIn needed)
-        convBackward(lr, 1, w, h, w1, C1, K1, acts.d1, grads.g1, grads.gb1, null)
+        convBackward(lr, 1, w, h, w1, C, K, acts.d1, grads.g1, grads.gb1, null)
 
         return loss.toFloat()
     }
@@ -296,6 +317,7 @@ class EspcnTrainer(val scale: Int, private val seed: Long = 42) {
             Adam(model.w1, FloatArray(model.w1.size)), Adam(model.b1, FloatArray(model.b1.size)),
             Adam(model.w2, FloatArray(model.w2.size)), Adam(model.b2, FloatArray(model.b2.size)),
             Adam(model.w3, FloatArray(model.w3.size)), Adam(model.b3, FloatArray(model.b3.size)),
+            Adam(model.w4, FloatArray(model.w4.size)), Adam(model.b4, FloatArray(model.b4.size)),
         )
         var adamT = 0
         val beta1 = 0.9f; val beta2 = 0.999f; val eps = 1e-8f
@@ -369,7 +391,10 @@ class EspcnTrainer(val scale: Int, private val seed: Long = 42) {
                 adamT++
                 val bc1 = 1f - Math.pow(beta1.toDouble(), adamT.toDouble()).toFloat()
                 val bc2 = 1f - Math.pow(beta2.toDouble(), adamT.toDouble()).toFloat()
-                val gradsArr = listOf(total.g1, total.gb1, total.g2, total.gb2, total.g3, total.gb3)
+                val gradsArr = listOf(
+                    total.g1, total.gb1, total.g2, total.gb2,
+                    total.g3, total.gb3, total.g4, total.gb4,
+                )
                 for (k in opts.indices) {
                     val o = opts[k]; val grad = gradsArr[k]
                     for (i in o.p.indices) {

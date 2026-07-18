@@ -350,6 +350,36 @@ object ImageOps {
         return out
     }
 
+    // ---- bilinear resize (half-pixel centres — matches torch align_corners=False
+    // and ONNX Resize coordinate_transformation_mode="half_pixel") -------------------
+
+    fun resizeBilinear(src: FloatArray, w: Int, h: Int, w2: Int, h2: Int): FloatArray {
+        require(w >= 2 && h >= 2) { "resizeBilinear needs at least 2x2 input" }
+        val dst = FloatArray(w2 * h2)
+        val sx = w.toFloat() / w2
+        val sy = h.toFloat() / h2
+        for (y2 in 0 until h2) {
+            var fy = (y2 + 0.5f) * sy - 0.5f
+            if (fy < 0f) fy = 0f
+            var iy = fy.toInt()
+            if (iy > h - 2) iy = h - 2
+            val ty = (fy - iy).coerceIn(0f, 1f)
+            val r0 = iy * w
+            val r1 = (iy + 1) * w
+            for (x2 in 0 until w2) {
+                var fx = (x2 + 0.5f) * sx - 0.5f
+                if (fx < 0f) fx = 0f
+                var ix = fx.toInt()
+                if (ix > w - 2) ix = w - 2
+                val tx = (fx - ix).coerceIn(0f, 1f)
+                val a = src[r0 + ix] * (1 - tx) + src[r0 + ix + 1] * tx
+                val b = src[r1 + ix] * (1 - tx) + src[r1 + ix + 1] * tx
+                dst[y2 * w2 + x2] = a * (1 - ty) + b * ty
+            }
+        }
+        return dst
+    }
+
     // ---- misc -------------------------------------------------------------------
 
     fun flipHorizontal(src: FloatArray, w: Int, h: Int): FloatArray {
