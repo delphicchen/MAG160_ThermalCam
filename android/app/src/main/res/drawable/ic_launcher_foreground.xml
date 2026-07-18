@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple "thermal blob" launcher glyph: concentric heat rings. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF6D1F"
+        android:pathData="M54,26 C40,42 32,52 32,63 a22,22 0 0,0 44,0 C76,52 68,42 54,26 Z" />
+    <path
+        android:fillColor="#FFC53D"
+        android:pathData="M54,44 C47,52 42,58 42,64 a12,12 0 0,0 24,0 C66,58 61,52 54,44 Z" />
+    <path
+        android:fillColor="#FFF3D6"
+        android:pathData="M54,56 C50.5,60 48,63 48,66 a6,6 0 0,0 12,0 C60,63 57.5,60 54,56 Z" />
+</vector>

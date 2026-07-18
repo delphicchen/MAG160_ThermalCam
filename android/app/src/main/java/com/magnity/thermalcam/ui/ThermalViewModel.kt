@@ -1,0 +1,657 @@
+package com.magnity.thermalcam.ui
+
+import android.app.Application
+import android.content.ContentValues
+import android.graphics.Bitmap
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.provider.MediaStore
+import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.magnity.thermalcam.data.CalibrationStore
+import com.magnity.thermalcam.data.Ddt
+import com.magnity.thermalcam.pipeline.Enhancer
+import com.magnity.thermalcam.pipeline.FactoryNuc
+import com.magnity.thermalcam.pipeline.ImageOps
+import com.magnity.thermalcam.pipeline.NeuralSR
+import com.magnity.thermalcam.pipeline.Radiometry
+import com.magnity.thermalcam.usb.MagCamera
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * The viewer brain — Android port of viewer.py's Viewer class, with the Qt event
+ * loop replaced by coroutines and the pixmap replaced by a Compose-observed Bitmap.
+ */
+class ThermalViewModel(app: Application) : AndroidViewModel(app) {
+
+    companion object { private const val TAG = "ThermalVM" }
+
+    // ---- observable UI state -------------------------------------------------
+
+    var status by mutableStateOf("waiting for camera…"); private set
+    var connected by mutableStateOf(false); private set
+    var frameW by mutableStateOf(160); private set
+    var frameH by mutableStateOf(120); private set
+    var displayBitmap by mutableStateOf<Bitmap?>(null); private set
+    var fpsDisplay by mutableStateOf(0f); private set
+    var fpaTemp by mutableStateOf<Int?>(null); private set
+    var fpaDrift by mutableStateOf<Int?>(null); private set
+    var readout by mutableStateOf(""); private set
+
+    // markers, in measurement-frame pixel coords
+    var hotSpot by mutableStateOf<Pair<Int, Int>?>(null); private set
+    var coldSpot by mutableStateOf<Pair<Int, Int>?>(null); private set
+    var calTarget by mutableStateOf<Pair<Int, Int>?>(null)
+
+    // controls (viewer.py parity)
+    var paletteName by mutableStateOf("ironbow")
+    var autoRange by mutableStateOf(true)
+    var mirror by mutableStateOf(false)
+    var paused by mutableStateOf(false)
+    var autoFfc by mutableStateOf(false)
+    var factoryNucAvailable by mutableStateOf(false); private set
+    var factoryNucOn by mutableStateOf(false); private set
+    var srOn by mutableStateOf(false)
+    var srScale by mutableStateOf(4)
+    var srBackend by mutableStateOf(""); private set
+    var bpcOn by mutableStateOf(true)
+    var flatfieldOn by mutableStateOf(true)
+    var temporalOn by mutableStateOf(true)
+    var spatialOn by mutableStateOf(true)
+    var gainStepWarmPending by mutableStateOf(false); private set
+
+    var calPointCount by mutableStateOf(0); private set
+    var calibrated by mutableStateOf(false); private set
+    var ddtReviewName by mutableStateOf<String?>(null); private set
+
+    // ---- internals -------------------------------------------------------------
+
+    private val cam = MagCamera()
+    private var enhancer = Enhancer(160, 120)
+    private var radio: Radiometry? = null
+    private var fnuc: FactoryNuc? = null
+    private val srModels = java.util.concurrent.ConcurrentHashMap<Int, NeuralSR>()
+    private val srRequested = java.util.Collections.synchronizedSet(HashSet<Int>())
+
+    private val calStore = CalibrationStore(File(app.filesDir, "calibration.json"))
+    private var calState = CalibrationStore.State()
+    private val flatFile = File(app.filesDir, "flatfield.bin")
+    private val gainFile = File(app.filesDir, "gain_nuc.bin")
+
+    private var lastFrame: FloatArray? = null       // measurement-grade frame
+    private var gainColdBurst: List<FloatArray>? = null
+    private val ffcBusy = AtomicBoolean(false)
+
+    private val calBox = 2                          // 5x5 averaging window, like the viewer
+
+    // auto-FFC (firmware-style: keyed on FPA drift with a time fallback)
+    private val ffcTempThreshold = 120
+    private val autoFfcMaxIntervalS = 120
+    private var lastFfcTemp: Int? = null
+    private var lastFfcTimeMs = 0L
+
+    private var processJob: Job? = null
+    private var fpsT = System.currentTimeMillis()
+    private var fpsN = 0
+
+    init {
+        // Load the shared binary assets off the main thread.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                radio = Radiometry(app.assets.open("planck_luts.npy"))
+                calState = calStore.load()
+                if (calState.calibrated) {
+                    radio?.restore(calState.a, calState.b, calState.lutIdx, true)
+                }
+                calPointCount = calState.points.size
+                calibrated = calState.calibrated
+            } catch (e: Exception) {
+                Log.e(TAG, "radiometry load failed", e)
+            }
+            try {
+                fnuc = FactoryNuc.load(app.assets.open("factory_nuc_grid.npz"))
+                factoryNucAvailable = true
+            } catch (e: Exception) {
+                Log.e(TAG, "factory NUC grid load failed", e)
+            }
+        }
+    }
+
+    // ---- USB lifecycle -----------------------------------------------------------
+
+    fun connect(usbManager: UsbManager, device: UsbDevice) {
+        if (connected) return
+        status = "opening camera…"
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                cam.open(usbManager, device)
+                frameW = cam.width
+                frameH = cam.height
+                enhancer = Enhancer(cam.width, cam.height)
+                loadPersistentMaps()
+                cam.start()
+                delay(500)
+                status = "FFC…"
+                cam.triggerFfc()                 // startup FFC for an immediately clean image
+                lastFfcTemp = cam.sensorTempRaw()
+                lastFfcTimeMs = System.currentTimeMillis()
+                connected = true
+                status = "streaming ${cam.width}x${cam.height} @ ${cam.fps}fps"
+                startProcessing()
+                launch { delay(400); learnBadPixels() }
+                startAutoFfcLoop()
+            } catch (e: Exception) {
+                Log.e(TAG, "connect failed", e)
+                status = "camera error: ${e.message}"
+                runCatching { cam.stop(); cam.close() }
+            }
+        }
+    }
+
+    fun disconnect() {
+        connected = false
+        processJob?.cancel()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { cam.stop() }
+            runCatching { cam.close() }
+        }
+        status = "camera disconnected"
+    }
+
+    // ---- processing loop -----------------------------------------------------------
+
+    private fun startProcessing() {
+        processJob?.cancel()
+        processJob = viewModelScope.launch(Dispatchers.Default) {
+            val frameMs = (1000L / cam.fps.coerceAtLeast(1)).coerceAtLeast(30L)
+            while (connected) {
+                val t0 = System.currentTimeMillis()
+                try {
+                    step()
+                } catch (e: Exception) {
+                    Log.e(TAG, "frame step failed", e)
+                }
+                val dt = System.currentTimeMillis() - t0
+                if (dt < frameMs) delay(frameMs - dt)
+            }
+        }
+    }
+
+    /** One display update — port of viewer.update_frame(). */
+    private fun step() {
+        val w = frameW; val h = frameH
+        val frame: FloatArray
+        val disp: FloatArray
+        var dispW = w; var dispH = h
+
+        if (paused && lastFrame != null) {
+            frame = lastFrame!!
+            disp = enhancer.enhanceDisplay(frame)
+        } else {
+            if (ffcBusy.get()) return           // shutter closed — skip updates
+            var clean: FloatArray
+            val nuc = fnuc
+            if (factoryNucOn && nuc != null) {
+                // Factory NUC needs the UNCORRECTED raw + shutter dark reference, in
+                // sensor orientation: apply BEFORE the mirror, then flip the result.
+                val rawNative = cam.getRaw(0) ?: return
+                val fpa = cam.sensorTempRaw() ?: 20000
+                clean = nuc.apply(rawNative, fpa, cam.ffcRef)
+                if (mirror) clean = ImageOps.flipHorizontal(clean, w, h)
+                if (bpcOn) {
+                    enhancer.bpc = true
+                    clean = enhancer.correctBadOnly(clean)
+                }
+            } else {
+                val raw = grab() ?: return
+                syncToggles()
+                clean = enhancer.clean(raw)
+            }
+            enhancer.temporal = temporalOn
+            frame = enhancer.temporalStep(clean)
+            lastFrame = frame
+
+            disp = if (srOn) {
+                val model = srModels[srScale]
+                val pre = enhancer.smooth(frame)
+                dispW = w * srScale; dispH = h * srScale
+                val up = model?.upscale(pre, w, h)
+                    ?: ImageOps.resizeBicubic(pre, w, h, dispW, dispH)
+                // mild unsharp mask for perceived detail (enhance.py sharpen=0.15)
+                val blur = ImageOps.gaussianBlur(up, dispW, dispH, 1.2f)
+                FloatArray(up.size) { up[it] + 0.15f * (up[it] - blur[it]) }
+            } else {
+                enhancer.spatial = spatialOn
+                enhancer.enhanceDisplay(frame)
+            }
+        }
+
+        // range: percentiles on the measurement frame (cheap + stable across SR scales)
+        val lo: Float; val hi: Float
+        if (autoRange) {
+            lo = ImageOps.percentile(frame, 1f)
+            hi = ImageOps.percentile(frame, 99f)
+        } else {
+            lo = 0f; hi = 65535f
+        }
+        val span = (hi - lo).coerceAtLeast(1f)
+        val lut = Palettes.lut(paletteName)
+        val pixels = IntArray(dispW * dispH)
+        for (i in pixels.indices) {
+            var v = (disp[i] - lo) / span * 255f
+            if (v < 0f) v = 0f else if (v > 255f) v = 255f
+            pixels[i] = lut[v.toInt()]
+        }
+        val bmp = Bitmap.createBitmap(pixels, dispW, dispH, Bitmap.Config.ARGB_8888)
+
+        // hot/cold spots in measurement coords
+        var mnI = 0; var mxI = 0
+        for (i in frame.indices) {
+            if (frame[i] < frame[mnI]) mnI = i
+            if (frame[i] > frame[mxI]) mxI = i
+        }
+
+        // readout text
+        val sb = StringBuilder()
+        sb.append("max ").append(fmtCounts(frame[mxI])).append('\n')
+        sb.append("min ").append(fmtCounts(frame[mnI])).append('\n')
+        sb.append("ctr ").append(fmtCounts(frame[(h / 2) * w + w / 2]))
+        calTarget?.let { (tx, ty) ->
+            regionRaw(tx, ty)?.let { rv ->
+                val n = 2 * calBox + 1
+                sb.append("\nCAL (").append(tx).append(',').append(ty).append(") ")
+                    .append(n).append('x').append(n).append("avg ").append(fmtCounts(rv.toFloat()))
+            }
+        }
+
+        // fps meter
+        fpsN++
+        val now = System.currentTimeMillis()
+        if (now - fpsT >= 1000) {
+            fpsDisplay = fpsN * 1000f / (now - fpsT)
+            fpsT = now; fpsN = 0
+        }
+
+        val st = cam.sensorTempRaw()
+
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            displayBitmap = bmp
+            hotSpot = (mxI % w) to (mxI / w)
+            coldSpot = (mnI % w) to (mnI / w)
+            readout = sb.toString()
+            fpaTemp = st
+            fpaDrift = if (st != null && lastFfcTemp != null) st - lastFfcTemp!! else null
+            if (ddtReviewName == null) {
+                status = "%.1f fps   frames=%d".format(fpsDisplay, cam.frameCount)
+            }
+        }
+    }
+
+    private fun syncToggles() {
+        enhancer.bpc = bpcOn
+        enhancer.flatfield = flatfieldOn
+        enhancer.temporal = temporalOn
+        enhancer.spatial = spatialOn
+    }
+
+    /** Single frame entry point — applies the left-right mirror (viewer._grab). */
+    private fun grab(timeoutMs: Long = 0): FloatArray? {
+        val f = cam.getFrame(timeoutMs) ?: return null
+        return if (mirror) ImageOps.flipHorizontal(f, frameW, frameH) else f
+    }
+
+    private fun fmtCounts(v: Float): String {
+        val r = radio
+        val c = v.toInt()
+        return if (r != null && r.calibrated) {
+            "%d cnt / %.1f°C".format(c, r.rawToCelsius(v.toDouble()))
+        } else "$c cnt"
+    }
+
+    // ---- FFC -----------------------------------------------------------------------
+
+    fun doFfc(light: Boolean = false) {
+        if (!connected || ffcBusy.get()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            ffcBusy.set(true)
+            status = "FFC: closing shutter…"
+            val ok = try { cam.triggerFfc() } finally { ffcBusy.set(false) }
+            enhancer.resetTemporal()
+            lastFfcTemp = cam.sensorTempRaw()
+            lastFfcTimeMs = System.currentTimeMillis()
+            if (!light) learnBadPixels()
+            status = (if (light) "auto-FFC" else "FFC") + if (ok) " done" else " failed"
+        }
+    }
+
+    private fun startAutoFfcLoop() {
+        viewModelScope.launch(Dispatchers.IO) {
+            while (connected) {
+                delay(2000)
+                if (!autoFfc || paused || ffcBusy.get()) continue
+                val cur = cam.sensorTempRaw()
+                val drift = if (cur != null && lastFfcTemp != null) {
+                    kotlin.math.abs(cur - lastFfcTemp!!)
+                } else null
+                val elapsed = (System.currentTimeMillis() - lastFfcTimeMs) / 1000
+                if ((drift != null && drift >= ffcTempThreshold) || elapsed >= autoFfcMaxIntervalS) {
+                    doFfc(light = true)
+                }
+            }
+        }
+    }
+
+    fun setAutoFfcEnabled(on: Boolean) {
+        autoFfc = on
+        if (on) {
+            lastFfcTemp = cam.sensorTempRaw()
+            lastFfcTimeMs = System.currentTimeMillis()
+        }
+    }
+
+    // ---- bursts: bad pixels / flat-field / gain NUC -----------------------------------
+
+    private suspend fun captureBurst(n: Int, maxMs: Long, bare: Boolean): List<FloatArray> {
+        // `bare` grabs FFC-corrected frames with no flat/gain applied (viewer._capture_burst)
+        val pa = enhancer.gainA; val pb = enhancer.gainB; val pf = enhancer.flatMap
+        if (bare) { enhancer.gainA = null; enhancer.gainB = null; enhancer.flatMap = null }
+        val frames = ArrayList<FloatArray>(n)
+        val t0 = System.currentTimeMillis()
+        try {
+            while (frames.size < n && System.currentTimeMillis() - t0 < maxMs) {
+                grab(200)?.let { frames.add(it) }
+                delay(20)
+            }
+        } finally {
+            if (bare) { enhancer.gainA = pa; enhancer.gainB = pb; enhancer.flatMap = pf }
+        }
+        return frames
+    }
+
+    fun learnBadPixels() {
+        if (!connected) return
+        viewModelScope.launch(Dispatchers.IO) {
+            status = "learning bad-pixel map…"
+            val frames = captureBurst(25, 2500, bare = false)
+            if (frames.size >= 8) {
+                val nb = enhancer.learnBadPixels(frames)
+                status = "bad-pixel map: $nb pixels"
+            } else status = "bad-pixel learn failed (not enough frames)"
+        }
+    }
+
+    fun doFlatfield() {
+        if (!connected) return
+        viewModelScope.launch(Dispatchers.IO) {
+            status = "flat-field: hold steady on the uniform surface…"
+            val prev = enhancer.flatMap
+            enhancer.flatMap = null
+            val frames = captureBurst(40, 4000, bare = false)
+            if (frames.size >= 10) {
+                val res = enhancer.captureFlatfield(frames)
+                savePersistentMaps()
+                status = "flat-field captured (removed ±%.0f cnt shading)".format(res)
+            } else {
+                enhancer.flatMap = prev
+                status = "flat-field failed (not enough frames)"
+            }
+        }
+    }
+
+    fun doGainNucStep() {
+        if (!connected) return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (gainColdBurst == null) {
+                status = "Gain NUC 1/2: hold steady on a COOL uniform surface…"
+                val frames = captureBurst(40, 4000, bare = true)
+                if (frames.size < 10) { status = "gain NUC: not enough frames (try again)"; return@launch }
+                gainColdBurst = frames
+                gainStepWarmPending = true
+                status = "COLD captured — now aim at a WARMER uniform surface and tap again"
+            } else {
+                status = "Gain NUC 2/2: hold steady on a WARMER uniform surface…"
+                val frames = captureBurst(40, 4000, bare = true)
+                if (frames.size < 10) { status = "gain NUC: not enough frames (try again)"; return@launch }
+                val (gstd, span) = enhancer.captureFlatfield2pt(gainColdBurst!!, frames)
+                gainColdBurst = null
+                gainStepWarmPending = false
+                if (span < 200f) {
+                    status = "gain NUC: surfaces too close in level (Δ%.0f cnt) — use a warmer target".format(span)
+                } else {
+                    savePersistentMaps()
+                    status = "gain NUC built (Δ%.0f cnt, gain std %.3f) — saved".format(span, gstd)
+                }
+            }
+        }
+    }
+
+    fun clearGainNuc() {
+        enhancer.gainA = null; enhancer.gainB = null
+        gainColdBurst = null
+        gainStepWarmPending = false
+        gainFile.delete()
+        status = "gain NUC cleared"
+    }
+
+    fun clearFlatfield() {
+        enhancer.clearFlatfield()
+        flatFile.delete(); gainFile.delete()
+        gainColdBurst = null
+        gainStepWarmPending = false
+        status = "flat-field + gain NUC cleared"
+    }
+
+    // ---- persistence of learned maps (simple length-prefixed float blobs) --------------
+
+    private fun saveFloats(file: File, vararg arrays: FloatArray) {
+        DataOutputStream(file.outputStream().buffered()).use { out ->
+            out.writeInt(arrays.size)
+            for (a in arrays) {
+                out.writeInt(a.size)
+                for (v in a) out.writeFloat(v)
+            }
+        }
+    }
+
+    private fun loadFloats(file: File): List<FloatArray>? {
+        if (!file.exists()) return null
+        return try {
+            DataInputStream(file.inputStream().buffered()).use { inp ->
+                val n = inp.readInt()
+                List(n) {
+                    val len = inp.readInt()
+                    FloatArray(len) { inp.readFloat() }
+                }
+            }
+        } catch (e: Exception) { null }
+    }
+
+    private fun savePersistentMaps() {
+        enhancer.flatMap?.let { saveFloats(flatFile, it) } ?: flatFile.delete()
+        val a = enhancer.gainA; val b = enhancer.gainB
+        if (a != null && b != null) saveFloats(gainFile, a, b) else gainFile.delete()
+    }
+
+    private fun loadPersistentMaps() {
+        loadFloats(flatFile)?.firstOrNull()?.takeIf { it.size == frameW * frameH }?.let {
+            enhancer.flatMap = it
+        }
+        loadFloats(gainFile)?.takeIf { it.size == 2 && it[0].size == frameW * frameH }?.let {
+            enhancer.gainA = it[0]; enhancer.gainB = it[1]
+        }
+    }
+
+    // ---- factory NUC ---------------------------------------------------------------------
+
+    fun setFactoryNuc(on: Boolean) {
+        factoryNucOn = on && factoryNucAvailable
+        if (factoryNucOn && cam.ffcRef == null) {
+            status = "Factory NUC: capturing shutter reference…"
+            doFfc(light = true)
+        }
+    }
+
+    // ---- neural SR ------------------------------------------------------------------------
+
+    fun setSuperres(on: Boolean) {
+        srOn = on
+        if (on) ensureSrModel(srScale)
+    }
+
+    fun setSrScale(scale: Int) {
+        srScale = scale
+        if (srOn) ensureSrModel(scale)
+    }
+
+    private fun ensureSrModel(scale: Int) {
+        if (!srRequested.add(scale)) return      // load once; bicubic until ready
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val m = NeuralSR(getApplication<Application>(), scale)
+                srModels[scale] = m
+                srBackend = m.backend
+                status = "SR ${scale}x ready (${m.backend})"
+            } catch (e: Exception) {
+                Log.e(TAG, "SR model load failed", e)
+                srBackend = "bicubic"
+                status = "SR model unavailable — using bicubic"
+            }
+        }
+    }
+
+    // ---- temperature calibration -------------------------------------------------------------
+
+    /** Averaged raw counts over the 5x5 window around (x,y) on the measurement frame. */
+    fun regionRaw(x: Int, y: Int): Int? {
+        val f = lastFrame ?: return null
+        val w = frameW; val h = frameH
+        val x0 = (x - calBox).coerceAtLeast(0); val x1 = (x + calBox + 1).coerceAtMost(w)
+        val y0 = (y - calBox).coerceAtLeast(0); val y1 = (y + calBox + 1).coerceAtMost(h)
+        var s = 0.0; var n = 0
+        for (yy in y0 until y1) for (xx in x0 until x1) { s += f[yy * w + xx]; n++ }
+        return if (n > 0) Math.round(s / n).toInt() else null
+    }
+
+    fun addCalPoint(knownCelsius: Double): Boolean {
+        val target = calTarget ?: return false
+        val raw = regionRaw(target.first, target.second) ?: return false
+        val r = radio ?: return false
+        calState.points.add(raw.toDouble() to knownCelsius)
+        calPointCount = calState.points.size
+        if (calState.points.size >= 2) {
+            val rms = r.calibrate(calState.points)
+            calibrated = true
+            status = "calibrated: ${calState.points.size} pts, lut=${r.lutIdx}, rms=%.2f°C".format(rms)
+        } else {
+            status = "1 reference point stored (need ≥2 to calibrate)"
+        }
+        calState.calibrated = r.calibrated
+        calState.a = r.a; calState.b = r.b; calState.lutIdx = r.lutIdx
+        viewModelScope.launch(Dispatchers.IO) { runCatching { calStore.save(calState) } }
+        return true
+    }
+
+    fun clearCalibration() {
+        calState.points.clear()
+        calState.calibrated = false
+        calPointCount = 0
+        calibrated = false
+        radio?.clear()
+        viewModelScope.launch(Dispatchers.IO) { runCatching { calStore.save(calState) } }
+        status = "calibration cleared"
+    }
+
+    // ---- snapshot -------------------------------------------------------------------------------
+
+    fun snapshot() {
+        val bmp = displayBitmap ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // nearest-neighbour x4 so the PNG is comfortably viewable
+                val big = Bitmap.createScaledBitmap(bmp, bmp.width * 4, bmp.height * 4, false)
+                val name = "mag_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".png"
+                val cv = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MagThermal")
+                }
+                val resolver = getApplication<Application>().contentResolver
+                val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv)
+                    ?: throw RuntimeException("MediaStore insert failed")
+                resolver.openOutputStream(uri)?.use { big.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                status = "saved Pictures/MagThermal/$name"
+            } catch (e: Exception) {
+                Log.e(TAG, "snapshot failed", e)
+                status = "snapshot failed: ${e.message}"
+            }
+        }
+    }
+
+    // ---- DDT radiometric snapshots -------------------------------------------------------------
+
+    fun saveDdt(out: OutputStream): Boolean {
+        val f = lastFrame ?: return false
+        val r = radio ?: return false
+        return try {
+            Ddt.save(out, f, frameW, frameH, cam.sensorTempRaw(), r.a, r.b, r.lutIdx, r.calibrated)
+            status = "DDT saved"
+            true
+        } catch (e: Exception) {
+            status = "save DDT failed: ${e.message}"
+            false
+        }
+    }
+
+    fun loadDdt(input: InputStream, name: String) {
+        try {
+            val d = Ddt.load(input, name)
+            if (d.width != frameW || d.height != frameH) {
+                status = "DDT geometry ${d.width}x${d.height} != camera ${frameW}x$frameH"
+                return
+            }
+            ddtReviewName = name
+            paused = true
+            lastFrame = d.frame
+            calTarget = null
+            status = "reviewing $name — tap a known-temp spot, then add a cal point"
+        } catch (e: Exception) {
+            status = "load DDT failed: ${e.message}"
+        }
+    }
+
+    fun exitDdtReview() {
+        ddtReviewName = null
+        paused = false
+        status = "resumed live stream"
+    }
+
+    // ---- shutdown ---------------------------------------------------------------------------------
+
+    override fun onCleared() {
+        connected = false
+        processJob?.cancel()
+        // ViewModel scope dies with us — tear down USB synchronously on a plain thread.
+        Thread {
+            runCatching { cam.stop() }
+            runCatching { cam.close() }
+            srModels.values.forEach { runCatching { it.close() } }
+        }.start()
+        super.onCleared()
+    }
+}

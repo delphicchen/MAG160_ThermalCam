@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Magnity thermal cameras: VID 0x833C (33596), PID 0x0001 / 0x0002
+     (same filter the official MAG-Mx app uses). -->
+<resources>
+    <usb-device vendor-id="33596" product-id="1" />
+    <usb-device vendor-id="33596" product-id="2" />
+</resources>
