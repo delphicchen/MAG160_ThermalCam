@@ -50,6 +50,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ---- camera permission for the RGB fusion overlay ----
+    private val cameraPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) vm.setFusion(true)
+    }
+
+    private fun onFusionToggle(on: Boolean) {
+        if (!on) { vm.setFusion(false); return }
+        if (checkSelfPermission(android.Manifest.permission.CAMERA) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            vm.setFusion(true)
+        } else {
+            cameraPermLauncher.launch(android.Manifest.permission.CAMERA)
+        }
+    }
+
     // ---- SAF pickers for DDT snapshots ----
     private val saveDdtLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -87,6 +105,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onLoadDdt = { loadDdtLauncher.launch(arrayOf("*/*")) },
                     onRetryConnect = { openCameraIfPresent() },
+                    onFusionToggle = { onFusionToggle(it) },
                 )
             }
         }

@@ -82,4 +82,9 @@ dependencies {
     // Neural super-resolution: ONNX Runtime with the NNAPI EP (MediaTek APU on
     // Dimensity 9200) and XNNPACK/CPU fallback.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+
+    // RGB sensor fusion: phone camera luma stream via CameraX ImageAnalysis.
+    implementation("androidx.camera:camera-core:1.4.1")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
 }

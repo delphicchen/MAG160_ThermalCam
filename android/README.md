@@ -48,6 +48,17 @@ NUC tables and Planck curves. There is nothing to convert or regenerate.
      persists across runs.
    - **Snapshot** (PNG → `Pictures/MagThermal`) and **DDT save/load** — radiometric
      snapshots in the same `.ddt` format as the Linux app, re-measurable offline.
+   - **RGB fusion (phone camera)** — overlays the phone's back camera onto the
+     thermal stream (Android-only feature, no Linux counterpart):
+     - **MSX edges**: soft-thresholded Sobel edges from the visible image drawn in
+       white over the thermal colours — restores object contours the 160×120 sensor
+       can't resolve, without touching the palette/values.
+     - **Blend**: thermal colour mixed over the grayscale visible image.
+     - Registration is a fixed similarity transform (the USB camera is rigid on the
+       phone): set the mounting **rotation** (0/90/180/270) once, then align with the
+       **zoom** (visible FOV is wider — default 1.5× crop) and **X/Y offset** sliders
+       on a high-contrast target. Settings persist. Parallax means perfect overlap
+       holds at one distance; re-touch the offsets when working much closer/farther.
 
 ## Code map
 
@@ -59,6 +70,8 @@ NUC tables and Planck curves. There is nothing to convert or regenerate.
 | `pipeline/Enhancer.kt` | BPC, temporal IIR, flat-field, 2-pt gain NUC | `enhance.py` |
 | `pipeline/ImageOps.kt` | median/gaussian/bilateral/bicubic float-image primitives | (OpenCV calls) |
 | `pipeline/NeuralSR.kt` | ESPCN inference, NNAPI/XNNPACK/CPU | `enhance.py NeuralSR` |
+| `pipeline/Fusion.kt` | RGB/thermal fusion: Sobel edge map + MSX/blend compositing | — (new) |
+| `camera/RgbCamera.kt` | CameraX luma stream (back camera, sensor orientation) | — (new) |
 | `data/Npy.kt` | minimal NPY/NPZ reader (shared assets, unconverted) | — |
 | `data/Ddt.kt` | radiometric snapshot format (interchangeable with Linux) | `ddt.py` |
 | `data/CalibrationStore.kt` | `calibration.json` persistence (same schema) | `viewer.py` |
@@ -78,6 +91,8 @@ against the repository's real assets during the port:
 - `FactoryNuc.apply` is **per-pixel identical** to `factory_nuc_grid.py` across grid
   edges, blends and the nearest/no-blend branch (fpa ∈ {8000 … 31000}).
 - DDT and calibration files round-trip and interchange with the Python formats.
+- `Fusion` rotation/zoom/offset sampling verified against brute-force forward
+  rotation for all four mountings; Sobel edge map and MSX overlay unit-tested.
 
 Not yet exercised on hardware: the USB layer (`MagCamera.kt` — a straight port of the
 proven `magcam.py` sequence, including the mandatory EP-0x82 ack-after-every-command

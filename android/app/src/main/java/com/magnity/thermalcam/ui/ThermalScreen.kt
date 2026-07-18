@@ -25,8 +25,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import com.magnity.thermalcam.pipeline.Fusion
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +55,7 @@ fun ThermalScreen(
     onSaveDdt: () -> Unit,
     onLoadDdt: () -> Unit,
     onRetryConnect: () -> Unit,
+    onFusionToggle: (Boolean) -> Unit,
 ) {
     var showCalDialog by remember { mutableStateOf(false) }
 
@@ -79,6 +82,7 @@ fun ThermalScreen(
             }
             ViewControls(vm)
             EnhanceControls(vm)
+            FusionControls(vm, onFusionToggle)
             TemperatureControls(
                 vm,
                 onAddCal = {
@@ -280,6 +284,56 @@ private fun EnhanceControls(vm: ThermalViewModel) {
                 ),
             ) { Text("${s}x") }
         }
+    }
+}
+
+@Composable
+private fun FusionControls(vm: ThermalViewModel, onFusionToggle: (Boolean) -> Unit) {
+    SectionLabel("RGB fusion (phone camera)")
+    ToggleRow("Fusion overlay", vm.fusionOn) { onFusionToggle(it) }
+    if (!vm.fusionOn) return
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        listOf(Fusion.Mode.EDGES to "MSX edges", Fusion.Mode.BLEND to "Blend").forEach { (m, label) ->
+            val selected = vm.fusionMode == m
+            OutlinedButton(
+                onClick = { vm.fusionMode = m; vm.saveFusionPrefs() },
+                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (selected) MaterialTheme.colorScheme.primary else Color.Gray,
+                ),
+            ) { Text(label) }
+        }
+        OutlinedButton(onClick = { vm.cycleFusionRotation() }) { Text("↻ ${vm.fusionRotation}°") }
+    }
+    FusionSlider("Strength", vm.fusionStrength, 0f..1f, { vm.fusionStrength = it }, { vm.saveFusionPrefs() })
+    FusionSlider("Zoom", vm.fusionZoom, 0.5f..4f, { vm.fusionZoom = it }, { vm.saveFusionPrefs() })
+    FusionSlider("Offset X", vm.fusionDx, -0.5f..0.5f, { vm.fusionDx = it }, { vm.saveFusionPrefs() })
+    FusionSlider("Offset Y", vm.fusionDy, -0.5f..0.5f, { vm.fusionDy = it }, { vm.saveFusionPrefs() })
+    Text(
+        "Point at a high-contrast object and adjust Zoom/Offset until the visible edges sit " +
+            "on the thermal features. The mounting rotation (↻) is fixed once per rig.",
+        color = Color(0xFF8FA3B8), fontSize = 11.sp,
+    )
+}
+
+@Composable
+private fun FusionSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onChange: (Float) -> Unit,
+    onDone: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("%s %.2f".format(label, value), color = Color.White, fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace, modifier = Modifier.width(120.dp))
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            onValueChangeFinished = onDone,
+            valueRange = range,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 

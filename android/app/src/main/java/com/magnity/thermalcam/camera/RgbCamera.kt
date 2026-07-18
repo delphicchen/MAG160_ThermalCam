@@ -1,0 +1,127 @@
+package com.magnity.thermalcam.camera
+
+import android.content.Context
+import android.util.Log
+import android.util.Size
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Phone (RGB) camera source for the thermal/visible sensor-fusion overlay.
+ *
+ * Streams luma (Y-plane) frames from the back camera via CameraX ImageAnalysis at
+ * ~VGA resolution — enough for the MSX-style edge overlay while keeping the per-frame
+ * Sobel + warp cheap. Frames are delivered in SENSOR orientation (we deliberately do
+ * NOT auto-rotate: the USB thermal camera is physically fixed relative to the phone,
+ * so the rotation between the two sensors is a constant the user sets once in the
+ * alignment controls, independent of how the phone is held).
+ *
+ * CameraX wants a LifecycleOwner; we drive a private LifecycleRegistry so the stream
+ * follows the fusion toggle instead of the Activity. start()/stop() must be called
+ * from the main thread.
+ */
+class RgbCamera(private val context: Context) {
+
+    companion object { private const val TAG = "RgbCamera" }
+
+    /** One luma frame in sensor orientation. `id` increments per frame (cache key). */
+    class LumaFrame(val data: ByteArray, val width: Int, val height: Int, val id: Long)
+
+    private class FusionLifecycle : LifecycleOwner {
+        val registry = LifecycleRegistry(this)
+        override val lifecycle: Lifecycle get() = registry
+    }
+
+    private val lifecycleOwner = FusionLifecycle()
+    private var provider: ProcessCameraProvider? = null
+    private var analysisExecutor: ExecutorService? = null
+    private val frameId = AtomicLong(0)
+
+    @Volatile private var latestFrame: LumaFrame? = null
+    @Volatile var running = false; private set
+
+    fun latest(): LumaFrame? = latestFrame
+
+    /** Bind the analysis stream. Main thread only; CAMERA permission must be granted. */
+    fun start(onError: (String) -> Unit = {}) {
+        if (running) return
+        running = true
+        lifecycleOwner.registry.currentState = Lifecycle.State.STARTED
+        val future = ProcessCameraProvider.getInstance(context)
+        future.addListener({
+            try {
+                val prov = future.get()
+                provider = prov
+                if (!running) return@addListener      // stopped while initialising
+
+                val selector = ResolutionSelector.Builder()
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            Size(640, 480),
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                        )
+                    )
+                    .build()
+                val analysis = ImageAnalysis.Builder()
+                    .setResolutionSelector(selector)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                    .build()
+
+                val exec = Executors.newSingleThreadExecutor()
+                analysisExecutor = exec
+                analysis.setAnalyzer(exec) { proxy ->
+                    try {
+                        val plane = proxy.planes[0]           // Y plane, pixelStride 1
+                        val w = proxy.width
+                        val h = proxy.height
+                        val rowStride = plane.rowStride
+                        val buf = plane.buffer
+                        val out = ByteArray(w * h)
+                        if (rowStride == w) {
+                            buf.get(out, 0, w * h)
+                        } else {
+                            for (y in 0 until h) {
+                                buf.position(y * rowStride)
+                                buf.get(out, y * w, w)
+                            }
+                        }
+                        latestFrame = LumaFrame(out, w, h, frameId.incrementAndGet())
+                    } catch (e: Exception) {
+                        Log.w(TAG, "luma extract failed", e)
+                    } finally {
+                        proxy.close()
+                    }
+                }
+
+                lifecycleOwner.registry.currentState = Lifecycle.State.RESUMED
+                prov.unbind()      // nothing else of ours is bound, but be tidy
+                prov.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
+            } catch (e: Exception) {
+                Log.e(TAG, "camera start failed", e)
+                running = false
+                onError(e.message ?: "camera start failed")
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    /** Unbind and drop the stream. Main thread only. */
+    fun stop() {
+        running = false
+        runCatching { provider?.unbindAll() }
+        lifecycleOwner.registry.currentState = Lifecycle.State.CREATED
+        analysisExecutor?.shutdown()
+        analysisExecutor = null
+        latestFrame = null
+    }
+}

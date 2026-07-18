@@ -4,6 +4,10 @@
     <!-- The camera is a USB vendor-specific device driven over USB host (OTG). -->
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
 
+    <!-- Phone camera, used only for the optional RGB/thermal sensor fusion overlay. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

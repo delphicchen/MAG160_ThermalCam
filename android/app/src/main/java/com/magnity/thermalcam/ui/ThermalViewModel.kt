@@ -12,10 +12,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.magnity.thermalcam.camera.RgbCamera
 import com.magnity.thermalcam.data.CalibrationStore
 import com.magnity.thermalcam.data.Ddt
 import com.magnity.thermalcam.pipeline.Enhancer
 import com.magnity.thermalcam.pipeline.FactoryNuc
+import com.magnity.thermalcam.pipeline.Fusion
 import com.magnity.thermalcam.pipeline.ImageOps
 import com.magnity.thermalcam.pipeline.NeuralSR
 import com.magnity.thermalcam.pipeline.Radiometry
@@ -80,6 +82,15 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     var calibrated by mutableStateOf(false); private set
     var ddtReviewName by mutableStateOf<String?>(null); private set
 
+    // RGB sensor fusion (phone camera overlay)
+    var fusionOn by mutableStateOf(false); private set
+    var fusionMode by mutableStateOf(Fusion.Mode.EDGES)
+    var fusionStrength by mutableStateOf(0.6f)
+    var fusionZoom by mutableStateOf(1.5f)          // visible FOV is wider -> crop in
+    var fusionDx by mutableStateOf(0f)
+    var fusionDy by mutableStateOf(0f)
+    var fusionRotation by mutableStateOf(0)         // fixed mounting rotation, 0/90/180/270
+
     // ---- internals -------------------------------------------------------------
 
     private val cam = MagCamera()
@@ -97,6 +108,12 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     private var lastFrame: FloatArray? = null       // measurement-grade frame
     private var gainColdBurst: List<FloatArray>? = null
     private val ffcBusy = AtomicBoolean(false)
+
+    // fusion internals: RGB source + per-luma-frame edge-map cache
+    private val rgbCamera by lazy { RgbCamera(getApplication()) }
+    private var edgeCacheId = -1L
+    private var edgeCache: FloatArray? = null
+    private val fusionPrefs = File(app.filesDir, "fusion.json")
 
     private val calBox = 2                          // 5x5 averaging window, like the viewer
 
@@ -130,6 +147,7 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 Log.e(TAG, "factory NUC grid load failed", e)
             }
+            loadFusionPrefs()
         }
     }
 
@@ -258,6 +276,7 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
             if (v < 0f) v = 0f else if (v > 255f) v = 255f
             pixels[i] = lut[v.toInt()]
         }
+        if (fusionOn) applyFusion(pixels, dispW, dispH)
         val bmp = Bitmap.createBitmap(pixels, dispW, dispH, Bitmap.Config.ARGB_8888)
 
         // hot/cold spots in measurement coords
@@ -507,6 +526,82 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- RGB sensor fusion ----------------------------------------------------------------
+
+    /**
+     * Enable/disable the phone-camera overlay. Call from the main thread with the
+     * CAMERA permission already granted (MainActivity owns the permission flow).
+     */
+    fun setFusion(on: Boolean) {
+        if (on == fusionOn) return
+        if (on) {
+            fusionOn = true
+            rgbCamera.start(onError = { msg ->
+                fusionOn = false
+                status = "fusion camera error: $msg"
+            })
+            status = "RGB fusion on — align with the zoom/offset sliders"
+        } else {
+            fusionOn = false
+            rgbCamera.stop()
+            edgeCacheId = -1; edgeCache = null
+        }
+        saveFusionPrefs()
+    }
+
+    fun cycleFusionRotation() {
+        fusionRotation = (fusionRotation + 90) % 360
+        saveFusionPrefs()
+    }
+
+    fun saveFusionPrefs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val d = org.json.JSONObject()
+                d.put("mode", fusionMode.name)
+                d.put("strength", fusionStrength.toDouble())
+                d.put("zoom", fusionZoom.toDouble())
+                d.put("dx", fusionDx.toDouble())
+                d.put("dy", fusionDy.toDouble())
+                d.put("rotation", fusionRotation)
+                fusionPrefs.writeText(d.toString())
+            }
+        }
+    }
+
+    private fun loadFusionPrefs() {
+        runCatching {
+            if (!fusionPrefs.exists()) return
+            val d = org.json.JSONObject(fusionPrefs.readText())
+            fusionMode = runCatching { Fusion.Mode.valueOf(d.optString("mode", "EDGES")) }
+                .getOrDefault(Fusion.Mode.EDGES)
+            fusionStrength = d.optDouble("strength", 0.6).toFloat()
+            fusionZoom = d.optDouble("zoom", 1.5).toFloat()
+            fusionDx = d.optDouble("dx", 0.0).toFloat()
+            fusionDy = d.optDouble("dy", 0.0).toFloat()
+            fusionRotation = d.optInt("rotation", 0)
+        }
+    }
+
+    /** Overlay the visible-camera fusion onto the palette-mapped pixels, in place. */
+    private fun applyFusion(pixels: IntArray, dispW: Int, dispH: Int) {
+        val fr = rgbCamera.latest() ?: return
+        val edge = if (fusionMode == Fusion.Mode.EDGES) {
+            if (fr.id != edgeCacheId || edgeCache == null) {
+                edgeCache = Fusion.edgeMap(fr.data, fr.width, fr.height, edgeCache
+                    ?.takeIf { it.size == fr.width * fr.height } ?: FloatArray(fr.width * fr.height))
+                edgeCacheId = fr.id
+            }
+            edgeCache
+        } else null
+        Fusion.compose(
+            pixels, dispW, dispH,
+            fr.data, fr.width, fr.height, edge,
+            fusionMode, fusionStrength,
+            fusionZoom, fusionDx, fusionDy, fusionRotation,
+        )
+    }
+
     // ---- neural SR ------------------------------------------------------------------------
 
     fun setSuperres(on: Boolean) {
@@ -646,6 +741,7 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         connected = false
         processJob?.cancel()
+        if (fusionOn) runCatching { rgbCamera.stop() }   // onCleared runs on main
         // ViewModel scope dies with us — tear down USB synchronously on a plain thread.
         Thread {
             runCatching { cam.stop() }
