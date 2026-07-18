@@ -60,6 +60,12 @@ NUC tables and Planck curves. There is nothing to convert or regenerate.
        white over the thermal colours — restores object contours the 160×120 sensor
        can't resolve, without touching the palette/values.
      - **Blend**: thermal colour mixed over the grayscale visible image.
+     - **Wide search**: the OPPOSITE projection — every pixel the visible camera sees
+       is shown (grayscale, full FOV), with the thermal image inset at its true
+       position and size inside that wider view (outlined). Best for *finding* a
+       target: scan with the wide context, then switch to MSX/Blend to inspect.
+       Uses the same alignment; tap-to-calibrate and hot/cold markers follow the
+       inset automatically.
      - Registration is a fixed similarity transform (the USB camera is rigid on the
        phone): set the mounting **rotation** (0/90/180/270) once, then align with the
        **zoom** (visible FOV is wider — default 1.5× crop) and **X/Y offset** sliders
@@ -100,6 +106,9 @@ against the repository's real assets during the port:
 - DDT and calibration files round-trip and interchange with the Python formats.
 - `Fusion` rotation/zoom/offset sampling verified against brute-force forward
   rotation for all four mountings; Sobel edge map and MSX overlay unit-tested.
+- `Fusion.composeWide` (wide search) verified on the JVM: the inset placement
+  round-trips exactly against the overlay-mode transform, the gray base covers the
+  full visible FOV, and rotated mountings swap dimensions correctly.
 
 Not yet exercised on hardware: the USB layer (`MagCamera.kt` — a straight port of the
 proven `magcam.py` sequence, including the mandatory EP-0x82 ack-after-every-command

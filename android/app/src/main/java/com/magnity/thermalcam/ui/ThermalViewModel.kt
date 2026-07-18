@@ -43,7 +43,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class ThermalViewModel(app: Application) : AndroidViewModel(app) {
 
-    companion object { private const val TAG = "ThermalVM" }
+    companion object {
+        private const val TAG = "ThermalVM"
+        private val FULL_RECT = floatArrayOf(0f, 0f, 1f, 1f)
+    }
 
     // ---- observable UI state -------------------------------------------------
 
@@ -52,6 +55,10 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     var frameW by mutableStateOf(160); private set
     var frameH by mutableStateOf(120); private set
     var displayBitmap by mutableStateOf<Bitmap?>(null); private set
+    var displayAspect by mutableStateOf(4f / 3f); private set
+    /** Thermal footprint inside the displayed bitmap, normalized (l, t, w, h).
+     *  Full-frame except in wide-search fusion; markers/taps map through this. */
+    var markerRect by mutableStateOf(floatArrayOf(0f, 0f, 1f, 1f)); private set
     var fpsDisplay by mutableStateOf(0f); private set
     var fpaTemp by mutableStateOf<Int?>(null); private set
     var fpaDrift by mutableStateOf<Int?>(null); private set
@@ -289,8 +296,25 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
             if (v < 0f) v = 0f else if (v > 255f) v = 255f
             pixels[i] = lut[v.toInt()]
         }
-        if (fusionOn) applyFusion(pixels, dispW, dispH)
-        val bmp = Bitmap.createBitmap(pixels, dispW, dispH, Bitmap.Config.ARGB_8888)
+        // fusion: overlay modes edit `pixels` in place; wide-search replaces the frame
+        var outPixels = pixels; var outW = dispW; var outH = dispH
+        var rect = FULL_RECT
+        if (fusionOn) {
+            if (fusionMode == Fusion.Mode.SEARCH) {
+                val fr = rgbCamera.latest()
+                if (fr != null) {
+                    val res = Fusion.composeWide(
+                        pixels, dispW, dispH, fr.data, fr.width, fr.height,
+                        fusionStrength, fusionZoom, fusionDx, fusionDy, fusionRotation,
+                    )
+                    outPixels = res.pixels; outW = res.width; outH = res.height
+                    rect = floatArrayOf(res.rectL, res.rectT, res.rectW, res.rectH)
+                }
+            } else {
+                applyFusion(pixels, dispW, dispH)
+            }
+        }
+        val bmp = Bitmap.createBitmap(outPixels, outW, outH, Bitmap.Config.ARGB_8888)
         if (recording) {
             recorder?.let { rec ->
                 runCatching { rec.encode(bmp) }.onFailure { Log.w(TAG, "record encode", it) }
@@ -331,6 +355,8 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch(Dispatchers.Main.immediate) {
             displayBitmap = bmp
+            displayAspect = outW.toFloat() / outH
+            markerRect = rect
             hotSpot = (mxI % w) to (mxI / w)
             coldSpot = (mnI % w) to (mnI / w)
             readout = sb.toString()

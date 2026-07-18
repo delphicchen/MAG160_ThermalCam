@@ -107,16 +107,22 @@ fun ThermalScreen(
 @Composable
 private fun ImageArea(vm: ThermalViewModel) {
     val bmp = vm.displayBitmap
+    // markers/taps live in thermal measurement coords; in wide-search fusion the
+    // thermal occupies only the markerRect footprint of the displayed frame.
+    val rect = vm.markerRect
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(vm.frameW.toFloat() / vm.frameH.toFloat())
+            .aspectRatio(vm.displayAspect)
             .background(Color(0xFF111111))
             .pointerInput(vm.frameW, vm.frameH) {
                 detectTapGestures(
                     onTap = { pos ->
-                        val fx = (pos.x / size.width * vm.frameW).toInt()
-                        val fy = (pos.y / size.height * vm.frameH).toInt()
+                        val r = vm.markerRect          // read at tap time (changes per frame)
+                        val nx = (pos.x / size.width - r[0]) / r[2]
+                        val ny = (pos.y / size.height - r[1]) / r[3]
+                        val fx = (nx * vm.frameW).toInt()
+                        val fy = (ny * vm.frameH).toInt()
                         if (fx in 0 until vm.frameW && fy in 0 until vm.frameH) {
                             vm.calTarget = fx to fy       // tap locks the CAL marker
                         }
@@ -137,12 +143,14 @@ private fun ImageArea(vm: ThermalViewModel) {
             Text("no signal", color = Color.Gray)
         }
         ComposeCanvas(modifier = Modifier.fillMaxSize()) {
-            val sx = size.width / vm.frameW
-            val sy = size.height / vm.frameH
-            vm.hotSpot?.let { (x, y) -> crosshair(x * sx, y * sy, Color(0xFFFF3C3C)) }
-            vm.coldSpot?.let { (x, y) -> crosshair(x * sx, y * sy, Color(0xFF50A0FF)) }
+            val sx = size.width * rect[2] / vm.frameW
+            val sy = size.height * rect[3] / vm.frameH
+            val ox = size.width * rect[0]
+            val oy = size.height * rect[1]
+            vm.hotSpot?.let { (x, y) -> crosshair(ox + x * sx, oy + y * sy, Color(0xFFFF3C3C)) }
+            vm.coldSpot?.let { (x, y) -> crosshair(ox + x * sx, oy + y * sy, Color(0xFF50A0FF)) }
             vm.calTarget?.let { (x, y) ->
-                val cx = x * sx; val cy = y * sy
+                val cx = ox + x * sx; val cy = oy + y * sy
                 val bw = 2.5f * sx; val bh = 2.5f * sy   // the 5x5 averaging box
                 crosshair(cx, cy, Color(0xFF3CFF78))
                 drawRect(
@@ -304,7 +312,11 @@ private fun FusionControls(vm: ThermalViewModel, onFusionToggle: (Boolean) -> Un
     if (!vm.fusionOn) return
 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        listOf(Fusion.Mode.EDGES to "MSX edges", Fusion.Mode.BLEND to "Blend").forEach { (m, label) ->
+        listOf(
+            Fusion.Mode.EDGES to "MSX edges",
+            Fusion.Mode.BLEND to "Blend",
+            Fusion.Mode.SEARCH to "Wide search",
+        ).forEach { (m, label) ->
             val selected = vm.fusionMode == m
             OutlinedButton(
                 onClick = { vm.fusionMode = m; vm.saveFusionPrefs() },
@@ -321,7 +333,9 @@ private fun FusionControls(vm: ThermalViewModel, onFusionToggle: (Boolean) -> Un
     FusionSlider("Offset Y", vm.fusionDy, -0.5f..0.5f, { vm.fusionDy = it }, { vm.saveFusionPrefs() })
     Text(
         "Point at a high-contrast object and adjust Zoom/Offset until the visible edges sit " +
-            "on the thermal features. The mounting rotation (↻) is fixed once per rig.",
+            "on the thermal features. The mounting rotation (↻) is fixed once per rig.\n" +
+            "Wide search shows EVERY visible-camera pixel with the thermal inset at its true " +
+            "position (same alignment) — scan wide, then switch to MSX/Blend to inspect.",
         color = Color(0xFF8FA3B8), fontSize = 11.sp,
     )
 }

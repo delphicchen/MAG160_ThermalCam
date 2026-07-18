@@ -107,7 +107,17 @@ class VideoRecorder(
         try {
             val canvas = surf.lockCanvas(null)
             try {
-                canvas.drawBitmap(bitmap, null, Rect(0, 0, width, height), paint)
+                // aspect-preserving letterbox (wide-search frames may not be 4:3)
+                canvas.drawColor(android.graphics.Color.BLACK)
+                val scale = minOf(
+                    width.toFloat() / bitmap.width,
+                    height.toFloat() / bitmap.height,
+                )
+                val dw = (bitmap.width * scale).toInt()
+                val dh = (bitmap.height * scale).toInt()
+                val l = (width - dw) / 2
+                val t = (height - dh) / 2
+                canvas.drawBitmap(bitmap, null, Rect(l, t, l + dw, t + dh), paint)
             } finally {
                 surf.unlockCanvasAndPost(canvas)
             }
