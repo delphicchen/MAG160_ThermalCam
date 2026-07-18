@@ -21,6 +21,7 @@ import com.magnity.thermalcam.pipeline.Fusion
 import com.magnity.thermalcam.pipeline.ImageOps
 import com.magnity.thermalcam.pipeline.NeuralSR
 import com.magnity.thermalcam.pipeline.Radiometry
+import com.magnity.thermalcam.record.VideoRecorder
 import com.magnity.thermalcam.usb.MagCamera
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -82,6 +83,10 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     var calibrated by mutableStateOf(false); private set
     var ddtReviewName by mutableStateOf<String?>(null); private set
 
+    // video recording of the display stream (works in every mode)
+    var recording by mutableStateOf(false); private set
+    var recordingTime by mutableStateOf(""); private set
+
     // RGB sensor fusion (phone camera overlay)
     var fusionOn by mutableStateOf(false); private set
     var fusionMode by mutableStateOf(Fusion.Mode.EDGES)
@@ -114,6 +119,13 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     private var edgeCacheId = -1L
     private var edgeCache: FloatArray? = null
     private val fusionPrefs = File(app.filesDir, "fusion.json")
+
+    // recording internals (recorder is only touched by the processing thread + stop path)
+    @Volatile private var recorder: VideoRecorder? = null
+    private var recordingPfd: android.os.ParcelFileDescriptor? = null
+    private var recordingUri: android.net.Uri? = null
+    private var recordingName = ""
+    private var recordingStartMs = 0L
 
     private val calBox = 2                          // 5x5 averaging window, like the viewer
 
@@ -183,6 +195,7 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
+        if (recording) stopRecording()
         connected = false
         processJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) {
@@ -278,6 +291,13 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (fusionOn) applyFusion(pixels, dispW, dispH)
         val bmp = Bitmap.createBitmap(pixels, dispW, dispH, Bitmap.Config.ARGB_8888)
+        if (recording) {
+            recorder?.let { rec ->
+                runCatching { rec.encode(bmp) }.onFailure { Log.w(TAG, "record encode", it) }
+                val s = (System.currentTimeMillis() - recordingStartMs) / 1000
+                recordingTime = "%d:%02d".format(s / 60, s % 60)
+            }
+        }
 
         // hot/cold spots in measurement coords
         var mnI = 0; var mxI = 0
@@ -698,6 +718,88 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- video recording ------------------------------------------------------------------------
+
+    /**
+     * Start recording the display stream to Movies/MagThermal (MP4, HEVC with AVC
+     * fallback). Records exactly what is shown in the current mode — palette, factory
+     * NUC, SR, fusion, paused review — at a fixed 640x480 (nearest-neighbour scale;
+     * all display modes share the 4:3 aspect so nothing is distorted).
+     */
+    fun startRecording() {
+        if (recording || displayBitmap == null) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val name = "mag_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
+                val cv = ContentValues().apply {
+                    put(MediaStore.Video.Media.DISPLAY_NAME, name)
+                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/MagThermal")
+                    put(MediaStore.Video.Media.IS_PENDING, 1)
+                }
+                val resolver = getApplication<Application>().contentResolver
+                val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cv)
+                    ?: throw RuntimeException("MediaStore insert failed")
+                val pfd = resolver.openFileDescriptor(uri, "rw")
+                    ?: throw RuntimeException("openFileDescriptor failed")
+                val rec = VideoRecorder(fps = cam.fps)
+                rec.start(pfd.fileDescriptor)
+                recorder = rec
+                recordingPfd = pfd
+                recordingUri = uri
+                recordingName = name
+                recordingStartMs = System.currentTimeMillis()
+                recordingTime = "0:00"
+                recording = true
+                status = "recording (${rec.codecName}) → Movies/MagThermal/$name"
+            } catch (e: Exception) {
+                Log.e(TAG, "start recording failed", e)
+                status = "recording failed: ${e.message}"
+                cleanupRecording(deleteFile = true)
+            }
+        }
+    }
+
+    /** Stop and finalize the current recording. */
+    fun stopRecording() {
+        if (!recording) return
+        recording = false                        // step() stops feeding frames first
+        viewModelScope.launch(Dispatchers.IO) {
+            val rec = recorder
+            val frames = rec?.frameCount ?: 0
+            runCatching { rec?.finish() }
+            if (frames == 0L) {
+                // nothing was written — remove the empty MediaStore entry
+                cleanupRecording(deleteFile = true)
+                status = "recording discarded (no frames)"
+            } else {
+                cleanupRecording(deleteFile = false)
+                status = "saved Movies/MagThermal/$recordingName ($frames frames)"
+            }
+            recordingTime = ""
+        }
+    }
+
+    private fun cleanupRecording(deleteFile: Boolean) {
+        recorder = null
+        runCatching { recordingPfd?.close() }
+        recordingPfd = null
+        val uri = recordingUri
+        recordingUri = null
+        if (uri != null) {
+            val resolver = getApplication<Application>().contentResolver
+            if (deleteFile) {
+                runCatching { resolver.delete(uri, null, null) }
+            } else {
+                runCatching {
+                    resolver.update(uri, ContentValues().apply {
+                        put(MediaStore.Video.Media.IS_PENDING, 0)
+                    }, null, null)
+                }
+            }
+        }
+    }
+
     // ---- DDT radiometric snapshots -------------------------------------------------------------
 
     fun saveDdt(out: OutputStream): Boolean {
@@ -739,6 +841,7 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     // ---- shutdown ---------------------------------------------------------------------------------
 
     override fun onCleared() {
+        if (recording) stopRecording()
         connected = false
         processJob?.cancel()
         if (fusionOn) runCatching { rgbCamera.stop() }   // onCleared runs on main

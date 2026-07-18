@@ -233,6 +233,16 @@ private fun ViewControls(vm: ThermalViewModel) {
             Text("Snapshot")
         }
     }
+    Button(
+        onClick = { if (vm.recording) vm.stopRecording() else vm.startRecording() },
+        enabled = vm.displayBitmap != null,
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+            containerColor = if (vm.recording) Color(0xFFB3261E) else MaterialTheme.colorScheme.primary,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (vm.recording) "■ Stop recording  ${vm.recordingTime}" else "● Record video")
+    }
 }
 
 @Composable

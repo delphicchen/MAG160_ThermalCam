@@ -48,6 +48,12 @@ NUC tables and Planck curves. There is nothing to convert or regenerate.
      persists across runs.
    - **Snapshot** (PNG → `Pictures/MagThermal`) and **DDT save/load** — radiometric
      snapshots in the same `.ddt` format as the Linux app, re-measurable offline.
+   - **Video recording** (MP4 → `Movies/MagThermal`) — records the display stream in
+     whatever mode is active (any palette, factory NUC, neural SR, RGB fusion, paused
+     review) at 640×480. Hardware **HEVC/H.265** encoding with automatic AVC/H.264
+     fallback; real-time (variable-frame-rate) timestamps, so playback pace matches
+     reality. Mode/SR changes mid-recording are fine — the frame is rescaled into the
+     fixed output geometry.
    - **RGB fusion (phone camera)** — overlays the phone's back camera onto the
      thermal stream (Android-only feature, no Linux counterpart):
      - **MSX edges**: soft-thresholded Sobel edges from the visible image drawn in
@@ -72,6 +78,7 @@ NUC tables and Planck curves. There is nothing to convert or regenerate.
 | `pipeline/NeuralSR.kt` | ESPCN inference, NNAPI/XNNPACK/CPU | `enhance.py NeuralSR` |
 | `pipeline/Fusion.kt` | RGB/thermal fusion: Sobel edge map + MSX/blend compositing | — (new) |
 | `camera/RgbCamera.kt` | CameraX luma stream (back camera, sensor orientation) | — (new) |
+| `record/VideoRecorder.kt` | MP4 display-stream recording (HEVC→AVC, MediaCodec+MediaMuxer) | — (new) |
 | `data/Npy.kt` | minimal NPY/NPZ reader (shared assets, unconverted) | — |
 | `data/Ddt.kt` | radiometric snapshot format (interchangeable with Linux) | `ddt.py` |
 | `data/CalibrationStore.kt` | `calibration.json` persistence (same schema) | `viewer.py` |
