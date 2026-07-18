@@ -289,6 +289,10 @@ private fun EnhanceControls(vm: ThermalViewModel) {
     ToggleRow("Bad-pixel correct", vm.bpcOn) { vm.bpcOn = it }
     ToggleRow("Temporal denoise", vm.temporalOn) { vm.temporalOn = it }
     ToggleRow("Spatial denoise", vm.spatialOn) { vm.spatialOn = it }
+    ToggleRow("Detail enhance (CLAHE)", vm.detailOn) { vm.detailOn = it }
+    if (vm.detailOn) {
+        FusionSlider("Detail", vm.detailStrength, 0f..1f, { vm.detailStrength = it }, {})
+    }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Checkbox(checked = vm.srOn, onCheckedChange = { vm.setSuperres(it) })
         Text("Neural super-res", color = Color.White, fontSize = 14.sp)
@@ -301,6 +305,19 @@ private fun EnhanceControls(vm: ThermalViewModel) {
                     contentColor = if (selected) MaterialTheme.colorScheme.primary else Color.Gray,
                 ),
             ) { Text("${s}x") }
+        }
+    }
+    // on-device training of the SR model (pure-Kotlin ESPCN -> local ONNX)
+    if (vm.srTrainingProgress != null) {
+        Text(vm.srTrainingProgress!!, color = Color(0xFFFFC53D), fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace)
+        OutlinedButton(onClick = { vm.cancelSrTraining() }) { Text("Cancel training") }
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { vm.trainSrModel() }, enabled = vm.connected) {
+                Text("Train ${vm.srScale}x on device")
+            }
+            TextButton(onClick = { vm.resetSrModel() }) { Text("Reset model") }
         }
     }
 }

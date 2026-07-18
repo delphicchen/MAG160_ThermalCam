@@ -248,4 +248,21 @@ class Enhancer(val width: Int, val height: Int) {
     }
 
     fun enhanceDisplay(data: FloatArray): FloatArray = if (spatial) smooth(data) else data
+
+    // ---- detail enhancement (display-only: CLAHE + guided detail boost) ------------
+
+    /** Strength 0..1: scales both the CLAHE clip limit and the detail gain. */
+    var detailStrength = 0.5f
+
+    /**
+     * Display-clarity pipeline (value-DESTRUCTIVE — never feed back to measurement):
+     * CLAHE spreads the local dynamic range (the standard thermal AGC), then a
+     * guided-filter detail boost amplifies fine structure without halos.
+     * Works at any display resolution. Returns values ~[0, 1].
+     */
+    fun displayEnhance(disp: FloatArray, w: Int, h: Int): FloatArray {
+        val s = detailStrength.coerceIn(0f, 1f)
+        val eq = ImageOps.clahe(disp, w, h, tilesX = 8, tilesY = 6, clipLimit = 2f + 4f * s)
+        return ImageOps.guidedDetailBoost(eq, w, h, radius = 8, epsRel = 0.02f, boost = 0.8f * s)
+    }
 }

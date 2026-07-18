@@ -22,22 +22,37 @@ import java.nio.FloatBuffer
  */
 class NeuralSR(context: Context, val scale: Int) {
 
-    companion object { private const val TAG = "NeuralSR" }
+    companion object {
+        private const val TAG = "NeuralSR"
+
+        /** Where the on-device trainer (EspcnTrainer + OnnxExport) writes its model. */
+        fun localModelFile(context: Context, scale: Int): File =
+            File(File(context.filesDir, "models"), "local_thermal_espcn_${scale}x.onnx")
+    }
 
     var backend: String = "none"; private set
+    /** True when running a model trained on this device (preferred over the asset). */
+    var isLocal = false; private set
     private val env = OrtEnvironment.getEnvironment()
     private val session: OrtSession
     private val inputName: String
 
     init {
         val modelDir = File(context.filesDir, "models").apply { mkdirs() }
-        val onnxName = "thermal_espcn_${scale}x.onnx"
-        val model = File(modelDir, onnxName)
-        val sidecar = File(modelDir, "$onnxName.data")
-        copyAsset(context, onnxName, model)
-        copyAsset(context, "$onnxName.data", sidecar)
-
-        session = createSession(model.absolutePath)
+        val local = localModelFile(context, scale)
+        val modelPath = if (local.exists() && local.length() > 0) {
+            isLocal = true
+            local.absolutePath
+        } else {
+            val onnxName = "thermal_espcn_${scale}x.onnx"
+            val model = File(modelDir, onnxName)
+            val sidecar = File(modelDir, "$onnxName.data")
+            copyAsset(context, onnxName, model)
+            copyAsset(context, "$onnxName.data", sidecar)
+            model.absolutePath
+        }
+        session = createSession(modelPath)
+        if (isLocal) backend += " local"
         inputName = session.inputNames.iterator().next()
     }
 

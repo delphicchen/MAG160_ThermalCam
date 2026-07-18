@@ -39,9 +39,22 @@ NUC tables and Planck curves. There is nothing to convert or regenerate.
      into `Palettes.kt`.
    - **Enhance** toggles: bad-pixel correction (learned + per-frame), flat-field /
      2-point gain NUC capture, temporal + spatial denoise.
+   - **Detail enhance (CLAHE)** — display-only clarity pipeline: contrast-limited
+     adaptive histogram equalization (the standard thermal AGC; spreads local dynamic
+     range so low-contrast structure becomes visible even across a strong global
+     gradient) followed by a guided-filter detail boost (halo-free edge-aware
+     sharpening). One strength slider drives both. The °C readout is untouched — this
+     deliberately trades value fidelity for visibility on the display layer only.
    - **Factory NUC (radiometric)** — the bit-exact per-pixel piecewise correction
      reversed from `mag_cali.bin`, interpolated from the FPA-temp grid.
    - **Neural super-res 2×/4×** — ESPCN via ONNX Runtime (NNAPI → XNNPACK → CPU).
+   - **On-device SR training** — "Train Nx on device" collects ~300 live frames
+     (pan across varied scenes) and trains the ESPCN **in-process, in pure Kotlin**
+     (same recipe as `train_sr.py`: self-supervised bicubic-pair L1+gradient loss,
+     ICNR init, Adam + cosine schedule; a few minutes on a Dimensity 9200). The
+     result is exported as a standard ONNX file (hand-rolled protobuf writer) that
+     the app then prefers over the shipped model — inference stays on
+     NNAPI/XNNPACK. "Reset model" reverts to the shipped weights.
    - **Temperature**: tap the image to lock a CAL marker on a known-temperature
      object, then *+ Add cal point* and enter its °C (≥2 points calibrates the
      Planck-LUT radiometry; long-press the image clears the marker). Calibration
@@ -81,7 +94,9 @@ NUC tables and Planck curves. There is nothing to convert or regenerate.
 | `pipeline/FactoryNuc.kt` | factory per-pixel piecewise NUC from the FPA-temp grid | `factory_nuc_grid.py` |
 | `pipeline/Enhancer.kt` | BPC, temporal IIR, flat-field, 2-pt gain NUC | `enhance.py` |
 | `pipeline/ImageOps.kt` | median/gaussian/bilateral/bicubic float-image primitives | (OpenCV calls) |
-| `pipeline/NeuralSR.kt` | ESPCN inference, NNAPI/XNNPACK/CPU | `enhance.py NeuralSR` |
+| `pipeline/NeuralSR.kt` | ESPCN inference, NNAPI/XNNPACK/CPU, prefers on-device-trained model | `enhance.py NeuralSR` |
+| `pipeline/Espcn.kt` | pure-Kotlin ESPCN forward/backward + Adam trainer | `train_sr.py` |
+| `data/OnnxExport.kt` | trained weights → standard .onnx (minimal protobuf writer) | `train_sr.py export_onnx` |
 | `pipeline/Fusion.kt` | RGB/thermal fusion: Sobel edge map + MSX/blend compositing | — (new) |
 | `camera/RgbCamera.kt` | CameraX luma stream (back camera, sensor orientation) | — (new) |
 | `record/VideoRecorder.kt` | MP4 display-stream recording (HEVC→AVC, MediaCodec+MediaMuxer) | — (new) |
@@ -109,6 +124,12 @@ against the repository's real assets during the port:
 - `Fusion.composeWide` (wide search) verified on the JVM: the inset placement
   round-trips exactly against the overlay-mode transform, the gray base covers the
   full visible FOV, and rotated mountings swap dimensions correctly.
+- `Espcn` training: hand-written backward passes a 36/36 numerical gradient check;
+  training converges (loss ↓6×, val PSNR 19→32.6 dB on synthetic scenes, above the
+  desktop PyTorch trainer's 28.1 dB on identical data). The Kotlin-written ONNX
+  passes `onnx.checker` and its output matches ONNX Runtime to < 1e-6.
+- CLAHE / guided detail boost: unit-tested (local-contrast amplification vs the
+  linear mapping, halo-free edge preservation, box-filter parity vs brute force).
 
 Not yet exercised on hardware: the USB layer (`MagCamera.kt` — a straight port of the
 proven `magcam.py` sequence, including the mandatory EP-0x82 ack-after-every-command
@@ -117,9 +138,10 @@ FPA readout, then NNAPI acceptance of the ESPCN graphs.
 
 ## Differences vs the Linux viewer
 
-- On-device SR **training** is not ported (`train_sr.py` stays a desktop workflow);
-  the app ships whatever ONNX models are in the repo root. Train on the desktop, drop
-  the improved `.onnx(.data)` at the repo root, rebuild.
+- SR training exists on BOTH sides now: the desktop workflow (`train_sr.py`,
+  PyTorch) writes models to the repo root that ship in the APK; the Android app can
+  additionally train its own model on-device (pure Kotlin) and stores it locally,
+  preferring it over the shipped one.
 - Learned flat-field / gain maps persist as little binary blobs in app storage
   (`flatfield.bin`, `gain_nuc.bin`) rather than `.npy`/`.npz`.
 - Manual range editing is not exposed (auto-range on by default, off = full 0–65535),

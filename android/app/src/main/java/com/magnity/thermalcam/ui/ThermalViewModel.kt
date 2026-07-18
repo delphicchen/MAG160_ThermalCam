@@ -15,6 +15,8 @@ import androidx.lifecycle.viewModelScope
 import com.magnity.thermalcam.camera.RgbCamera
 import com.magnity.thermalcam.data.CalibrationStore
 import com.magnity.thermalcam.data.Ddt
+import com.magnity.thermalcam.data.OnnxExport
+import com.magnity.thermalcam.pipeline.EspcnTrainer
 import com.magnity.thermalcam.pipeline.Enhancer
 import com.magnity.thermalcam.pipeline.FactoryNuc
 import com.magnity.thermalcam.pipeline.Fusion
@@ -80,10 +82,14 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     var srOn by mutableStateOf(false)
     var srScale by mutableStateOf(4)
     var srBackend by mutableStateOf(""); private set
+    /** Non-null while collecting/training the on-device SR model (progress text). */
+    var srTrainingProgress by mutableStateOf<String?>(null); private set
     var bpcOn by mutableStateOf(true)
     var flatfieldOn by mutableStateOf(true)
     var temporalOn by mutableStateOf(true)
     var spatialOn by mutableStateOf(true)
+    var detailOn by mutableStateOf(false)       // CLAHE + guided detail boost (display)
+    var detailStrength by mutableStateOf(0.5f)
     var gainStepWarmPending by mutableStateOf(false); private set
 
     var calPointCount by mutableStateOf(0); private set
@@ -280,19 +286,31 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // range: percentiles on the measurement frame (cheap + stable across SR scales)
+        // detail enhancement (display-only): CLAHE + guided boost, at display resolution
+        var dispOut = disp
+        val detailApplied = detailOn
+        if (detailApplied) {
+            enhancer.detailStrength = detailStrength
+            dispOut = enhancer.displayEnhance(disp, dispW, dispH)
+        }
+
+        // range: percentiles on the measurement frame (stable across SR scales) —
+        // except after CLAHE, whose output lives in its own equalized [0,1] domain
         val lo: Float; val hi: Float
-        if (autoRange) {
+        if (detailApplied) {
+            lo = ImageOps.percentile(dispOut, 1f)
+            hi = ImageOps.percentile(dispOut, 99f)
+        } else if (autoRange) {
             lo = ImageOps.percentile(frame, 1f)
             hi = ImageOps.percentile(frame, 99f)
         } else {
             lo = 0f; hi = 65535f
         }
-        val span = (hi - lo).coerceAtLeast(1f)
+        val span = (hi - lo).coerceAtLeast(if (detailApplied) 1e-6f else 1f)
         val lut = Palettes.lut(paletteName)
         val pixels = IntArray(dispW * dispH)
         for (i in pixels.indices) {
-            var v = (disp[i] - lo) / span * 255f
+            var v = (dispOut[i] - lo) / span * 255f
             if (v < 0f) v = 0f else if (v > 255f) v = 255f
             pixels[i] = lut[v.toInt()]
         }
@@ -658,6 +676,87 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     fun setSrScale(scale: Int) {
         srScale = scale
         if (srOn) ensureSrModel(scale)
+    }
+
+    // ---- on-device SR training -------------------------------------------------------------
+
+    @Volatile private var srTrainCancel = false
+
+    /**
+     * Collect frames from the live stream, train the ESPCN in-process (pure Kotlin,
+     * same recipe as train_sr.py) and export the result as a local ONNX model that
+     * NeuralSR then prefers over the shipped asset. Takes a few minutes; the live
+     * view keeps running (training runs at low priority on the Default dispatcher).
+     */
+    fun trainSrModel(nFrames: Int = 300, epochs: Int = 60) {
+        if (!connected || srTrainingProgress != null) return
+        srTrainCancel = false
+        val scale = srScale
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                // 1) collect distinct frames — user should pan across varied scenes
+                val frames = ArrayList<FloatArray>(nFrames)
+                var lastCount = cam.frameCount
+                srTrainingProgress = "collecting 0/$nFrames — move the camera slowly"
+                while (frames.size < nFrames && !srTrainCancel && connected) {
+                    if (cam.frameCount == lastCount) { delay(10); continue }
+                    lastCount = cam.frameCount
+                    val f = grab(200) ?: continue
+                    // per-frame normalise to [0,1] (train_sr.py load_and_normalise)
+                    var lo = Float.MAX_VALUE; var hi = -Float.MAX_VALUE
+                    for (v in f) { if (v < lo) lo = v; if (v > hi) hi = v }
+                    val span = (hi - lo).coerceAtLeast(1e-6f)
+                    for (i in f.indices) f[i] = (f[i] - lo) / span
+                    frames.add(f)
+                    if (frames.size % 25 == 0) {
+                        srTrainingProgress = "collecting ${frames.size}/$nFrames — keep moving"
+                    }
+                }
+                if (srTrainCancel || frames.size < 32) {
+                    status = if (srTrainCancel) "SR training cancelled" else "SR training: not enough frames"
+                    return@launch
+                }
+
+                // 2) train
+                val trainer = EspcnTrainer(scale)
+                val psnr = trainer.train(
+                    frames, frameW, frameH, epochs = epochs, batch = 8,
+                    lr0 = 2e-3f, gradWeight = 0.5f,
+                    onProgress = { ep, total, loss, p ->
+                        srTrainingProgress =
+                            "training %d/%d  loss=%.4f  PSNR=%.1f dB".format(ep, total, loss, p)
+                    },
+                    isCancelled = { srTrainCancel || !connected },
+                )
+                if (srTrainCancel) { status = "SR training cancelled"; return@launch }
+
+                // 3) export as a local ONNX model and swap it in
+                val f = NeuralSR.localModelFile(getApplication(), scale)
+                f.parentFile?.mkdirs()
+                f.outputStream().use { OnnxExport.exportEspcn(trainer.model, it) }
+                srModels.remove(scale)?.close()
+                srRequested.remove(scale)
+                if (srOn && srScale == scale) ensureSrModel(scale)
+                status = "SR ${scale}x trained on-device (val PSNR %.1f dB) — model saved".format(psnr)
+            } catch (e: Exception) {
+                Log.e(TAG, "SR training failed", e)
+                status = "SR training failed: ${e.message}"
+            } finally {
+                srTrainingProgress = null
+            }
+        }
+    }
+
+    fun cancelSrTraining() { srTrainCancel = true }
+
+    /** Delete the on-device-trained model for the current scale, reverting to the asset. */
+    fun resetSrModel() {
+        val scale = srScale
+        NeuralSR.localModelFile(getApplication(), scale).delete()
+        srModels.remove(scale)?.close()
+        srRequested.remove(scale)
+        if (srOn) ensureSrModel(scale)
+        status = "SR ${scale}x local model deleted — using shipped model"
     }
 
     private fun ensureSrModel(scale: Int) {
