@@ -294,6 +294,15 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
             dispOut = enhancer.displayEnhance(disp, dispW, dispH)
         }
 
+        // Render order matters: palette-mapping on the tiny native grid and letting the
+        // GPU scale the COLORS looks blocky. When no SR is active, bicubic-upscale the
+        // FLOAT data x2 first so quantization to the 256-colour palette happens on a
+        // finer grid (SR outputs are already at display resolution).
+        if (dispW == w && dispH == h) {
+            dispOut = ImageOps.resizeBicubic(dispOut, dispW, dispH, dispW * 2, dispH * 2)
+            dispW *= 2; dispH *= 2
+        }
+
         // range: percentiles on the measurement frame (stable across SR scales) —
         // except after CLAHE, whose output lives in its own equalized [0,1] domain
         val lo: Float; val hi: Float

@@ -137,7 +137,9 @@ private fun ImageArea(vm: ThermalViewModel) {
                 bitmap = bmp.asImageBitmap(),
                 contentDescription = "thermal image",
                 modifier = Modifier.fillMaxSize(),
-                filterQuality = FilterQuality.None,
+                // bilinear for the remaining scale to screen — nearest turns the
+                // upscaled palette grid into visible blocks
+                filterQuality = FilterQuality.Medium,
             )
         } else {
             Text("no signal", color = Color.Gray)
