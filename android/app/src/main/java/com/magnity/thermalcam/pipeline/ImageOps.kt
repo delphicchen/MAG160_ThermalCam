@@ -391,6 +391,26 @@ object ImageOps {
         return dst
     }
 
+    /**
+     * Rotate clockwise by [deg] (0/90/180/270). For 90/270 the output dimensions are
+     * swapped (h×w) — the caller must track the new geometry. Used to correct the fixed
+     * mounting rotation between the USB thermal module and the phone display.
+     */
+    fun rotate(src: FloatArray, w: Int, h: Int, deg: Int): FloatArray {
+        return when (((deg % 360) + 360) % 360) {
+            90 -> FloatArray(w * h).also { d ->                 // out is h×w, stride = h
+                for (y in 0 until h) for (x in 0 until w) d[x * h + (h - 1 - y)] = src[y * w + x]
+            }
+            180 -> FloatArray(w * h).also { d ->
+                for (y in 0 until h) for (x in 0 until w) d[(h - 1 - y) * w + (w - 1 - x)] = src[y * w + x]
+            }
+            270 -> FloatArray(w * h).also { d ->                // out is h×w, stride = h
+                for (y in 0 until h) for (x in 0 until w) d[(w - 1 - x) * h + y] = src[y * w + x]
+            }
+            else -> src.copyOf()
+        }
+    }
+
     fun mean(a: FloatArray): Float {
         var s = 0.0
         for (v in a) s += v

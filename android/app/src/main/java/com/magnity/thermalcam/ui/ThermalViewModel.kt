@@ -75,6 +75,9 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     var paletteName by mutableStateOf("ironbow")
     var autoRange by mutableStateOf(true)
     var mirror by mutableStateOf(false)
+    /** Fixed mounting rotation of the thermal module vs the phone (0/90/180/270°),
+     *  applied at input so display, measurement and markers all stay consistent. */
+    var thermalRotation by mutableStateOf(0); private set
     var paused by mutableStateOf(false)
     var autoFfc by mutableStateOf(false)
     var factoryNucAvailable by mutableStateOf(false); private set
@@ -122,6 +125,7 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
     private var calState = CalibrationStore.State()
     private val flatFile = File(app.filesDir, "flatfield.bin")
     private val gainFile = File(app.filesDir, "gain_nuc.bin")
+    private val viewPrefs = File(app.filesDir, "view.json")   // rotation + mirror
 
     private var lastFrame: FloatArray? = null       // measurement-grade frame
     private var gainColdBurst: List<FloatArray>? = null
@@ -184,9 +188,11 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 cam.open(usbManager, device)
-                frameW = cam.width
-                frameH = cam.height
-                enhancer = Enhancer(cam.width, cam.height)
+                loadViewPrefs()                   // rotation/mirror before sizing
+                val (ow, oh) = orientedDims()
+                frameW = ow
+                frameH = oh
+                enhancer = Enhancer(ow, oh)
                 loadPersistentMaps()
                 cam.start()
                 delay(500)
@@ -253,11 +259,12 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
             val nuc = fnuc
             if (factoryNucOn && nuc != null) {
                 // Factory NUC needs the UNCORRECTED raw + shutter dark reference, in
-                // sensor orientation: apply BEFORE the mirror, then flip the result.
+                // sensor orientation: apply in sensor orientation, THEN orient (rotate
+                // + mirror) the result to the display frame.
                 val rawNative = cam.getRaw(0) ?: return
                 val fpa = cam.sensorTempRaw() ?: 20000
                 clean = nuc.apply(rawNative, fpa, cam.ffcRef)
-                if (mirror) clean = ImageOps.flipHorizontal(clean, w, h)
+                clean = orient(clean, cam.width, cam.height)
                 if (bpcOn) {
                     enhancer.bpc = true
                     clean = enhancer.correctBadOnly(clean)
@@ -402,10 +409,70 @@ class ThermalViewModel(app: Application) : AndroidViewModel(app) {
         enhancer.spatial = spatialOn
     }
 
-    /** Single frame entry point — applies the left-right mirror (viewer._grab). */
+    /** Single frame entry point — applies the mounting rotation + mirror (viewer._grab). */
     private fun grab(timeoutMs: Long = 0): FloatArray? {
         val f = cam.getFrame(timeoutMs) ?: return null
-        return if (mirror) ImageOps.flipHorizontal(f, frameW, frameH) else f
+        return orient(f, cam.width, cam.height)
+    }
+
+    /** Oriented (display) dimensions for the current rotation; 90/270 swap W/H. */
+    private fun orientedDims(): Pair<Int, Int> =
+        if (thermalRotation == 90 || thermalRotation == 270) cam.height to cam.width
+        else cam.width to cam.height
+
+    /** Apply the mounting rotation then the left-right mirror to a sensor-orientation
+     *  frame, returning it in display orientation. */
+    private fun orient(f: FloatArray, sensorW: Int, sensorH: Int): FloatArray {
+        var r = if (thermalRotation != 0) ImageOps.rotate(f, sensorW, sensorH, thermalRotation) else f
+        if (mirror) {
+            val (ow, oh) = orientedDims()
+            r = ImageOps.flipHorizontal(r, ow, oh)
+        }
+        return r
+    }
+
+    /** Cycle the thermal display rotation by 90° CW. Rebuilds the pipeline to the new
+     *  geometry (learned flat-field/gain maps are orientation-specific, so they reset —
+     *  re-capture after setting the mounting rotation once). */
+    fun cycleThermalRotation() {
+        if (!connected) return               // needs real sensor dims to resize the pipeline
+        thermalRotation = (thermalRotation + 90) % 360
+        val (ow, oh) = orientedDims()
+        frameW = ow; frameH = oh
+        // learned flat-field/gain/bad-pixel maps are orientation-specific — start fresh
+        // (the shipped factory NUC grid is applied in sensor orientation, so it's fine)
+        enhancer = Enhancer(ow, oh)
+        calTarget = null
+        lastFrame = null
+        saveViewPrefs()
+        status = "thermal rotation ${thermalRotation}° — re-capture flat-field if used"
+    }
+
+    fun setMirror(on: Boolean) {
+        mirror = on
+        saveViewPrefs()
+    }
+
+    private fun saveViewPrefs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                viewPrefs.writeText(
+                    org.json.JSONObject()
+                        .put("rotation", thermalRotation)
+                        .put("mirror", mirror)
+                        .toString()
+                )
+            }
+        }
+    }
+
+    private fun loadViewPrefs() {
+        runCatching {
+            if (!viewPrefs.exists()) return
+            val d = org.json.JSONObject(viewPrefs.readText())
+            thermalRotation = ((d.optInt("rotation", 0) / 90) % 4) * 90
+            mirror = d.optBoolean("mirror", false)
+        }
     }
 
     private fun fmtCounts(v: Float): String {

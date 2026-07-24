@@ -233,7 +233,15 @@ private fun ViewControls(vm: ThermalViewModel) {
     PaletteSelector(vm)
     ToggleRow("Auto range", vm.autoRange) { vm.autoRange = it }
     ToggleRow("Auto-FFC (FPA drift)", vm.autoFfc) { vm.setAutoFfcEnabled(it) }
-    ToggleRow("Mirror (left-right)", vm.mirror) { vm.mirror = it }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { vm.cycleThermalRotation() }, enabled = vm.connected) {
+            Text("Rotate ↻ ${vm.thermalRotation}°")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = vm.mirror, onCheckedChange = { vm.setMirror(it) })
+            Text("Mirror", color = Color.White, fontSize = 14.sp)
+        }
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = { vm.doFfc(false) }, enabled = vm.connected) { Text("FFC (shutter)") }
         OutlinedButton(onClick = { vm.paused = !vm.paused }) {

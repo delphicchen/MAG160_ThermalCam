@@ -35,6 +35,12 @@ NUC tables and Planck curves. There is nothing to convert or regenerate.
    the Linux viewer:
    - **FFC (shutter)** and **Auto-FFC** keyed on live FPA-temperature drift (the
      firmware's real shutter trigger), with a time fallback.
+   - **Rotate ↻ / Mirror** — the USB module is mounted at a fixed rotation relative to
+     the phone (often 90° off). Tap **Rotate** to cycle 0/90/180/270°; it's applied at
+     the input so the display, cursor, hot/cold markers and temperature measurement all
+     stay consistent, and it persists across runs. 90/270° swaps the view to portrait.
+     Setting the rotation resets learned flat-field/gain maps (they're orientation-
+     specific) — re-capture them after fixing the mounting orientation once.
    - **Palettes** (ironbow, inferno, jet, …) — the exact same 256-entry LUTs, baked
      into `Palettes.kt`.
    - **Enhance** toggles: bad-pixel correction (learned + per-frame), flat-field /
