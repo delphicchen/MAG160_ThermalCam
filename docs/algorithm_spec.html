@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MAG160 熱成像 — 完整演算法規格書（逆向工程成果）</title>
+<style>
+:root{
+  --bg:#0d1117;--panel:#161b22;--panel2:#1c2129;--border:#30363d;
+  --text:#e6edf3;--dim:#8b949e;--accent:#58a6ff;--green:#3fb950;
+  --orange:#d29922;--red:#f85149;--mono:'SF Mono',Consolas,'Cascadia Code',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,'Noto Sans TC',sans-serif;line-height:1.65;font-size:15px}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 20px 80px}
+header{border-bottom:1px solid var(--border);padding:28px 0 20px;margin-bottom:28px}
+header h1{font-size:26px;font-weight:700}
+header .sub{color:var(--dim);margin-top:6px;font-size:14px}
+.badge{display:inline-block;background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:2px 10px;font-size:12px;color:var(--accent);margin-right:6px;margin-top:8px}
+nav{position:sticky;top:0;background:var(--bg);z-index:10;border-bottom:1px solid var(--border);padding:10px 0;display:flex;gap:14px;flex-wrap:wrap;font-size:13px}
+nav a{color:var(--dim);text-decoration:none}
+nav a:hover{color:var(--accent)}
+h2{font-size:20px;border-bottom:1px solid var(--border);padding-bottom:8px;margin:44px 0 18px;color:var(--accent)}
+h3{font-size:16px;margin:26px 0 10px;color:var(--green)}
+p{margin:10px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+th,td{border:1px solid var(--border);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:var(--panel);color:var(--text);white-space:nowrap}
+td code,p code,li code{background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-family:var(--mono);font-size:12.5px;color:var(--orange)}
+pre{background:#0a0d12;border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.55;margin:14px 0;color:#c9d1d9}
+pre b{color:var(--green)} pre i{color:var(--dim);font-style:normal} pre em{color:var(--accent);font-style:normal}
+ul,ol{margin:10px 0 10px 22px}
+li{margin:4px 0}
+.warn{background:#2d1a12;border:1px solid #6e3b1d;border-left:4px solid var(--red);border-radius:6px;padding:12px 16px;margin:16px 0}
+.note{background:#12212e;border:1px solid #1f4258;border-left:4px solid var(--accent);border-radius:6px;padding:12px 16px;margin:16px 0}
+.ok{background:#12261a;border:1px solid #1f4a2c;border-left:4px solid var(--green);border-radius:6px;padding:12px 16px;margin:16px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:800px){.grid2{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:16px 0;font-family:var(--mono);font-size:13px}
+.flow .st{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 12px}
+.flow .ar{color:var(--dim)}
+.kv{font-family:var(--mono);font-size:13px}
+.kv div{display:flex;justify-content:space-between;border-bottom:1px dashed var(--border);padding:5px 0}
+footer{margin-top:60px;border-top:1px solid var(--border);padding-top:16px;color:var(--dim);font-size:12.5px}
+</style>
+</head>
+<body><div class="wrap">
+
+<header>
+<h1>MAG160 / Magnity 833c 熱成像 — 完整演算法規格書</h1>
+<div class="sub">逆向工程成果 · 2026-08-26 · 目標：任何人在此文件基礎上可完整重寫 viewer/app</div>
+<span class="badge">USB 協定 ✓</span><span class="badge">校正檔結構 ✓</span><span class="badge">NUC 公式 bit-exact ✓</span><span class="badge">測溫鏈 ✓</span><span class="badge">常數已標定 ✓</span>
+</header>
+
+<nav>
+<a href="#s1">1 總覽</a><a href="#s2">2 USB</a><a href="#s3">3 校正檔</a><a href="#s4">4 影像鏈</a><a href="#s5">5 測溫</a><a href="#s6">6 原廠內部</a><a href="#s7">7 常數資產</a><a href="#s8">8 驗證</a><a href="#s9">9 App 規格</a><a href="#s10">10 補幀評估</a>
+</nav>
+
+<!-- ================================================================ -->
+<h2 id="s1">1 · 系統總覽</h2>
+<p>硬體：Magnity 833c USB-C 微型熱像儀模組（160×120 VOx，VID <code>0x833C</code> PID <code>0x0001/0x0002</code>，自供電 ≤100 mA）。
+原廠 Android SDK 為封閉的 <code>libcoresdk.so</code>（ARM32）+ Java 層 <code>cn.com.magnity.*</code>。本專案以 Unicorn ARM 模擬器執行原廠機器碼、逐位元驗證每個公式後，重新實作為開源管線。</p>
+
+<div class="flow">
+<div class="st">USB 幀 (raw u16)</div><div class="ar">→</div>
+<div class="st">FFC 快門減除</div><div class="ar">→</div>
+<div class="st">壞點修補 (選用)</div><div class="ar">→</div>
+<div class="st">出廠 NUC<br>(piecewise)</div><div class="ar">→</div>
+<div class="st">+level trim<br>(漂移鎖定)</div><div class="ar">→</div>
+<div class="st">Planck LUT 反查<br>(lut6, a·v+b)</div><div class="ar">→</div>
+<div class="st"><b style="color:var(--green)">°C 場</b></div>
+</div>
+<p>顯示層與測溫層分離：調色盤、auto/manual scale、CLAHE 只作用在顯示，絕不污染 °C 值。</p>
+
+<!-- ================================================================ -->
+<h2 id="s2">2 · USB 協定（PROTOCOL.md 摘要 + 已證實細節）</h2>
+
+<h3>2.1 端點（interface 0，全 bulk）</h3>
+<table>
+<tr><th>端點</th><th>方向</th><th>用途</th></tr>
+<tr><td><code>0x03</code></td><td>OUT</td><td>命令（8B：<code>&lt;cmd:u32&gt;&lt;param:u32&gt;</code>；部分命令 4B 只有 cmd）</td></tr>
+<tr><td><code>0x82</code></td><td>IN</td><td>命令 ack／遙測。<b>每條命令寫入後必讀</b></td></tr>
+<tr><td><code>0x81</code></td><td>IN</td><td>影像流（38456 B/幀週期）</td></tr>
+<tr><td><code>0x84</code></td><td>IN</td><td>校正檔下載流（GetCaliFile 用）</td></tr>
+</table>
+<div class="warn"><b>鐵律：</b>寫 EP 0x03 的<b>每一條</b>命令（含 StartTransferImg/StopTransferImg）必須接著讀一次 EP 0x82 ack，
+否則韌體卡死、裝置自動重新列舉。</div>
+
+<h3>2.2 命令字</h3>
+<table>
+<tr><th>命令</th><th>值</th><th>說明</th></tr>
+<tr><td>GetParameter1</td><td><code>0x6BB6B66B</code></td><td>ack ≥32B；off20=W(u32)、off24=H、off28=fps</td></tr>
+<tr><td>GetParameter2</td><td><code>0x6BB6B66C</code></td><td>初始化序列的一部分，讀 ack 即可</td></tr>
+<tr><td>GetCaliInfo</td><td><code>0x6BB6B66F</code></td><td>ack 20B（含檔案大小 0x001C53A0）</td></tr>
+<tr><td>GetCaliFile</td><td><code>0x6BB6B670</code></td><td>4B 命令；ack off4=u32 大小；之後從 EP 0x84 分塊（≤0x80000）讀取</td></tr>
+<tr><td>SetShutter</td><td><code>0x6BB6B672</code></td><td>param 0=關快門(FFC)、1=開</td></tr>
+<tr><td>StartTransferImg</td><td><code>0x6BB6B673</code></td><td><b>4-byte</b> 封包 + 讀 ack（<code>5F B5 B5 5B…</code>）</td></tr>
+<tr><td>StopTransferImg</td><td><code>0x6BB6B674</code></td><td>同上</td></tr>
+</table>
+
+<h3>2.3 影像幀格式（EP 0x81）</h3>
+<pre>period = 28(hdr) + 160·120·2(payload) + 28(tail) = 38456 bytes
+hdr[0..3] = 1B B1 B1 1B (magic)   hdr[+4] = 幀號 u32
+tail[0..3] = 1C B1 B1 1B          tail[+8] = <b>FPA 感測溫度 u32</b>（anchor-A 單位）
+payload = LE u16 ×19200，row-major，<b>未校正</b>原始計數
+幀間無對齊保證 → 掃 magic 切幀；上電前 ~10 幀近飽和，丟棄</pre>
+<p>連線順序：StopXfer → drain 0x82 → GetParam1(重試至 ≥32B) → GetParam2 → GetCaliInfo → clear_halt(0x81) → 起 reader thread → StartXfer(+ack)。
+<b>每次連線都應下載該台相機自己的 mag_cali.bin</b>（原廠 App 同路徑）；不同體可能不同。</p>
+
+<h3>2.4 FFC（快門校正）程序</h3>
+<pre>SetShutter(0) → sleep 400ms → 收 N≈4 幀平均 = <b>ffcRef</b>(H×W float)
+→ SetShutter(1) → sleep 400ms</pre>
+<p>ffcRef 是「快門暗場」＝整條影像鏈的 offset_ref 定義域（見 §4）。建議依 FPA 漂移 ≥120 或時間觸發 auto-FFC。</p>
+
+<!-- ================================================================ -->
+<h2 id="s3">3 · 校正檔 mag_cali.bin（1,856,416 B）</h2>
+<h3>3.1 檔頭</h3>
+<pre>off 0   : magic 0x5AA50003 (parser 也接受 0x5AA50004)
+off 4/8 : W=160, H=120
+off 12  : 6      （錨點數）
+off 16  : 3      （nseg，piecewise 段數）
+off 20  : 8      （shift=12 相關參數欄）
+off 24  : -50000 （輻射參數 ctx[0x7750]）
+off 28  : 1024   （資料起點 dataoff）
+off 36  : 表A[6] = {9564, 19330, 29108, 34111, 39244, 49091}   ← FPA 錨點（感測溫度單位）
+off 60  : 表B[6] = A − 500
+off 84  : 表C[6] = {8041, 9311, 10588, 11301, 12075, 13642}（語意未完全確認）
+off 108 : {32,32,32,32,32}</pre>
+
+<h3>3.2 資料區（1024 起）：48 張 160×120 u16 map</h3>
+<pre>= 6 溫度 block × [ gain_map_0, gain_map_1, ref_0 .. ref_5 ]   (每張 38400 B)
+block b ↔ 錨點區間 [A[b], A[b+1])
+live FPA 直接索引 block（frame tail+8 與表 A 同單位）</pre>
+<p>檔尾另有 12,192 B 附表（成對 u16：hi≈13000、lo≈2700，內部含 160-entry 週期結構）——
+parser 原樣複製到工作緩衝 bufA+0x1C2380；推定為原廠輻射定標附表，本開源鏈<b>不使用</b>（我們以兩點常數取代，見 §5）。</p>
+
+<h3>3.3 由 cali 展開 NUC 表（原廠 build 鏈，Unicorn 模擬已復現）</h3>
+<pre>parser sub_424d0(ctx, path)   → 解析至 bufA（6.3MB 工作區）
+sub_3a7f8(ctx, mode=0, 0)     → prepare：bracket FPA(ctx[0x38]) vs 表A → section idx + 權重 w
+sub_3a7f8(ctx, mode=1, 2)     → build：斷點內插 → bufB、gain/offset 建立(sub_3bc54) → bufC
+                                並填 radLUT ← <b>planck_luts[6]</b>（100% 驗證）
+
+表佈局（nseg=3, shift=12）：
+ breakpoint[i,s] = bufB_i16[2i+s]           s∈0..1
+ gain[i,s]       = bufC_u16[2i + 2·N·s]
+ offset[i,s]     = bufC_u16[2i + 2·N·s + 1]</pre>
+<div class="note">開源做法：<b>離線</b>以模擬器在 FPA=9000..29000（步距1000）預展開 21 組表存成
+<code>factory_nuc_grid.npz</code>{fpa,ref,breakpoints,gain,offset,nseg,shift}，執行期最近鄰取表。
+實測與該台實機即時下載的 cali 重建結果 <b>bit-identical</b>。</div>
+
+<!-- ================================================================ -->
+<h2 id="s4">4 · 影像處理鏈（逐式）</h2>
+
+<h3>4.1 出廠 NUC apply（bit-exact，源自 sub_45ca4）</h3>
+<pre>v        = (raw[i] − <em>offset_ref</em>[i]) &gt;&gt; 1
+s        = 第一個滿足 v ≤ breakpoint[i,s] 的段（否則最後段）
+out[i]   = clamp( ((v · gain[i,s]) >> 12) + offset[i,s],  0, 65535 )</pre>
+<ul>
+<li><b>offset_ref 必須是快門域的 ffcRef</b>（實測 §Phase-E：零飽和、段內漂移 ±20 counts/min）。
+使用 cali 內建 ref 會造成 ~35% 像素飽和——不要用。</li>
+<li>grid 取表用「最近鄰」；跨段切換會有 ±1000 counts 位準跳 → 由 §4.3 的 trim 吸收。
+<b>不要</b>混合內插表格（實測引入隨溫度線性漂移），<b>不要</b>做 levelBaseline 移除（破壞輻射定標）。</li>
+</ul>
+
+<h3>4.2 壞點修補（顯示品質用，選用）</h3>
+<p>FFC 後以靜態場學習 per-pixel 閾值清單（|value−鄰域中位數|&gt;門檻者記錄），執行期以十字鄰域中位數替換；
+另對單幀做即時偵測。只影響顯示與 min/max 統計之前可選擇性套用。</p>
+
+<h3>4.3 Level-lock trim（漂移鎖定，等效原廠 k,b/shutter-corr 機制）</h3>
+<pre>狀態：trim(float, 初始0)、lastGridIdx、lastFfcRef
+
+每次輸出前： out' = out + trim
+
+觸發時機（grid 表翻段 或 ffcRef 更新）：
+  old = 以「舊配置」算出的中位數(out)
+  new = 以「新配置」算出的中位數(out)
+  trim += clamp(old − new, ±1000)
+  更新 lastGridIdx / lastFfcRef</pre>
+<p>語意：假設場景在切換瞬間不變，把表格切換/FFC 造成的系統跳動折入加法微調。
+夾限 ±1000 與原廠 sub_3d228 內 <code>cmp r1,#0x3E8</code> 的 ±1000 clamp 一致。
+實測：段內穩定度由 ±3000 counts 跳動降至 ±10。</p>
+
+<h3>4.4 時間降噪（選用）</h3>
+<p>IIR：<code>disp = disp·α + new·(1−α)</code>，α≈0.5–0.7；只在顯示域，測溫域用單幀或短平均。</p>
+
+<!-- ================================================================ -->
+<h2 id="s5">5 · 測溫（輻射測溫鏈）</h2>
+
+<h3>5.1 Planck LUT 反查（bit-exact，源自 sub_3f970）</h3>
+<pre>資產：recon/planck_luts.npy = 8 條 × 646 格 int 輻射曲線（自 .rodata 抽出）
+slopeLUT[i] = 2²⁴ // (radLUT[i+1] − radLUT[i])    ← 韌體同款倒斜率表
+
+U_from_radiance(li, rad):
+    idx = clamp(searchsorted(radLUT[li], rad, 'right')−1, 0, 644)
+    U = idx·4096 − 150000 + ((slopeLUT[idx]·(rad − radLUT[idx])) >> 12)
+°C = U/1000 − 273.15          (U 單位 milli-Kelvin)</pre>
+
+<h3>5.2 LUT 選擇 —— 逆向結論：<code>lut_idx = 6</code></h3>
+<div class="ok">以 Unicorn 載入真實 libcoresdk.so、餵真實 mag_cali.bin 跑完 prepare+build(mode1,param2)，
+dump .bss radLUT@0x29d700 共 646 格，與 planck_luts.npy <b>row 6 = 100% bit-identical</b>。
+即：韌體為此相機選的就是第 6 條曲線。非擬合猜測。</div>
+
+<h3>5.3 出廠常數（一次性兩點標定，2026-08-26 實測）</h3>
+<div class="kv">
+<div><span>radiance = a·out + b</span><span><b>a = 42.7562</b>, <b>b = −119255.6</b></span></div>
+<div><span>lut_idx</span><span><b>6</b></span></div>
+<div><span>標定点 1</span><span>鋁合金墊（環境反射 ≈室溫 26°C）↔ out=8378</span></div>
+<div><span>標定点 2</span><span>臉部皮膚 34.5°C ↔ out=8610</span></div>
+<div><span>敏感度</span><span>face±1°C → a 變動 0.3%（mid-range ±0.03°C）</span></div>
+</div>
+<p>外推檢查：out=9000→48.5°C、11000→116°C、14000→208°C（Planck 加速形狀正確）。
+若日後換相機個體或重標定：只需兩個已知溫度目標重解 (a,b)；lut_idx 可用模擬器流程重驗。</p>
+
+<h3>5.4 原廠環境修正（未啟用的完整版，供日後參考）</h3>
+<pre>FixPara 啟用時（MAG_SetFixPara → ctx[0xb8]=1）：
+  τ_total = Tao · f2 · ε            (Tao 由 sub_3a2d0 從距離/濕度/溫度算出)
+  R(T_obj) = ( L_meas − (1−τ_total)·R(T_reflected) ) / τ_total
+  U = LUT_inverse(R(T_obj))         （兩次 646 格查表 + 夾限 0x285）
+參數區 ctx[0xbc..0xe0]：ε∈(0,1)、T_amb≥−25、距離&gt;0、濕度等 → CorrectionPara</pre>
+<p>手持近距應用下 ε≈1、τ≈1，修正量小；故 v1 不實作，介面保留。</p>
+
+<!-- ================================================================ -->
+<h2 id="s6">6 · 原廠內部結構速查（逆向筆記）</h2>
+<div class="grid2">
+<div class="card">
+<h3>ctx 關鍵欄位（parser context）</h3>
+<pre>0x38/0x3c  參考/錨溫度（k,b 外推基準）
+0x40/0x44  目前溫度/修正項
+0x50/0x54  <b>k</b>, <b>b</b>（float，每幀更新）
+0x80       block 索引（0x21c stride 陣列族）
+0x104      shift=12
+0x234      NUC 輸出幀指標
+0x1540..   bufA/B/C 指標
+0x13ec/13f0 k,b 斜率（lerp 自 8·sec+264..276 浮點表）
+0x16d4     目前三段 section idx
+0x1d58     offset_ref 指標（完整初始化從 cali 載入）
+0x7754/58/5c  shift/旗標/shift2
+0xbc..0xe0 FixPara 區（ε/Tamb/dist/RH…→Tao@0xE0）</pre>
+</div>
+<div class="card">
+<h3>重要函數位址（libcoresdk.so, Thumb）</h3>
+<pre>sub_424d0  cali parser
+sub_3a7f8  build orchestrator (mode0 prep/mode1 build)
+sub_3a574  section bracket + 斜率 lerp
+sub_45ca4  NUC apply（0x3c8ce 第二副本）
+<b>sub_3d228  每幀 k,b 更新（真入口；0x3d280 是中段標籤!）</b>
+sub_3d9f4  快門修正項（fast: v>>3 clamp u16）
+sub_3f970  U 轉換核心
+sub_404e8  環境修正（ε·τ 反解）
+sub_3a2d0  Tao 大氣穿透率計算
+0x4640c    MAG_GetTemperatureData 核心</pre>
+</div>
+</div>
+<div class="note">呼叫慣例陷阱：<b>0x3d280、0x3a8c0 這類「函數」其實是大函數的中段進入點</b>（無 prologue、有 epilogue）。
+靜態分析務必往前掃 push prologue 找真入口。函數多經 runtime 函數表間接呼叫，binary 中無直接 BL。</div>
+
+<!-- ================================================================ -->
+<h2 id="s7">7 · 資產與常數清單</h2>
+<table>
+<tr><th>資產</th><th>內容</th><th>來源</th></tr>
+<tr><td><code>factory_nuc_grid.npz</code></td><td>fpa(21), ref/breakpoints/gain/offset(21,120,160,…), nseg=3, shift=12</td><td>模擬器自 mag_cali.bin 展開</td></tr>
+<tr><td><code>planck_luts.npy</code></td><td>(8,646) int64 輻射曲線</td><td>.rodata dump</td></tr>
+<tr><td>Radiometry 常數</td><td>lut_idx=<b>6</b>, a=<b>42.7562</b>, b=<b>−119255.6</b></td><td>RE(LUT) + 一次性兩點標定</td></tr>
+<tr><td>mag_cali.bin</td><td>1,856,416B（此機當前版本）</td><td>GetCaliFile 即時下載</td></tr>
+<tr><td>FFC 參數</td><td>settle 400ms、avg 4 幀、觸發 ΔFPA≥120 或時間 fallback</td><td>原廠行為反推</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s8">8 · 驗證紀錄摘要</h2>
+<ul>
+<li>NUC apply：numpy 版與模擬器 sub_45ca4 在 3 個位準 × 19200 px <b>max diff = 0</b>。</li>
+<li>cali 即時下載 → 重建 grid npz 與既有資產 <b>bit-identical</b>（2026-08-25）。</li>
+<li>radiometry.py 反查與 sub_3f970 簡易路徑 bit-exact（4 個探針值）。</li>
+<li>Phase-E 實驗（4 分鐘、跨 3 次 FFC）：確立 ffcRef+offset_ref 正確性、nearest+trim 架構、拒絕 levelBaseline/全表內插。</li>
+<li>lut_idx=6：模擬器 radLUT dump 100% 符合 row 6。</li>
+<li>已知缺口：k,b 斜率來源表（ctx+8·sec+264..276）由完整 USB 初始化填充，未離線重現；
+其功能已由 level-lock trim 等效覆蓋。cali 尾表語意未解（未使用）。</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="s9">9 · 新版 Android App 規格（本次實作）</h2>
+<table>
+<tr><th>功能</th><th>規格</th></tr>
+<tr><td>連線</td><td>OTG 自動啟動（device_filter VID 0x833C）、手動 Connect；上電丟前 10 幀</td></tr>
+<tr><td>測溫</td><td>免校正開箱即用：NUC + trim + lut6/a/b；°C 顯示於游標點</td></tr>
+<tr><td>統計</td><td>畫面即時 Max / Min（位置標記 ▲▼）＋ 使用者 spot 點（點擊放置、長按清除）</td></tr>
+<tr><td>Scale</td><td>Auto（robust percentile p1–p99，跟手）／Manual（雙滑桿 lo–hi，鎖住不自動變）</td></tr>
+<tr><td>調色盤</td><td>ironbow / inferno / jet / grayscale …（256 LUT 內建）下拉選擇</td></tr>
+<tr><td>幾何</td><td>旋轉 0/90/180/270 + 左右鏡像 toggle；在輸入端套用使標記/統計一致</td></tr>
+<tr><td>FFC</td><td>手動按鈕 + auto（ΔFPA≥120 或 90s）</td></tr>
+<tr><td>凍結/省電</td><td>Pause 凍結畫面與統計</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s10">10 · 補幀 / 解析度提昇可行性評估（現代手機）</h2>
+
+<h3>10.1 硬體基準</h3>
+<table>
+<tr><th>平台級別</th><th>NPU</th><th>GPU</th><th>備註</th></tr>
+<tr><td>Dimensity 9200 / S8 Gen2+</td><td>30–60 TOPS(INT8)</td><td>~2–4 TFLOPS FP32</td><td>NNAPI/GPU delegate 成熟</td></tr>
+<tr><td>中階（7 系/6 系）</td><td>5–15 TOPS</td><td>&lt;1 TFLOPS</td><td>CPU 仍可跑輕量 SR</td></tr>
+</table>
+
+<h3>10.2 解析度提昇</h3>
+<table>
+<tr><th>方法</th><th>成本(160×120→320×240)</th><th>品質</th><th>結論</th></tr>
+<tr><td>Bicubic / GPU bilinear</td><td>~0（GPU 合成順手）</td><td>軟糊</td><td>保底</td></tr>
+<tr><td><b>ESPCN-v2 2×/4×（已驗證）</b></td><td>CPU 2執行緒 ~3.7 ms/幀</td><td>+2.4 dB vs bicubic</td><td><b>採用</b>；NNAPI INT8 再加速</td></tr>
+<tr><td>FSRCNN-s / ESPCN-INT8 NNAPI</td><td>&lt;2 ms（NPU）</td><td>近似</td><td>次期優化</td></tr>
+<tr><td>Real-ESRGAN 級 GAN</td><td>&gt;200 ms/幀（手機）</td><td>過度幻覺紋理</td><td>✗ 熱成像不適合（假細節誤導判讀）</td></tr>
+</table>
+<p>熱成像注意：SR 屬<b>顯示增視</b>；溫度標記必須取樣自原生網格再映射，不得對 SR 後像素測溫。</p>
+
+<h3>10.3 補幀（15 fps → 30/60 fps）</h3>
+<table>
+<tr><th>方法</th><th>可行性</th><th>風險</th></tr>
+<tr><td>簡單時間混疊（blend 兩幀）</td><td>✅ 便宜（~0.2 ms）</td><td>移動物拖影；測溫延遲半幀</td></tr>
+<tr><td>光流補幀（RAFAN/FILM 級）</td><td>⚠️ 手機可跑但 160×120 上光流被噪聲主導</td><td>熱圖噪聲大，向量場不可靠；運算不成比例</td></tr>
+<tr><td>提高實際幀率</td><td>韌體上限 ~15 fps（GetParameter 回報）</td><td>—</td></tr>
+</table>
+<div class="note"><b>建議</b>：顯示以 60 Hz Compose 直渲染 + SR，視覺流暢度已足；
+補幀僅在「錄影」場景用 blend 式 2× 插值（標註非測溫幀）。優先序：SR(NNAPI INT8) ≫ 補幀。</div>
+
+<footer>
+來源：mag160_thermalcam 逆向工程紀錄（PROTOCOL.md、EMULATION_NUC.md、PLAN_FACTORY_TEMP.md、recon/*）。
+模擬器：Unicorn 2.x ARM32 Thumb；驗證方針：所有公式對原廠機器碼 bit-exact 或差異可量化。
+本文件足以獨立重寫：驅動 → 校正 → 影像 → 測溫 全鏈。
+</footer>
+</div></body>
+</html>
