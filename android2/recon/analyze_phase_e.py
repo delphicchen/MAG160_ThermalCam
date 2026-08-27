@@ -5,8 +5,9 @@
 across natural warmup + forced FFCs. Metric: center-ROI median counts + whole-frame
 robust stats per sample; a drift-free chain holds its level across FFC events."""
 import numpy as np
+import os
 
-g = np.load('/home/delphic/win_share/Delphic/mag160_thermalcam/factory_nuc_grid.npz')
+g = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "factory_nuc_grid.npz"))
 fpa_g = g['fpa'].astype(np.int64)
 ref_g = g['ref'].astype(np.int64)          # (N,H,W)
 bp_g = g['breakpoints'].astype(np.int64)   # (N,H,W,nseg-1)

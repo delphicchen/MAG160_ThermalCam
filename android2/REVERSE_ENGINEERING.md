@@ -6,10 +6,13 @@ from the APK's native libs + live USB probing. This file maps **where the knowle
 lives** and **how the pipeline fits together**, pointing to the authoritative sources
 for depth.
 
+> Paths below are relative to this file's directory (``). Files that live at the
+> repository root are prefixed `../`.
+>
 > Reading order for a new agent:
-> `README.md` → `PROTOCOL.md` → `recon/EMULATION_NUC.md` + `docs/algorithm_spec.html §4.1`
-> → `factory_nuc_grid.py` + `radiometry.py` → `android2/.../pipeline/FactoryNuc.kt`
-> + `Radiometry.kt` → `android2/.../ui/ViewerViewModel.kt`.
+> `README.md` → `../PROTOCOL.md` → `../recon/EMULATION_NUC.md` + `docs/algorithm_spec.html §4.1`
+> → `../factory_nuc_grid.py` + `../radiometry.py` → `.../pipeline/FactoryNuc.kt`
+> + `Radiometry.kt` → `.../ui/ViewerViewModel.kt`.
 
 ---
 
@@ -17,29 +20,29 @@ for depth.
 
 | Path | Role |
 |---|---|
-| `PROTOCOL.md` | Full USB protocol: command words, endpoints, the mandatory EP-0x82 ack rule, FFC, frame format, known gaps. |
-| `recon/EMULATION_NUC.md` | **How the factory NUC was reversed** — emulating the SDK's ARM build chain (Unicorn), bit-exact validation vs firmware. |
+| `../PROTOCOL.md` | Full USB protocol: command words, endpoints, the mandatory EP-0x82 ack rule, FFC, frame format, known gaps. |
+| `../recon/EMULATION_NUC.md` | **How the factory NUC was reversed** — emulating the SDK's ARM build chain (Unicorn), bit-exact validation vs firmware. |
 | `docs/algorithm_spec.html` | Algorithm spec; §4.1 is the factory NUC formula. |
 | `recon/PLAN_FACTORY_TEMP.md` | Plan for drift-free, factory-level absolute temperature (level-lock trim, per-frame `(k,b)`). |
-| `magcam.py` | Proven Linux driver (open / stream / FFC / get_frame). |
-| `radiometry.py` | Planck-LUT radiometry `radiance = a·raw + b → °C`; inverse bit-verified vs Kotlin. |
-| `factory_nuc_grid.py` | Build + `apply()` of the factory per-pixel piecewise NUC; bit-exact reference. |
-| `enhance.py` / `viewer.py` | Linux reference pipeline + live viewer. |
-| `ddt.py` | Radiometric `.ddt` snapshot format (interchangeable Linux ↔ Android). |
-| `android/.../pipeline/Enhancer.kt` | Older Android port: flat-field + **two-point per-pixel NUC** `a·f + b`, BPC, temporal, CLAHE. |
-| `android2/.../usb/MagCamera.kt` | **Current** Android USB driver (clearHalt, stale-ack drain, usbLock serialization). |
-| `android2/.../pipeline/FactoryNuc.kt` | **Current** factory NUC Kotlin port: `apply`, `seamResidual`, `offsetPattern`. |
-| `android2/.../pipeline/Radiometry.kt` | **Current** Planck-LUT radiometry Kotlin port. |
-| `android2/.../ui/ViewerViewModel.kt` | **Current** runtime: `process()`, `afterFfc()`, FFC watchdog, stream-health/recover. |
-| `android2/.../pipeline/ImageOps.kt` | median / bilateral / bicubic / CLAHE primitives. |
-| `android2/.../pipeline/Palettes.kt` | 256-entry palette LUTs. |
+| `../magcam.py` | Proven Linux driver (open / stream / FFC / get_frame). |
+| `../radiometry.py` | Planck-LUT radiometry `radiance = a·raw + b → °C`; inverse bit-verified vs Kotlin. |
+| `../factory_nuc_grid.py` | Build + `apply()` of the factory per-pixel piecewise NUC; bit-exact reference. |
+| `../enhance.py` / `../viewer.py` | Linux reference pipeline + live viewer. |
+| `../ddt.py` | Radiometric `.ddt` snapshot format (interchangeable Linux ↔ Android). |
+| `../android/.../pipeline/Enhancer.kt` | Older Android port: flat-field + **two-point per-pixel NUC** `a·f + b`, BPC, temporal, CLAHE. |
+| `.../usb/MagCamera.kt` | **Current** Android USB driver (clearHalt, stale-ack drain, usbLock serialization). |
+| `.../pipeline/FactoryNuc.kt` | **Current** factory NUC Kotlin port: `apply`, `seamResidual`, `offsetPattern`. |
+| `.../pipeline/Radiometry.kt` | **Current** Planck-LUT radiometry Kotlin port. |
+| `.../ui/ViewerViewModel.kt` | **Current** runtime: `process()`, `afterFfc()`, FFC watchdog, stream-health/recover. |
+| `.../pipeline/ImageOps.kt` | median / bilateral / bicubic / CLAHE primitives. |
+| `.../pipeline/Palettes.kt` | 256-entry palette LUTs. |
 
-Raw disassembly evidence lives in `recon/`: `disasm.py`, `decomp_c_*.c` / `decomp_jni_*.c`
+Raw disassembly evidence lives in `../recon/`: `disasm.py`, `decomp_c_*.c` / `decomp_jni_*.c`
 (decompiled C from `libcoresdk.so`), `emu_*.py` (Unicorn ARM emulation harness).
 
 ---
 
-## 2. USB protocol essentials (detail in `PROTOCOL.md`)
+## 2. USB protocol essentials (detail in `../PROTOCOL.md`)
 
 - **VID/PID** `0x833C` / `{0x0001, 0x0002}`. Bulk endpoints: CMD_OUT `0x03`,
   CMD_IN `0x82`, IMG_IN `0x81`, CALI_IN `0x84`.
@@ -78,13 +81,13 @@ Radiometry.outToCelsius(counts)              # Planck LUT: radiance = a·counts 
 temperature (°C)
 ```
 
-- **Factory NUC tables** (`factory_nuc_grid.npz`, built by `recon/build_nuc_grid.py`
+- **Factory NUC tables** (`factory_nuc_grid.npz`, built by `../recon/build_nuc_grid.py`
   from `mag_cali.bin`): `fpa (N,)`, `ref (N,H,W)`, `breakpoints (N,H,W,nseg-1)`,
   `gain (N,H,W,nseg)` u16, `offset (N,H,W,nseg)` u16, `nseg`, `shift`. Selected by
   **nearest FPA grid point** and interpolated (`FactoryNuc.nearestIndex`).
 - **`ffcRef`** is the live shutter-dark average; it is the `offset_ref` so the NUC
   output is self-consistent (using the grid `ref` instead saturates ~35% of pixels).
-- **Radiometry** (`radiometry.py`): Planck curves extracted from the SDK; 8 LUTs.
+- **Radiometry** (`../radiometry.py`): Planck curves extracted from the SDK; 8 LUTs.
   `(a, b)` are recovered from **user 2-point calibration** (tap a known-temp object →
   *+ Add cal point* / `refineSpot`). Slope `a` preserved; `b` (offset) shifted.
 - **Level-lock trim** (`ViewerViewModel`): on FPA-grid switch or FFC refresh,
@@ -135,13 +138,13 @@ factory NUC uses it as `offset_ref`. **Auto-FFC watchdog**: every 5 s, if
 
 ## 5. Assets & build
 
-`android2/app/build.gradle.kts` (`copyThermalAssets`, runs before `preBuild`) copies at
+`app/build.gradle.kts` (`copyThermalAssets`, runs before `preBuild`) copies at
 build time **from the repo root**:
 - `factory_nuc_grid.npz` (NUC tables) → asset.
 - `recon/planck_luts.npy` (Planck LUTs) → asset.
 
 These are the only runtime assets; the app and Linux viewer use **identical** models
-(`recon/planck_luts.npy` is force-kept by `.gitignore`'s `!recon/planck_luts.npy`). No
+(`recon/planck_luts.npy` is force-kept by `.gitignore`'s `!android2/recon/planck_luts.npy`). No
 ONNX/SR models are bundled in `android2` (it has no neural super-res; that lives in the
 older `android/` port).
 

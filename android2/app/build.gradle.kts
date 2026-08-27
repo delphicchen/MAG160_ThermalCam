@@ -6,9 +6,9 @@ plugins {
 
 val thermalAssetsDir = layout.buildDirectory.dir("generated/thermalAssets")
 val copyThermalAssets = tasks.register<Copy>("copyThermalAssets") {
-    val repoRoot = rootDir.parentFile
-    from(repoRoot) { include("factory_nuc_grid.npz") }
-    from(File(repoRoot, "recon")) { include("planck_luts.npy") }
+    val assetsSrc = rootDir.resolve("recon")
+    from(assetsSrc) { include("factory_nuc_grid.npz") }
+    from(assetsSrc) { include("planck_luts.npy") }
     into(thermalAssetsDir)
 }
 
