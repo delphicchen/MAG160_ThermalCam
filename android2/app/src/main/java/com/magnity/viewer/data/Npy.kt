@@ -48,6 +48,20 @@ class NpyArray(
 
     fun scalarInt(): Int = toIntArray()[0]
 
+    fun toFloatArray(): FloatArray {
+        val out = FloatArray(elementCount)
+        val b = data.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        when (dtype) {
+            "<f4" -> { val v = b.asFloatBuffer(); for (i in out.indices) out[i] = v.get(i) }
+            "<f8" -> { val v = b.asDoubleBuffer(); for (i in out.indices) out[i] = v.get(i).toFloat() }
+            "<i4" -> { val v = b.asIntBuffer(); for (i in out.indices) out[i] = v.get(i).toFloat() }
+            "<i2" -> { val v = b.asShortBuffer(); for (i in out.indices) out[i] = v.get(i).toFloat() }
+            "<u2" -> { val v = b.asShortBuffer(); for (i in out.indices) out[i] = (v.get(i).toInt() and 0xFFFF).toFloat() }
+            else -> throw IllegalArgumentException("unsupported dtype $dtype")
+        }
+        return out
+    }
+
     companion object {
         private val MAGIC = byteArrayOf(0x93.toByte(), 'N'.code.toByte(), 'U'.code.toByte(),
             'M'.code.toByte(), 'P'.code.toByte(), 'Y'.code.toByte())

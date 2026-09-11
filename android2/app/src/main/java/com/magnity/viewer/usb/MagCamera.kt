@@ -98,18 +98,12 @@ class MagCamera {
     private fun cmd(cmdWord: Int, param: Int = 0, packetLen: Int = 8, ackTimeoutMs: Int = 2000): ByteArray {
         val conn = connection ?: throw IllegalStateException("camera not open")
         cmdLock.withLock {
-            // swallow stale EP-0x82 data (async FFC events etc.) so the ack we read
-            // below is guaranteed to belong to THIS command — otherwise the protocol
-            // desyncs and the firmware wedges into re-enumeration.
-            val stale = ByteArray(4096)
-            while (usbLock.withLock { conn.bulkTransfer(epCmdIn, stale, stale.size, 1) } > 0) { /* drain */ }
             val pkt = ByteBuffer.allocate(packetLen).order(ByteOrder.LITTLE_ENDIAN)
             pkt.putInt(cmdWord)
             if (packetLen == 8) pkt.putInt(param)
             val (wrote, got, ack) = usbLock.withLock {
                 val wrote = conn.bulkTransfer(epCmdOut, pkt.array(), packetLen, 500)
                 if (wrote != packetLen) Log.w(TAG, "cmd 0x${cmdWord.toUInt().toString(16)} short write: $wrote")
-                // Mandatory ack read — never skip (firmware wedges otherwise).
                 val ack = ByteArray(4096)
                 val got = conn.bulkTransfer(epCmdIn, ack, ack.size, ackTimeoutMs)
                 Triple(wrote, got, ack)
@@ -328,9 +322,8 @@ class MagCamera {
      * Drains EP 0x82 after each shutter command: the firmware pushes async FFC events
      * there; left unread they wedge the cmd buffer and the device re-enumerates.
      */
-    fun triggerFfc(settleMs: Long = 400, navg: Int = 4): Boolean {
+    fun triggerFfc(settleMs: Long = 500, navg: Int = 4): Boolean {
         cmd(SET_SHUTTER, 0)         // close shutter
-        drainCmdAcks()
         Thread.sleep(settleMs)
         clearLatest()
         val acc = FloatArray(width * height)
@@ -351,7 +344,6 @@ class MagCamera {
         }
         cmd(SET_SHUTTER, 1)         // open shutter
         Thread.sleep(settleMs)
-        drainCmdAcks()
         return n > 0
     }
 

@@ -8,6 +8,7 @@ val thermalAssetsDir = layout.buildDirectory.dir("generated/thermalAssets")
 val copyThermalAssets = tasks.register<Copy>("copyThermalAssets") {
     val assetsSrc = rootDir.resolve("recon")
     from(assetsSrc) { include("factory_nuc_grid.npz") }
+    from(assetsSrc) { include("factory_flatfield.npz") }
     from(assetsSrc) { include("planck_luts.npy") }
     into(thermalAssetsDir)
 }
