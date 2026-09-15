@@ -13,10 +13,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.magnity.viewer.media.FrameComposer
+import com.magnity.viewer.media.MediaSaver
+import com.magnity.viewer.media.VideoRecorder
+import com.magnity.viewer.pipeline.Anime4kGpu
 import com.magnity.viewer.pipeline.FactoryNuc
 import com.magnity.viewer.pipeline.ImageOps
 import com.magnity.viewer.pipeline.Palettes
 import com.magnity.viewer.pipeline.Radiometry
+import com.magnity.viewer.pipeline.TemporalDenoise
 import com.magnity.viewer.usb.MagCamera
 import com.magnity.viewer.usb.MagDeviceWrapper
 import kotlinx.coroutines.Dispatchers
@@ -24,18 +29,19 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 /** One processed display frame + measurement results. */
 data class FrameResult(
-    val image: IntArray,          // ARGB, w*h (oriented)
-    val w: Int,
+    val bitmap: android.graphics.Bitmap,  // palette-mapped, oriented, upscaled (w·k × h·k)
+    val w: Int,                   // native oriented grid — stats, markers, SPOT live here
     val h: Int,
     val tempMin: Float,
     val tempMax: Float,
     val minPos: Int,              // index into oriented frame
     val maxPos: Int,
     val fpa: Long?,
+    val scaleLoC: Float,          // display range in °C (colour bar labels)
+    val scaleHiC: Float,
 )
 
 class ViewerViewModel(app: Application) : AndroidViewModel(app) {
@@ -49,6 +55,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Which frame source to use. The factory SDK is primary; ours is the fallback. */
     enum class Source { FACTORY_SDK, OWN_PIPELINE }
+    enum class Upscaler { BICUBIC, ANIME4K }
 
     val camera = MagCamera()
 
@@ -71,8 +78,22 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var autoScale by mutableStateOf(true)
     var scaleLo by mutableFloatStateOf(0f)          // manual range, NUC-output counts
     var scaleHi by mutableFloatStateOf(65535f)
-    var rotation by mutableIntStateOf(0)            // 0/90/180/270
-    var mirror by mutableStateOf(false)
+    // default = camera plugged straight into the phone's USB-C port, portrait UI.
+    // (landscape UI needed 180°+mirror; portrait adds a further 90° CW → a transpose,
+    //  which also turns the frame 120×160 so it fills the tall screen)
+    var rotation by mutableIntStateOf(90)           // 0/90/180/270 clockwise
+    var mirror by mutableStateOf(true)
+    var upscale by mutableIntStateOf(4)             // display upscale 1/2/4 (4 → 640×480)
+    var upscaler by mutableStateOf(Upscaler.ANIME4K)
+    var temporalDenoise by mutableStateOf(true)     // display only — readouts stay per-frame
+    var temporalStrength by mutableFloatStateOf(0.85f)
+    var showMaxRoi by mutableStateOf(true)
+    var showMinRoi by mutableStateOf(true)
+    var recording by mutableStateOf(false); private set
+    var fps by mutableFloatStateOf(0f); private set   // processed (= displayed) frames/s
+    var recordStartMs by mutableStateOf(0L); private set
+    /** transient user message (screenshot saved, …); the UI clears it */
+    var notice by mutableStateOf<String?>(null)
     var spot: Pair<Int, Int>? by mutableStateOf(null)   // oriented (x,y), null = none
     var spatialDenoise by mutableStateOf(true)      // display bilateral — hides residual readout FPN
 
@@ -255,6 +276,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disconnect() {
         loop?.cancel()
+        stopRecording()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { camera.stop() }
             runCatching { camera.close() }
@@ -263,6 +285,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         connected = false
         activeSource = null
         lastFrame = null
+        fps = 0f; fpsWindowStart = 0L; fpsWindowFrames = 0
         status = "disconnected"
     }
 
@@ -371,6 +394,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         loop?.cancel()
+        synchronized(recLock) { recorder?.also { recorder = null } }?.stop()
+        anime4k?.close()
         runCatching { camera.stop(); camera.close() }
         runCatching { sdk.close() }
     }
@@ -419,10 +444,14 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
                 val fpa = camera.sensorTempRaw() ?: 20000
                 try {
+                    val t0 = System.nanoTime()
                     val res = process(raw, fpa)
                     lastFrame = res
+                    feedRecorder(res)
+                    tickFps()
                     status = "streaming ${camera.width}×${camera.height}" +
-                        " · frames=${camera.frameCount} err=${camera.readErrors}"
+                        " · frames=${camera.frameCount} err=${camera.readErrors}" +
+                        " · ${(System.nanoTime() - t0) / 1_000_000} ms"
                 } catch (e: Throwable) {
                     // surface pipeline errors on screen instead of crashing
                     Log.e(TAG, "process error", e)
@@ -446,7 +475,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             val startedAt = System.currentTimeMillis()
             var lastSeen = 0L
             var lastSeenAt = startedAt
-            val periodMs = 1000L / (if (sdk.fps > 0) sdk.fps else 15)
+            var lastProcessed = -1L
             while (isActive && connected) {
                 if (paused) { delay(50); continue }
 
@@ -462,17 +491,23 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (fc != lastSeen) { lastSeen = fc; lastSeenAt = now }
 
+                // process each SDK frame once, as soon as it lands (no fixed period)
+                if (fc == lastProcessed) { delay(4); continue }
                 val temp = sdk.getTemperatureData()
                 if (temp == null) { delay(20); continue }
+                lastProcessed = fc
                 try {
-                    lastFrame = processSdk(temp)
+                    val t0 = System.nanoTime()
+                    val res = processSdk(temp)
+                    lastFrame = res
+                    feedRecorder(res)
+                    tickFps()
                     status = "streaming ${sdk.width}×${sdk.height} (factory SDK)" +
-                        " · frames=$fc"
+                        " · frames=$fc · ${(System.nanoTime() - t0) / 1_000_000} ms"
                 } catch (e: Throwable) {
                     Log.e(TAG, "SDK process error", e)
                     status = "SDK display: ${e::class.java.simpleName}: ${e.message}"
                 }
-                delay(periodMs)
             }
         }
     }
@@ -500,6 +535,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             if (v > mx) { mx = v; mxI = i }
         }
 
+        oriented = temporal(oriented)
         if (spatialDenoise) {
             // sigmaColor is in °C on this path, not counts — 80 counts of range
             // tolerance would be 80 °C here and flatten the whole scene.
@@ -517,20 +553,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             slo = scaleLo; shi = scaleHi
         }
 
-        val pal = Palettes.lut(paletteName)
-        val img = IntArray(oriented.size)
-        val span = shi - slo
-        for (i in oriented.indices) {
-            var t = (oriented[i] - slo) / span
-            if (t < 0f) t = 0f else if (t > 1f) t = 1f
-            img[i] = pal[(t * 255).roundToInt()]
-        }
-
         return FrameResult(
-            image = img, w = ow, h = oh,
+            bitmap = render(oriented, ow, oh, slo, shi), w = ow, h = oh,
             tempMin = mn, tempMax = mx,
             minPos = mnI, maxPos = mxI,
             fpa = sdk.sensorTemp()?.toLong(),
+            scaleLoC = slo, scaleHiC = shi,
         )
     }
 
@@ -681,6 +709,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val ow: Int; val oh: Int
         if (rotation % 180 == 0) { ow = w; oh = h } else { ow = h; oh = w }
 
+        oriented = temporal(oriented)
         // display bilateral smoothing (old app default; hides the ~600-count residual
         // readout FPN that even the factory NUC leaves — see exp_seam_trace.py)
         if (spatialDenoise) {
@@ -708,22 +737,142 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             slo = scaleLo; shi = scaleHi
         }
 
-        val pal = Palettes.lut(paletteName)
-        val img = IntArray(oriented.size)
-        val span = shi - slo
-        for (i in oriented.indices) {
-            var t = (oriented[i] - slo) / span
-            if (t < 0f) t = 0f else if (t > 1f) t = 1f
-            img[i] = pal[(t * 255).roundToInt()]
-        }
-
         return FrameResult(
-            image = img, w = ow, h = oh,
+            bitmap = render(oriented, ow, oh, slo, shi), w = ow, h = oh,
             tempMin = radio.outToCelsius(mn.toDouble()).toFloat(),
             tempMax = radio.outToCelsius(mx.toDouble()).toFloat(),
             minPos = mnI, maxPos = mxI,
             fpa = camera.sensorTempRaw()?.toLong(),
+            scaleLoC = radio.outToCelsius(slo.toDouble()).toFloat(),
+            scaleHiC = radio.outToCelsius(shi.toDouble()).toFloat(),
         )
+    }
+
+    /**
+     * Upscale the (still scalar) field, then palette-map straight into a Bitmap — all on
+     * the processing thread, so the UI only draws. Interpolating before colouring keeps
+     * edges smooth instead of blending palette colours.
+     */
+    private fun render(field: FloatArray, w: Int, h: Int, lo: Float, hi: Float)
+            : android.graphics.Bitmap {
+        val k = upscale.coerceIn(1, 4)
+        if (k > 1 && upscaler == Upscaler.ANIME4K) {
+            try {
+                val gpu = anime4k ?: Anime4kGpu(getApplication()).also { anime4k = it }
+                return gpu.render(field, w, h, lo, hi, if (k >= 4) 2 else 1,
+                                  Palettes.lut(paletteName))
+            } catch (e: Throwable) {
+                Log.e(TAG, "Anime4K GPU failed — falling back to bicubic", e)
+                runCatching { anime4k?.close() }
+                anime4k = null
+                upscaler = Upscaler.BICUBIC
+                notice = "Anime4K GPU 失敗，已改用 bicubic：${e.message}"
+            }
+        }
+        val src = if (k > 1) ImageOps.resizeBicubic(field, w, h, w * k, h * k) else field
+        val pal = Palettes.lut(paletteName)
+        val img = IntArray(src.size)
+        val inv = 255f / (hi - lo)
+        for (i in src.indices) {
+            var t = (src[i] - lo) * inv
+            if (t < 0f) t = 0f else if (t > 255f) t = 255f
+            img[i] = pal[(t + 0.5f).toInt()]
+        }
+        return android.graphics.Bitmap.createBitmap(img, w * k, h * k,
+            android.graphics.Bitmap.Config.ARGB_8888)
+    }
+
+    private var anime4k: Anime4kGpu? = null
+    private val temporalFilter = TemporalDenoise()
+
+    /** Motion-adaptive temporal IIR on the display field (history resets on orientation
+     *  or source change). The returned array is the filter's buffer — read-only. */
+    private fun temporal(field: FloatArray): FloatArray {
+        if (!temporalDenoise) { temporalFilter.reset(); return field }
+        temporalFilter.strength = temporalStrength
+        val key = (rotation * 2 + (if (mirror) 1 else 0)) * 4 + (activeSource?.ordinal ?: 3)
+        return temporalFilter.apply(field, key)
+    }
+
+    // ---- screenshot / video ---------------------------------------------------
+
+    private val recLock = Any()
+    private var recorder: VideoRecorder? = null
+
+    private fun composite(fr: FrameResult) = FrameComposer.compose(
+        fr, Palettes.lut(paletteName), showMaxRoi, showMinRoi, spot, spotCelsius())
+
+    fun takeScreenshot() {
+        val fr = lastFrame ?: return
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            notice = try {
+                MediaSaver.savePng(ctx, composite(fr))
+                    ?.let { "截圖已存：Pictures/MagViewer" } ?: "截圖失敗"
+            } catch (e: Throwable) {
+                Log.e(TAG, "screenshot failed", e); "截圖失敗：${e.message}"
+            }
+        }
+    }
+
+    fun toggleRecording() {
+        if (recording) { stopRecording(); return }
+        val fr = lastFrame ?: return
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val (w, h) = FrameComposer.outSize(fr)
+            try {
+                synchronized(recLock) { recorder = VideoRecorder(ctx, w, h) }
+                recordStartMs = System.currentTimeMillis()
+                recording = true
+            } catch (e: Throwable) {
+                Log.e(TAG, "recorder start failed", e)
+                notice = "錄影啟動失敗：${e.message}"
+            }
+        }
+    }
+
+    fun stopRecording() {
+        val r = synchronized(recLock) { recorder.also { recorder = null } } ?: return
+        recording = false
+        viewModelScope.launch(Dispatchers.IO) {
+            val uri = r.stop()
+            notice = if (uri != null)
+                         "錄影已存：Movies/MagViewer（${r.codecName}，${r.frames} 幀）"
+                     else "錄影失敗（無有效幀）"
+        }
+    }
+
+    private var fpsWindowStart = 0L
+    private var fpsWindowFrames = 0
+
+    /** Processing thread: count delivered frames, publish the rate once per second. */
+    private fun tickFps() {
+        val now = System.nanoTime()
+        if (fpsWindowFrames == 0 && fpsWindowStart == 0L) fpsWindowStart = now
+        fpsWindowFrames++
+        val dt = now - fpsWindowStart
+        if (dt >= 1_000_000_000L) {
+            fps = fpsWindowFrames * 1e9f / dt
+            fpsWindowStart = now; fpsWindowFrames = 0
+        }
+    }
+
+    /** Called on the processing thread right after a frame is built. */
+    private fun feedRecorder(fr: FrameResult) {
+        synchronized(recLock) {
+            val r = recorder ?: return
+            val (w, h) = FrameComposer.outSize(fr)
+            if (w != r.width || h != r.height) return     // rotated mid-recording: skip
+            try {
+                r.addFrame(composite(fr))
+                return
+            } catch (e: Throwable) {
+                Log.e(TAG, "video frame failed", e)
+                notice = "錄影中斷：${e.message}"
+            }
+        }
+        stopRecording()          // encoder broke — finalise what we have
     }
 
     private fun currentGridIndex(fpa: Int): Int {

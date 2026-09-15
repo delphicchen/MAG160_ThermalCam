@@ -153,31 +153,41 @@ object ImageOps {
 
     fun resizeBicubic(src: FloatArray, w: Int, h: Int, w2: Int, h2: Int): FloatArray {
         val dst = FloatArray(w2 * h2)
+        // column taps are identical for every output row — precompute them once
         val sx = w.toFloat() / w2
+        val xIdx = IntArray(w2 * 4)
+        val xW = FloatArray(w2 * 4)
+        for (x2 in 0 until w2) {
+            val fx = (x2 + 0.5f) * sx - 0.5f
+            val ix = kotlin.math.floor(fx).toInt()
+            val tx = fx - ix
+            for (k in 0..3) {
+                xIdx[x2 * 4 + k] = (ix + k - 1).coerceIn(0, w - 1)
+                xW[x2 * 4 + k] = cubic(tx - (k - 1))
+            }
+        }
         val sy = h.toFloat() / h2
-        val wx = FloatArray(4)
-        val wy = FloatArray(4)
-        for (y2 in 0 until h2) {
+        // rows are independent → spread over cores (640×480 live upscale)
+        java.util.stream.IntStream.range(0, h2).parallel().forEach { y2 ->
             val fy = (y2 + 0.5f) * sy - 0.5f
             val iy = kotlin.math.floor(fy).toInt()
             val ty = fy - iy
-            for (k in 0..3) wy[k] = cubic(ty - (k - 1))
+            val r0 = (iy - 1).coerceIn(0, h - 1) * w
+            val r1 = iy.coerceIn(0, h - 1) * w
+            val r2 = (iy + 1).coerceIn(0, h - 1) * w
+            val r3 = (iy + 2).coerceIn(0, h - 1) * w
+            val wy0 = cubic(ty + 1f); val wy1 = cubic(ty)
+            val wy2 = cubic(ty - 1f); val wy3 = cubic(ty - 2f)
+            val row = y2 * w2
             for (x2 in 0 until w2) {
-                val fx = (x2 + 0.5f) * sx - 0.5f
-                val ix = kotlin.math.floor(fx).toInt()
-                val tx = fx - ix
-                for (k in 0..3) wx[k] = cubic(tx - (k - 1))
+                val b = x2 * 4
                 var acc = 0f
-                for (ky in 0..3) {
-                    val yy = (iy + ky - 1).coerceIn(0, h - 1) * w
-                    var rowAcc = 0f
-                    for (kx in 0..3) {
-                        val xx = (ix + kx - 1).coerceIn(0, w - 1)
-                        rowAcc += wx[kx] * src[yy + xx]
-                    }
-                    acc += wy[ky] * rowAcc
+                for (k in 0..3) {
+                    val xi = xIdx[b + k]
+                    acc += xW[b + k] * (wy0 * src[r0 + xi] + wy1 * src[r1 + xi] +
+                                        wy2 * src[r2 + xi] + wy3 * src[r3 + xi])
                 }
-                dst[y2 * w2 + x2] = acc
+                dst[row + x2] = acc
             }
         }
         return dst
