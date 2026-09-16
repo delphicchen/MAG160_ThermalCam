@@ -120,12 +120,25 @@ that is the knob to turn first if you are close.
 
 ## Data
 
-| source | what to take | note |
-|---|---|---|
-| FLIR ADAS v2 | `images_thermal_train/data/*.jpg` (640×512) | largest single source; street scenes |
-| KAIST Multispectral | `lwir/*.png` (640×512) | day/night pairs, very similar content — subsample ~1 in 5 |
-| PBVS TISR challenge | HR set | already curated for thermal SR |
-| your MAG160Core captures | **validation only** | 160×120 is the LR side; no 4× ground truth exists |
+FLIR's own ADAS download and the PBVS challenge data both require registration. These
+Hugging Face mirrors do not — each was verified public and ungated:
+
+| source | images | size | note |
+|---|---|---|---|
+| `jsonhash/FLIR_aligned` | ~5.1k thermal @ **640×512** | 1.4 GB zip | FLIR ADAS aligned pairs; take only `align/JPEGImages/*_PreviewData.jpeg` |
+| `LibreYOLO/flir-camera-objects` | 13.6k @ 640×640 | ~1 GB | the same FLIR ADAS data via Roboflow, stretched to square |
+| `Kiuyha/hit-uav-thermal-human-detection` | 4.9k @ 640×640 | ~300 MB | drone thermal, different viewpoints |
+| your MAG160Core captures | **validation only** | — | 160×120 is the LR side; no 4× ground truth exists for it |
+
+```sh
+python - <<'PY'
+from huggingface_hub import hf_hub_download
+print(hf_hub_download('jsonhash/FLIR_aligned', 'aligned.zip', repo_type='dataset'))
+PY
+```
+
+Registration-only sources (FLIR ADAS v2 direct, KAIST Multispectral, PBVS TISR) are still
+worth adding if you have them — more variety is the single biggest lever on this model.
 
 ```
 datasets/thermal_raw/{flir_adas_v2,kaist,pbvs_tisr}/…    # any depth
@@ -133,8 +146,11 @@ datasets/val_mag160/*.png                                 # 20 held-out real fra
 ```
 
 ```sh
-python scripts/prepare_thermal_dataset.py --crop 480 --stride 360
+python scripts/prepare_thermal_dataset.py --raw datasets/thermal_raw --crop 480 --stride 160
 ```
+
+A 640×512 source yields exactly one 480px tile at stride 360, so the stride is shortened
+to overlap them; sub-directories and loose files under `--raw` are both read.
 
 Percentile-stretches each image the way the viewer maps °C to the palette, cuts 480×480
 crops, drops flat ones (`--min-std`), writes `datasets/thermal_hr/` and
