@@ -14,7 +14,8 @@ import kotlin.concurrent.withLock
  * Thin wrapper around the MAG SDK's MagDevice.
  *
  * The SDK does USB, NUC, cali-table download and radiometric conversion internally,
- * so none of FactoryFlatField / FactoryNuc / Radiometry is involved on this path.
+ * so no reconstruction of ours is involved on this path (the own pipeline was
+ * removed on 2026-09-16 — see docs/OWN_PIPELINE_REMOVED.md).
  *
  * ABI note: the only 64-bit `libcoresdk.so` we have (from the Elo thermal SDK,
  * 2020-05-04) is an older build than the one in the MAG-Mx/Cx APKs and exports 61 of
@@ -23,7 +24,7 @@ import kotlin.concurrent.withLock
  * otherwise have used:
  *
  *   - `GetOutputRawData`   → absent. No NUC-corrected raw counts from the SDK; use
- *                            [getTemperatureData] (or MagCamera for real raw).
+ *                            [getTemperatureData].
  *   - `GetSenorTemperature`→ absent. [sensorTemp] uses GetCurrentCameraInnerTemperature.
  *
  * Also absent, do not call: GetCameraTemperature, GetEstimatedEnvTemp,
@@ -32,7 +33,7 @@ import kotlin.concurrent.withLock
  * (= the 5-arg startProcessImage overload), GetOutputImage2.
  *
  * USB is exclusive: `linkCamera` requests permission itself and opens its own
- * UsbDeviceConnection, so [MagCamera] must be closed before [open] is called.
+ * UsbDeviceConnection; nothing else may hold the device when [open] is called.
  */
 class MagDeviceWrapper {
 
@@ -85,7 +86,7 @@ class MagDeviceWrapper {
     /**
      * Wait for the SDK to enumerate the camera.
      *
-     * Releasing the device from [MagCamera] makes the firmware re-enumerate, so for a
+     * Releasing the device makes the firmware re-enumerate, so for a
      * second or two after `close()` the camera is absent from `UsbManager.getDeviceList`
      * and `MagDevice.getDevices` legitimately returns nothing. Polling rather than
      * failing on the first miss is the difference between "works on the 4th button

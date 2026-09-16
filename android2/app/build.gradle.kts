@@ -4,15 +4,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val thermalAssetsDir = layout.buildDirectory.dir("generated/thermalAssets")
-val copyThermalAssets = tasks.register<Copy>("copyThermalAssets") {
-    val assetsSrc = rootDir.resolve("recon")
-    from(assetsSrc) { include("factory_nuc_grid.npz") }
-    from(assetsSrc) { include("factory_flatfield.npz") }
-    from(assetsSrc) { include("planck_luts.npy") }
-    into(thermalAssetsDir)
-}
-
 android {
     namespace = "com.magnity.viewer"
     compileSdk = 35
@@ -37,17 +28,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
-    androidResources {
-        noCompress += listOf("npz", "npy")
-    }
-    sourceSets {
-        getByName("main") {
-            assets.srcDir(thermalAssetsDir)
-        }
-    }
 }
-
-tasks.named("preBuild") { dependsOn(copyThermalAssets) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
