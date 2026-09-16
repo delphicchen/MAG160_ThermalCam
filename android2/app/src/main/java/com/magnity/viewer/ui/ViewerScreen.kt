@@ -350,10 +350,17 @@ private fun DrawerControls(vm: ViewerViewModel) {
             Text("Upscaler", color = DIM, fontSize = 11.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth()) {
-                Chip("Anime4K (GPU)", vm.upscaler == ViewerViewModel.Upscaler.ANIME4K,
+                Chip("Anime4K", vm.upscaler == ViewerViewModel.Upscaler.ANIME4K,
                      Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.ANIME4K }
+                Chip("Thermal SR", vm.upscaler == ViewerViewModel.Upscaler.NCNN,
+                     Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.NCNN }
                 Chip("Bicubic", vm.upscaler == ViewerViewModel.Upscaler.BICUBIC,
                      Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.BICUBIC }
+            }
+            if (!vm.ncnnModelInstalled()) {
+                Text("Thermal SR needs a trained model — push the .param/.bin into\n" +
+                     vm.ncnnModelDir(),
+                     color = DIM, fontSize = 9.sp)
             }
         }
 

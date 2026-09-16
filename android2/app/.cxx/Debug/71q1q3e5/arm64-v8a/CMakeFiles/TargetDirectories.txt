@@ -1,0 +1,3 @@
+/home/delphic/win_share/Delphic/mag160_thermalcam/android2/app/.cxx/Debug/71q1q3e5/arm64-v8a/CMakeFiles/magviewer_ncnn.dir
+/home/delphic/win_share/Delphic/mag160_thermalcam/android2/app/.cxx/Debug/71q1q3e5/arm64-v8a/CMakeFiles/edit_cache.dir
+/home/delphic/win_share/Delphic/mag160_thermalcam/android2/app/.cxx/Debug/71q1q3e5/arm64-v8a/CMakeFiles/rebuild_cache.dir

@@ -18,6 +18,7 @@ import com.magnity.viewer.media.MediaSaver
 import com.magnity.viewer.media.VideoRecorder
 import com.magnity.viewer.pipeline.Anime4kGpu
 import com.magnity.viewer.pipeline.ImageOps
+import com.magnity.viewer.pipeline.NcnnUpscaler
 import com.magnity.viewer.pipeline.Palettes
 import com.magnity.viewer.pipeline.TemporalDenoise
 import com.magnity.viewer.usb.MagDeviceWrapper
@@ -56,7 +57,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         const val ACTION_USB_PERMISSION = "com.magnity.viewer.USB_PERMISSION"
     }
 
-    enum class Upscaler { BICUBIC, ANIME4K }
+    enum class Upscaler { BICUBIC, ANIME4K, NCNN }
 
     val sdk = MagDeviceWrapper()
 
@@ -224,6 +225,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         loop?.cancel()
         synchronized(recLock) { recorder?.also { recorder = null } }?.stop()
         anime4k?.close()
+        ncnn?.close()
         runCatching { sdk.close() }
     }
 
@@ -333,6 +335,25 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private fun render(field: FloatArray, w: Int, h: Int, lo: Float, hi: Float)
             : android.graphics.Bitmap {
         val k = upscale.coerceIn(1, 4)
+        if (k > 1 && upscaler == Upscaler.NCNN) {
+            try {
+                // one model per input size: the exported graph has a static shape
+                val u = ncnn?.takeIf { ncnnSize == w to h }
+                    ?: NcnnUpscaler.open(getApplication(), w, h)?.also {
+                        ncnn?.close(); ncnn = it; ncnnSize = w to h
+                        notice = "ncnn model loaded (${if (it.vulkan) "Vulkan" else "CPU"})"
+                    }
+                if (u != null) return u.render(field, w, h, lo, hi, Palettes.lut(paletteName))
+                upscaler = Upscaler.ANIME4K
+                notice = "No ncnn model in ${NcnnUpscaler.modelDir(getApplication()).name}/ — using Anime4K"
+            } catch (e: Throwable) {
+                Log.e(TAG, "ncnn failed — falling back to Anime4K", e)
+                runCatching { ncnn?.close() }
+                ncnn = null
+                upscaler = Upscaler.ANIME4K
+                notice = "ncnn failed, using Anime4K: ${e.message}"
+            }
+        }
         if (k > 1 && upscaler == Upscaler.ANIME4K) {
             try {
                 val gpu = anime4k ?: Anime4kGpu(getApplication()).also { anime4k = it }
@@ -360,6 +381,17 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private var anime4k: Anime4kGpu? = null
+    private var ncnn: NcnnUpscaler? = null
+    private var ncnnSize = 0 to 0
+
+    /** True when a converted model for the current frame size is present on the device. */
+    fun ncnnModelInstalled(): Boolean {
+        val fr = lastFrame ?: return false
+        return NcnnUpscaler.isInstalled(getApplication(), fr.w, fr.h)
+    }
+
+    /** Where to adb-push the .param/.bin — shown in the drawer. */
+    fun ncnnModelDir(): String = NcnnUpscaler.modelDir(getApplication()).absolutePath
     private val temporalFilter = TemporalDenoise()
 
     /** Motion-adaptive temporal IIR on the display field (history resets on orientation

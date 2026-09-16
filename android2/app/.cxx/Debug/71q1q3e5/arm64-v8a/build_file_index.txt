@@ -1,0 +1,1 @@
+/home/delphic/win_share/Delphic/mag160_thermalcam/android2/app/src/main/cpp/CMakeLists.txt

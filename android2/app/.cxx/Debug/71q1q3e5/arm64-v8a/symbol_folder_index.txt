@@ -1,0 +1,1 @@
+/home/delphic/win_share/Delphic/mag160_thermalcam/android2/app/build/intermediates/cxx/Debug/71q1q3e5/obj/arm64-v8a
