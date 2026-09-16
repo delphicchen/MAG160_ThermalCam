@@ -105,7 +105,7 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
         // keeps its space.
         Row(verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.height(46.dp)) {
+            modifier = Modifier.height(48.dp)) {
             Text("RANGE", color = DIM, fontSize = 11.sp)
             RangeBar(
                 lo = vm.scaleLo, hi = vm.scaleHi,
@@ -282,24 +282,34 @@ private fun RangeBar(
         drawCircle(HOT.copy(alpha = a), r, Offset(xHi, cy))
 
         drawIntoCanvas { c ->
-            // current values above their thumbs, kept inside the bar
-            labelPaint.color = FG.copy(alpha = a).toArgb()
-            val loTxt = "%.1f".format(lo)
-            val hiTxt = "%.1f".format(hi)
-            val loW = labelPaint.measureText(loTxt)
-            val hiW = labelPaint.measureText(hiTxt)
-            val ty = cy - r - with(density) { 4.dp.toPx() }
-            c.nativeCanvas.drawText(loTxt,
-                (xLo - loW / 2f).coerceIn(0f, size.width - loW - hiW - 8f), ty, labelPaint)
-            c.nativeCanvas.drawText(hiTxt,
-                (xHi - hiW / 2f).coerceIn(loW + 8f, size.width - hiW), ty, labelPaint)
-            // fixed span ends below the track
+            // The two moving labels sit on opposite sides of the track — above for the
+            // high thumb, below for the low one — so they cannot overlap however close
+            // the thumbs get. The fixed span ends share the bottom line, and the low
+            // label is clamped to stay clear of them.
+            val ty = cy - r - with(density) { 5.dp.toPx() }
+            val by = cy + r + with(density) { 13.dp.toPx() }
+
             labelPaint.color = DIM.toArgb()
-            val by = cy + r + with(density) { 11.dp.toPx() }
-            c.nativeCanvas.drawText("%.0f°C".format(domLo), 0f, by, labelPaint)
-            val endTxt = "%.0f°C".format(domHi)
-            c.nativeCanvas.drawText(endTxt, size.width - labelPaint.measureText(endTxt), by,
-                                    labelPaint)
+            val domLoTxt = "%.0f°C".format(domLo)
+            val domHiTxt = "%.0f°C".format(domHi)
+            val domLoW = labelPaint.measureText(domLoTxt)
+            val domHiW = labelPaint.measureText(domHiTxt)
+            c.nativeCanvas.drawText(domLoTxt, 0f, by, labelPaint)
+            c.nativeCanvas.drawText(domHiTxt, size.width - domHiW, by, labelPaint)
+
+            val gap = with(density) { 6.dp.toPx() }
+            labelPaint.color = HOT.copy(alpha = a).toArgb()
+            val hiTxt = "%.1f".format(hi)
+            val hiW = labelPaint.measureText(hiTxt)
+            c.nativeCanvas.drawText(hiTxt, (xHi - hiW / 2f).coerceIn(0f, size.width - hiW),
+                                    ty, labelPaint)
+
+            labelPaint.color = COLD.copy(alpha = a).toArgb()
+            val loTxt = "%.1f".format(lo)
+            val loW = labelPaint.measureText(loTxt)
+            c.nativeCanvas.drawText(loTxt,
+                (xLo - loW / 2f).coerceIn(domLoW + gap, size.width - domHiW - gap - loW),
+                by, labelPaint)
         }
     }
 }
