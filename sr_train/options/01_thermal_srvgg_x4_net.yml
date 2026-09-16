@@ -109,7 +109,9 @@ network_g:
   act_type: prelu
 
 path:
-  pretrain_network_g: experiments/pretrained_models/realesr-general-x4v3.pth
+  # Remapped by scripts/truncate_pretrained.py: the published model is num_conv=32, this
+  # recipe runs 16, and a plain load would leave the output conv randomly initialised.
+  pretrain_network_g: experiments/pretrained_models/realesr-general-x4v3-conv16.pth
   param_key_g: params
   strict_load_g: false
   resume_state: ~

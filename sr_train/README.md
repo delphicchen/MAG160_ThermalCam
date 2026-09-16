@@ -15,8 +15,9 @@ init will not transfer.** Run `python scripts/count_params.py`:
 
 | model | params | GMAC @160×120 |
 |---|---|---|
-| SRVGGNetCompact 64/16 (`realesr-general-x4v3`) | 1.21 M | ~22 |
-| SRVGGNetCompact 64/8 | 0.62 M | ~11 |
+| SRVGGNetCompact 64/32 (`realesr-general-x4v3`, as published) | 1.21 M | ~45 |
+| SRVGGNetCompact 64/16 (this recipe) | 0.62 M | ~22 |
+| SRVGGNetCompact 64/8 | 0.31 M | ~11 |
 | RRDBNet 32/12 | ~2.5 M | ~130 |
 | RRDBNet 16/6 | ~0.35 M | ~18 |
 | RRDBNet 64/23 (`RealESRGAN_x4plus`) | 16.7 M | ~830 |
@@ -28,10 +29,13 @@ a different shape and gets skipped, and `realesr-general-x4v3` is not an RRDBNet
 it is an `SRVGGNetCompact`. "Allow skip mismatch" would silently leave you training from
 scratch.
 
-So the main recipe uses **SRVGGNetCompact 64/16**, which is what "compact Real-ESRGAN"
-actually refers to: it is the architecture of `realesr-general-x4v3`, so the pretrained
-weights load exactly; it is 6× cheaper; and it is already what `Real-ESRGAN-ncnn-vulkan`
-ships, so the conversion path is proven. `options/alt_rrdb_compact_x4_gan.yml` is the
+So the main recipe uses **SRVGGNetCompact**, which is what "compact Real-ESRGAN" actually
+refers to: it is 6× cheaper than the RRDBNet route and it is what
+`Real-ESRGAN-ncnn-vulkan` already ships, so the conversion path is proven. Note the
+published `realesr-general-x4v3` is **num_conv=32** (1.21 M, ~45 GMAC); this recipe halves
+it to 16 for the frame budget, and `scripts/truncate_pretrained.py` remaps the weights
+onto the shorter network — including the output conv, which a plain load would leave
+random. Run it once before stage 1 (the Colab notebook does this for you). `options/alt_rrdb_compact_x4_gan.yml` is the
 RRDBNet version as originally specified, with its caveats written at the top — use it if
 you want to compare.
 

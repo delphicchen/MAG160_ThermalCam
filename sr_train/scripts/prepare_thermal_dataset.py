@@ -77,13 +77,25 @@ def main() -> int:
         print(f'no such directory: {raw}', file=sys.stderr)
         return 1
 
+    # Sources are the sub-directories of --raw, plus any images sitting loose in it.
+    sources = [p for p in sorted(raw.iterdir()) if p.is_dir() and p.name != 'mag160']
+    loose = [p for p in sorted(raw.iterdir()) if p.is_file() and p.suffix.lower() in EXTS]
+    if any(p.name == 'mag160' for p in raw.iterdir()):
+        print('[skip] mag160: LR-side captures, not HR training data')
+    if loose:
+        print(f'[{raw.name}] {len(loose)} loose images')
+    if not sources and not loose:
+        print(f'nothing to read under {raw} — put HR thermal images there', file=sys.stderr)
+        return 1
+
     kept, skipped_flat, skipped_small, names = 0, 0, 0, []
-    for src_dir in sorted(p for p in raw.iterdir() if p.is_dir()):
-        if src_dir.name == 'mag160':
-            print(f'[skip] {src_dir.name}: LR-side captures, not HR training data')
-            continue
-        files = sorted(p for p in src_dir.rglob('*') if p.suffix.lower() in EXTS)
-        print(f'[{src_dir.name}] {len(files)} files')
+    for src_dir in sources + [raw]:
+        if src_dir is raw:
+            files = loose
+        else:
+            files = sorted(q for q in src_dir.rglob('*') if q.suffix.lower() in EXTS)
+            print(f'[{src_dir.name}] {len(files)} files')
+        before = kept
         for f in files:
             img = load_gray(f)
             if img is None:
@@ -99,17 +111,24 @@ def main() -> int:
                     if tile.std() < args.min_std:
                         skipped_flat += 1
                         continue
-                    name = f'{src_dir.name}_{kept:06d}.png'
+                    name = f'{src_dir.name}_{kept:06d}.png'.replace('/', '_')
                     cv2.imwrite(str(out / name), cv2.cvtColor(tile, cv2.COLOR_GRAY2BGR))
                     names.append(name)
                     kept += 1
 
+        print(f'  -> {kept - before} crops from {src_dir.name}')
+
     pathlib.Path(args.meta).write_text('\n'.join(names) + '\n')
-    print(f'wrote {kept} crops to {out}')
-    print(f'  skipped: {skipped_flat} flat, {skipped_small} smaller than the crop size')
+    print(f'\nwrote {kept} crops to {out}')
+    print(f'  skipped: {skipped_flat} flat, {skipped_small} smaller than {args.crop}px')
     print(f'  meta_info: {args.meta}')
+    if kept < 200:
+        print('\nFATAL: that is not a training set. Check that --raw really contains HR')
+        print('thermal images at least {0}x{0}, and that they are readable.'.format(args.crop),
+              file=sys.stderr)
+        return 1
     if kept < 5000:
-        print('WARNING: under ~5k crops the GAN stage will overfit; add more sources.')
+        print('\nWARNING: under ~5k crops the GAN stage will overfit; add more sources.')
     return 0
 
 
