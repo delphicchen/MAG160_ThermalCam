@@ -1,0 +1,34 @@
+MAG160_ThermalCam — Noncommercial License
+Copyright (c) 2026 delphicchen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this
+software and associated documentation files (the "Software"), to use, copy, modify,
+merge, publish and distribute the Software, subject to the following conditions:
+
+1. NONCOMMERCIAL USE ONLY. The Software may be used only for noncommercial purposes:
+   personal use, research, education, evaluation and hobby projects. Any use that is
+   primarily intended for or directed toward commercial advantage or monetary
+   compensation requires a separate written licence from the copyright holder. This
+   includes, without limitation, selling the Software or a derivative of it, bundling it
+   with a product or device that is sold, and using it to provide a paid service.
+
+2. The above copyright notice, this permission notice and the noncommercial condition
+   shall be included in all copies or substantial portions of the Software, and must be
+   carried over to derivative works.
+
+3. THIRD-PARTY COMPONENTS ARE NOT COVERED BY THIS LICENCE. See THIRD_PARTY_NOTICES.md.
+   In particular, the Magnity / Elo camera SDK (`libcoresdk.so`, the
+   `cn.com.magnity.coresdk` Java classes and the vendor AAR files) is proprietary
+   software owned by its respective vendors. It is neither licensed nor sublicensed
+   here, and nothing in this licence grants any right to it.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+THIS SOFTWARE MEASURES TEMPERATURE FOR INFORMATIONAL PURPOSES ONLY. It is not a
+calibrated instrument and must not be used for medical, safety or fire-detection
+decisions.

@@ -32,9 +32,22 @@ object FrameComposer {
     /** Output image is always the 4× grid (640×480 or 480×640) so files are consistent
      *  whatever display upscale is selected. */
     const val SCALE = 4
-    const val BAR_H = 72
+    private const val BAR_MIN = 72
 
-    fun outSize(fr: FrameResult): Pair<Int, Int> = fr.w * SCALE to fr.h * SCALE + BAR_H
+    /**
+     * Composed size, padded so both edges are multiples of 16: hardware H.264/HEVC
+     * encoders require that alignment, and an unaligned height made every encoder
+     * refuse the format (480×712 / 640×552) — recording failed at configure().
+     * The extra rows land in the colour-bar strip, which is drawn to fill whatever
+     * height is left.
+     */
+    fun outSize(fr: FrameResult): Pair<Int, Int> {
+        val w = align16(fr.w * SCALE)
+        val h = align16(fr.h * SCALE + BAR_MIN)
+        return w to h
+    }
+
+    private fun align16(v: Int) = (v + 15) / 16 * 16
 
     /** Thermal image + ROI markers + SPOT + colour bar with range and readouts. */
     fun compose(
@@ -79,8 +92,8 @@ object FrameComposer {
             c.drawLine(x, y - 14f, x, y + 14f, ring)
         }
 
-        // colour bar
-        val barTop = ih + 8f
+        // colour bar, centred in whatever strip is left after alignment padding
+        val barTop = ih + (oh - ih - 56f) / 2f
         val lutBmp = Bitmap.createBitmap(lut, 256, 1, Bitmap.Config.ARGB_8888)
         c.drawBitmap(lutBmp, null, RectF(8f, barTop, ow - 8f, barTop + 16f), filter)
         text.color = Color.WHITE
@@ -159,23 +172,41 @@ class VideoRecorder(private val ctx: Context, val width: Int, val height: Int) {
                 setInteger(MediaFormat.KEY_FRAME_RATE, 30)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             }
-        // HEVC first (≈ half the size at the same quality), H.264 if no encoder takes
-        // this size/format
+        // HEVC first (≈ half the size at the same quality), then H.264.
+        // Try each candidate in turn and keep the first that actually configures —
+        // a codec can pass findEncoderForFormat and still reject the format, and an
+        // encoder left half-configured leaks, so each failure is released before the
+        // next attempt.
         val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
-        val hevc = format(MediaFormat.MIMETYPE_VIDEO_HEVC, 2_500_000)
-        val hevcName = list.findEncoderForFormat(hevc)
-        val fmt: MediaFormat
-        if (hevcName != null) {
-            codec = MediaCodec.createByCodecName(hevcName)
-            fmt = hevc; codecName = "HEVC"
-        } else {
-            fmt = format(MediaFormat.MIMETYPE_VIDEO_AVC, 4_000_000)
-            codec = list.findEncoderForFormat(fmt)?.let { MediaCodec.createByCodecName(it) }
-                ?: MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            codecName = "H.264"
+        val candidates = listOf(
+            Triple("HEVC", MediaFormat.MIMETYPE_VIDEO_HEVC, 2_500_000),
+            Triple("H.264", MediaFormat.MIMETYPE_VIDEO_AVC, 4_000_000),
+        )
+        var chosen: MediaCodec? = null
+        var chosenName = ""
+        val failures = StringBuilder()
+        for ((label, mime, bitrate) in candidates) {
+            val fmt = format(mime, bitrate)
+            val name = list.findEncoderForFormat(fmt)
+            if (name == null) { failures.append("$label: no encoder for ${width}x$height; "); continue }
+            var c: MediaCodec? = null
+            try {
+                c = MediaCodec.createByCodecName(name)
+                c.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                chosen = c; chosenName = label
+                break
+            } catch (e: Throwable) {
+                failures.append("$label ($name): ${e.message}; ")
+                c?.let { runCatching { it.release() } }
+            }
         }
+        codec = chosen ?: run {
+            runCatching { muxer.release() }; runCatching { pfd.close() }
+            runCatching { ctx.contentResolver.delete(uri, null, null) }
+            error("no usable video encoder — $failures")
+        }
+        codecName = chosenName
         Log.i("MagViewer", "video encoder: $codecName ${codec.name} ${width}x$height")
-        codec.configure(fmt, null, null, 0)
         surface = codec.createInputSurface()
         codec.start()
     }

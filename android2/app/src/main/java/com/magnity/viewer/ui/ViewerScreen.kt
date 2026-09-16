@@ -31,6 +31,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.magnity.viewer.pipeline.Palettes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -96,25 +99,38 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             Readout("SPOT", vm.spotCelsius(), Color.White, vm.spot != null) { vm.spot = null }
         }
 
-        // display range: auto (p1–p99) or manual
+        // Display range in one fixed-height row: the thumbs track the auto range and
+        // become draggable in manual — no extra row appears, so the image keeps its space.
+        // The numbers live on the colour bar under the image.
         Row(verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.height(48.dp)) {
             Text("RANGE", color = DIM, fontSize = 11.sp)
-            Text("%.1f – %.1f °C".format(vm.scaleLo, vm.scaleHi),
-                 color = FG, fontSize = 13.sp, modifier = Modifier.weight(1f))
-            Text("auto", color = DIM, fontSize = 11.sp)
-            Switch(!vm.autoScale, onCheckedChange = { vm.autoScale = !it })
-            Text("manual", color = DIM, fontSize = 11.sp)
-        }
-        if (!vm.autoScale) {
+            // Domain follows the scene but always contains the current range, rounded to
+            // whole degrees so it does not jitter frame to frame.
+            val domLo = floor(min(fr?.tempMin ?: vm.scaleLo, vm.scaleLo) - 5f)
+            val domHi = ceil(max(fr?.tempMax ?: vm.scaleHi, vm.scaleHi) + 5f)
             RangeSlider(
-                value = vm.scaleLo..vm.scaleHi,
+                value = vm.scaleLo.coerceIn(domLo, domHi)..vm.scaleHi.coerceIn(domLo, domHi),
                 onValueChange = { r ->
                     vm.scaleLo = r.start.coerceAtMost(r.endInclusive - 0.5f)
                     vm.scaleHi = r.endInclusive.coerceAtLeast(vm.scaleLo + 0.5f)
                 },
-                valueRange = -20f..200f,
+                valueRange = domLo..domHi,
+                enabled = !vm.autoScale,
+                colors = SliderDefaults.colors(
+                    disabledThumbColor = ACCENT.copy(alpha = 0.7f),
+                    disabledActiveTrackColor = ACCENT.copy(alpha = 0.45f),
+                    disabledInactiveTrackColor = Color(0xFF30363D),
+                ),
+                modifier = Modifier.weight(1f),
             )
+            OutlinedButton(onClick = { vm.autoScale = !vm.autoScale },
+                           modifier = Modifier.height(34.dp),
+                           contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Text(if (vm.autoScale) "AUTO" else "MAN", fontSize = 11.sp,
+                     color = if (vm.autoScale) DIM else ACCENT)
+            }
         }
 
         // actions

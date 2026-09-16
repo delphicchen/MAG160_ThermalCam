@@ -92,3 +92,32 @@ python3 magcam.py          # headless self-test: grabs a frame, writes /tmp/mag_
   normal and the udev rule matches by vendor id so access keeps working.
 - **Every command must be followed by a read of its EP-0x82 ack** or the firmware wedges
   — this is the key protocol gotcha (handled in `magcam.py`).
+
+## Android app (`android2/`)
+Portrait thermal viewer for Android 15+, written because the factory `MAG-Cx` / `MAG-Mx`
+apps no longer run there. Absolute temperature from the factory SDK, MIN/MAX/SPOT
+markers, colour bar, snapshot (PNG) and video recording (HEVC/H.264), and GPU display
+upscaling with the Anime4K CNN shader. Build:
+
+```sh
+cd android2
+JAVA_HOME=/path/to/android-studio/jbr ./gradlew :app:assembleDebug
+```
+
+The vendor SDK (`libcoresdk.so` / the AAR files under `android2/lib/`) is **not** in this
+repository — supply it from your own copy of the vendor software.
+
+## Licence
+**Noncommercial use only** — see [`LICENSE`](LICENSE). Personal, research, educational
+and hobby use are free; commercial use needs a separate written licence. This is a short
+custom licence, not an OSI-approved one, so it is deliberately plain about what it
+allows.
+
+Third-party components keep their own terms — see
+[`android2/THIRD_PARTY_NOTICES.md`](android2/THIRD_PARTY_NOTICES.md). The Magnity / Elo
+camera SDK is proprietary and is neither licensed nor redistributed here.
+
+Temperature readings are informational only; this is not a calibrated instrument.
+
+## If this helped you
+A ⭐ on the repository is appreciated — it is how I gauge whether to keep polishing it.
