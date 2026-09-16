@@ -40,8 +40,9 @@ import numpy as np
 import torch
 from scipy.ndimage import maximum_filter
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from scripts.export_onnx import build  # noqa: E402
+from export_onnx import build  # noqa: E402  (sibling script, not a package)
 
 
 def load_lr(p: pathlib.Path) -> np.ndarray:

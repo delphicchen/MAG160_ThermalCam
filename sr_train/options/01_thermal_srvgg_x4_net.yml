@@ -41,6 +41,13 @@ jpeg_range2: [60, 95]
 gt_size: 256
 queue_size: 180
 
+# USM-sharpened ground truth. Stock Real-ESRGAN trains against a sharpened GT, which
+# teaches the network to overshoot edges — pleasant on photos, but on a thermal frame an
+# overshoot beside a hot edge reads as a temperature that is not there. Trained against
+# the true GT instead; the fake-hot-spot check in scripts/hallucination_check.py is what
+# this is protecting.
+gt_usm: false
+
 # ---- thermal FPN (our addition) ------------------------------------------------------
 # Defaults are what scripts/estimate_fpn_stats.py measured on a MAG160Core; re-measure
 # for your own unit and paste the numbers here.

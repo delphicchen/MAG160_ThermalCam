@@ -45,6 +45,15 @@ jpeg_range2: [60, 95]
 gt_size: 256
 queue_size: 180
 
+# USM-sharpened ground truth. Stock Real-ESRGAN trains against a sharpened GT, which
+# teaches the network to overshoot edges — pleasant on photos, but on a thermal frame an
+# overshoot beside a hot edge reads as a temperature that is not there. Trained against
+# the true GT instead; the fake-hot-spot check in scripts/hallucination_check.py is what
+# this is protecting.
+l1_gt_usm: false
+percep_gt_usm: false
+gan_gt_usm: false
+
 fpn_prob: 0.9
 fpn_col_sigma: [0.0, 0.010]
 fpn_row_sigma: [0.0, 0.004]
@@ -105,6 +114,7 @@ path:
   param_key_g: params_ema
   strict_load_g: false
   pretrain_network_d: experiments/pretrained_models/RealESRGAN_x4plus_netD.pth
+  param_key_d: params
   strict_load_d: false
   resume_state: ~
 

@@ -59,9 +59,9 @@ def main() -> int:
     net.load_model(args.bin)
 
     mat_in = ncnn.Mat(x.transpose(1, 2, 0).copy())   # ncnn wants HWC
-    with net.create_extractor() as ex:
-        ex.input('data', mat_in)
-        ret, mat_out = ex.extract('output')
+    ex = net.create_extractor()                      # not a context manager in all builds
+    ex.input('data', mat_in)
+    ret, mat_out = ex.extract('output')
     if ret != 0:
         print(f'ncnn extract failed: {ret}', file=sys.stderr)
         return 1
