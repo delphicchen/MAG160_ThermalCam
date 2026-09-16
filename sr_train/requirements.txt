@@ -1,0 +1,11 @@
+# on top of a Real-ESRGAN clone (`python setup.py develop` there)
+torch>=2.1
+torchvision>=0.16
+basicsr>=1.4.2
+opencv-python>=4.8
+numpy>=1.24
+scipy>=1.10          # local-maximum filter in hallucination_check.py
+onnx>=1.15           # export + onnx2ncnn route
+onnxsim>=0.4         # onnx2ncnn chokes without it
+ncnn>=1.0.20240102   # python bindings, for verify_ncnn.py
+tb-nightly           # training curves

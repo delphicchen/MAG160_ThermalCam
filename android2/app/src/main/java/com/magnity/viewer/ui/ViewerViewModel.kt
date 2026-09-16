@@ -67,6 +67,10 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var paused by mutableStateOf(false)
     var paletteName by mutableStateOf(Palettes.NAMES.first())
     var autoScale by mutableStateOf(true)
+    // Module spec measurement range — the SDK's CameraInfo does not report one, so the
+    // manual scale slider spans this fixed domain.
+    val tempMinC = -20f
+    val tempMaxC = 150f
     var scaleLo by mutableFloatStateOf(0f)          // manual display range, °C
     var scaleHi by mutableFloatStateOf(100f)
     // default = camera plugged straight into the phone's USB-C port, portrait UI

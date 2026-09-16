@@ -3,6 +3,7 @@ package com.magnity.viewer.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -99,31 +100,19 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             Readout("SPOT", vm.spotCelsius(), Color.White, vm.spot != null) { vm.spot = null }
         }
 
-        // Display range in one fixed-height row: the thumbs track the auto range and
-        // become draggable in manual — no extra row appears, so the image keeps its space.
-        // The numbers live on the colour bar under the image.
+        // Display range in one fixed-height row: a thin two-thumb bar, draggable in
+        // manual, tracking the auto range otherwise. No extra row appears, so the image
+        // keeps its space.
         Row(verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.height(48.dp)) {
+            modifier = Modifier.height(46.dp)) {
             Text("RANGE", color = DIM, fontSize = 11.sp)
-            // Domain follows the scene but always contains the current range, rounded to
-            // whole degrees so it does not jitter frame to frame.
-            val domLo = floor(min(fr?.tempMin ?: vm.scaleLo, vm.scaleLo) - 5f)
-            val domHi = ceil(max(fr?.tempMax ?: vm.scaleHi, vm.scaleHi) + 5f)
-            RangeSlider(
-                value = vm.scaleLo.coerceIn(domLo, domHi)..vm.scaleHi.coerceIn(domLo, domHi),
-                onValueChange = { r ->
-                    vm.scaleLo = r.start.coerceAtMost(r.endInclusive - 0.5f)
-                    vm.scaleHi = r.endInclusive.coerceAtLeast(vm.scaleLo + 0.5f)
-                },
-                valueRange = domLo..domHi,
+            RangeBar(
+                lo = vm.scaleLo, hi = vm.scaleHi,
+                domLo = vm.tempMinC, domHi = vm.tempMaxC,
                 enabled = !vm.autoScale,
-                colors = SliderDefaults.colors(
-                    disabledThumbColor = ACCENT.copy(alpha = 0.7f),
-                    disabledActiveTrackColor = ACCENT.copy(alpha = 0.45f),
-                    disabledInactiveTrackColor = Color(0xFF30363D),
-                ),
-                modifier = Modifier.weight(1f),
+                onChange = { l, h -> vm.scaleLo = l; vm.scaleHi = h },
+                modifier = Modifier.weight(1f).fillMaxHeight(),
             )
             OutlinedButton(onClick = { vm.autoScale = !vm.autoScale },
                            modifier = Modifier.height(34.dp),
@@ -238,6 +227,83 @@ private fun ThermalImage(
     }
 }
 
+/**
+ * Thin two-thumb range bar over the module's full measurement span. Either thumb can be
+ * grabbed anywhere on the bar (the nearer one wins), which M3's RangeSlider made fiddly,
+ * and it is far thinner than the M3 control so the row stays short.
+ */
+@Composable
+private fun RangeBar(
+    lo: Float, hi: Float, domLo: Float, domHi: Float, enabled: Boolean,
+    onChange: (Float, Float) -> Unit, modifier: Modifier,
+) {
+    val density = LocalDensity.current
+    val padPx = with(density) { 10.dp.toPx() }
+    val labelPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = with(density) { 10.sp.toPx() }
+        }
+    }
+    var barW by remember { mutableFloatStateOf(1f) }
+    var active by remember { mutableIntStateOf(0) }   // 1 = low thumb, 2 = high thumb
+    val span = (domHi - domLo).coerceAtLeast(0.1f)
+
+    fun xOf(v: Float) = padPx + (v.coerceIn(domLo, domHi) - domLo) / span * (barW - 2 * padPx)
+    fun valueAt(x: Float) =
+        (domLo + (x - padPx) / (barW - 2 * padPx) * span).coerceIn(domLo, domHi)
+
+    val gesture = if (!enabled) Modifier else Modifier.pointerInput(domLo, domHi) {
+        detectDragGestures(
+            onDragStart = { p ->
+                active = if (kotlin.math.abs(p.x - xOf(lo)) <= kotlin.math.abs(p.x - xOf(hi))) 1 else 2
+            },
+            onDragEnd = { active = 0 },
+        ) { change, _ ->
+            change.consume()
+            val v = valueAt(change.position.x)
+            if (active == 1) onChange(v.coerceAtMost(hi - 0.5f), hi)
+            else onChange(lo, v.coerceAtLeast(lo + 0.5f))
+        }
+    }
+
+    Canvas(modifier.then(gesture)) {
+        barW = size.width
+        val cy = size.height / 2f
+        val trackH = with(density) { 3.dp.toPx() }
+        val r = with(density) { 7.dp.toPx() }
+        val xLo = xOf(lo); val xHi = xOf(hi)
+        val a = if (enabled) 1f else 0.55f
+
+        drawLine(Color(0xFF30363D), Offset(padPx, cy), Offset(size.width - padPx, cy),
+                 trackH, cap = StrokeCap.Round)
+        drawLine(ACCENT.copy(alpha = a), Offset(xLo, cy), Offset(xHi, cy),
+                 trackH, cap = StrokeCap.Round)
+        drawCircle(COLD.copy(alpha = a), r, Offset(xLo, cy))
+        drawCircle(HOT.copy(alpha = a), r, Offset(xHi, cy))
+
+        drawIntoCanvas { c ->
+            // current values above their thumbs, kept inside the bar
+            labelPaint.color = FG.copy(alpha = a).toArgb()
+            val loTxt = "%.1f".format(lo)
+            val hiTxt = "%.1f".format(hi)
+            val loW = labelPaint.measureText(loTxt)
+            val hiW = labelPaint.measureText(hiTxt)
+            val ty = cy - r - with(density) { 4.dp.toPx() }
+            c.nativeCanvas.drawText(loTxt,
+                (xLo - loW / 2f).coerceIn(0f, size.width - loW - hiW - 8f), ty, labelPaint)
+            c.nativeCanvas.drawText(hiTxt,
+                (xHi - hiW / 2f).coerceIn(loW + 8f, size.width - hiW), ty, labelPaint)
+            // fixed span ends below the track
+            labelPaint.color = DIM.toArgb()
+            val by = cy + r + with(density) { 11.dp.toPx() }
+            c.nativeCanvas.drawText("%.0f°C".format(domLo), 0f, by, labelPaint)
+            val endTxt = "%.0f°C".format(domHi)
+            c.nativeCanvas.drawText(endTxt, size.width - labelPaint.measureText(endTxt), by,
+                                    labelPaint)
+        }
+    }
+}
+
 @Composable
 private fun ColorBar(palette: String, lo: Float, hi: Float, modifier: Modifier) {
     val lut = remember(palette) {
@@ -294,7 +360,7 @@ private fun DrawerControls(vm: ViewerViewModel) {
         Column {
             Text("Display resolution", color = DIM, fontSize = 11.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(1, 2, 4).forEach { k ->
+                listOf(1, 4).forEach { k ->
                     val label = vm.lastFrame?.let { "${it.w * k}×${it.h * k}" } ?: "${k}×"
                     Chip(label, vm.upscale == k, Modifier.weight(1f)) { vm.upscale = k }
                 }

@@ -1,0 +1,158 @@
+# Stage 2 — L1 + perceptual (VGG) + adversarial, starting from stage 1's weights.
+# Same degradation as stage 1; only the losses and the schedule change.
+name: thermal_srvgg_x4_gan
+model_type: ThermalRealESRGANModel
+scale: 4
+num_gpu: 1
+manual_seed: 0
+
+resize_prob: [0.2, 0.7, 0.1]
+resize_range: [0.3, 1.5]
+gaussian_noise_prob: 0.3
+noise_range: [1, 25]
+poisson_scale_range: [0.05, 3.0]
+gray_noise_prob: 0.6
+jpeg_range: [50, 95]
+
+second_blur_prob: 0.5
+resize_prob2: [0.3, 0.6, 0.1]
+resize_range2: [0.5, 1.2]
+gaussian_noise_prob2: 0.3
+noise_range2: [1, 15]
+poisson_scale_range2: [0.05, 2.0]
+gray_noise_prob2: 0.6
+jpeg_range2: [60, 95]
+
+gt_size: 256
+queue_size: 180
+
+fpn_prob: 0.9
+fpn_col_sigma: [0.0, 0.010]
+fpn_row_sigma: [0.0, 0.004]
+fpn_map_sigma: [0.0, 0.006]
+fpn_gain_sigma: [0.0, 0.004]
+contrast_range: [0.45, 1.0]
+
+datasets:
+  train:
+    name: thermal_hr
+    type: RealESRGANDataset
+    dataroot_gt: datasets/thermal_hr
+    meta_info: datasets/meta_info/thermal_hr.txt
+    io_backend:
+      type: disk
+
+    blur_kernel_size: 15
+    kernel_list: ['iso', 'aniso', 'generalized_iso', 'generalized_aniso', 'plateau_iso', 'plateau_aniso']
+    kernel_prob: [0.50, 0.25, 0.10, 0.05, 0.07, 0.03]
+    sinc_prob: 0
+    blur_sigma: [0.2, 1.5]
+    betag_range: [0.5, 4]
+    betap_range: [1, 2]
+
+    blur_kernel_size2: 11
+    kernel_list2: ['iso', 'aniso', 'generalized_iso', 'generalized_aniso', 'plateau_iso', 'plateau_aniso']
+    kernel_prob2: [0.50, 0.25, 0.10, 0.05, 0.07, 0.03]
+    sinc_prob2: 0
+    blur_sigma2: [0.2, 1.0]
+    betag_range2: [0.5, 4]
+    betap_range2: [1, 2]
+
+    final_sinc_prob: 0
+
+    gt_size: 256
+    use_hflip: true
+    use_rot: false
+
+    use_shuffle: true
+    num_worker_per_gpu: 5
+    batch_size_per_gpu: 12
+    dataset_enlarge_ratio: 1
+    prefetch_mode: ~
+
+network_g:
+  type: SRVGGNetCompact
+  num_in_ch: 3
+  num_out_ch: 3
+  num_feat: 64
+  num_conv: 16
+  upscale: 4
+  act_type: prelu
+
+network_d:
+  type: UNetDiscriminatorSN
+  num_in_ch: 3
+  num_feat: 64
+  skip_connection: true
+
+path:
+  # stage 1 output
+  pretrain_network_g: experiments/thermal_srvgg_x4_net/models/net_g_10000.pth
+  param_key_g: params_ema
+  strict_load_g: true
+  # no public discriminator matches this generator; start it from the x4plus one and let
+  # it adapt (strict_load off), or from scratch by removing these two lines
+  pretrain_network_d: experiments/pretrained_models/RealESRGAN_x4plus_netD.pth
+  strict_load_d: false
+  resume_state: ~
+
+train:
+  ema_decay: 0.999
+  optim_g:
+    type: Adam
+    lr: !!float 1e-4
+    weight_decay: 0
+    betas: [0.9, 0.99]
+  optim_d:
+    type: Adam
+    lr: !!float 1e-4
+    weight_decay: 0
+    betas: [0.9, 0.99]
+
+  scheduler:
+    type: MultiStepLR
+    milestones: [50000, 80000]
+    gamma: 0.5
+
+  total_iter: 100000
+  warmup_iter: -1
+
+  # Loss weights are deliberately conservative versus stock Real-ESRGAN: a thermal frame
+  # has no texture to invent, and a strong GAN term is exactly what produces plausible
+  # detail that is not in the data. perceptual 0.5 (stock 1.0), gan 5e-2 (stock 1e-1).
+  pixel_opt:
+    type: L1Loss
+    loss_weight: 1.0
+    reduction: mean
+  perceptual_opt:
+    type: PerceptualLoss
+    layer_weights:
+      'conv1_2': 0.1
+      'conv2_2': 0.1
+      'conv3_4': 1
+      'conv4_4': 1
+      'conv5_4': 1
+    vgg_type: vgg19
+    use_input_norm: true
+    perceptual_weight: !!float 0.5
+    style_weight: 0
+    range_norm: false
+    criterion: l1
+  gan_opt:
+    type: GANLoss
+    gan_type: vanilla
+    real_label_val: 1.0
+    fake_label_val: 0.0
+    loss_weight: !!float 5e-2
+
+  net_d_iters: 1
+  net_d_init_iters: 0
+
+logger:
+  print_freq: 100
+  save_checkpoint_freq: !!float 5e3
+  use_tb_logger: true
+
+dist_params:
+  backend: nccl
+  port: 29500
