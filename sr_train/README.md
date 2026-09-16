@@ -100,7 +100,7 @@ Pretrained weights:
 ```sh
 wget -P experiments/pretrained_models \
   https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth \
-  https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_netD.pth
+  https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.3/RealESRGAN_x4plus_netD.pth
 ```
 
 ### VRAM
