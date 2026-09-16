@@ -50,7 +50,7 @@ sr_train/
 │   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 only, 10k iter
 │   ├── 02_thermal_srvgg_x4_gan.yml      stage 2, + VGG + GAN, 100k iter
 │   └── alt_rrdb_compact_x4_gan.yml      RRDBNet 32/12 variant
-├── archs/thermal_degradation.py         FPN + low-contrast on top of Real-ESRGAN's pipeline
+├── thermal_arch/thermal_degradation.py  FPN + low-contrast on top of Real-ESRGAN's pipeline
 └── scripts/
     ├── prepare_thermal_dataset.py       public datasets → 480×480 HR crops + meta_info
     ├── estimate_fpn_stats.py            measure your sensor's FPN → yml amplitudes
@@ -72,15 +72,21 @@ python -m venv .venv && . .venv/bin/activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 pip install basicsr facexlib gfpgan opencv-python scipy tb-nightly onnx onnxsim ncnn
 python setup.py develop
-cp -r ../sr_train/{options,archs,scripts} .
+cp -r ../sr_train/{options,thermal_arch,scripts} .
 ```
 
 Register the custom models by adding this line near the top of `realesrgan/train.py`
 (BasicSR only auto-imports its own package):
 
 ```python
-import archs.thermal_degradation  # noqa: F401  — registers ThermalRealESR{Net,GAN}Model
+import os.path as osp, sys
+sys.path.insert(0, osp.dirname(osp.dirname(osp.abspath(__file__))))   # repo root
+import thermal_arch.thermal_degradation  # noqa: F401  — registers the two model types
 ```
+
+The `sys.path` line matters: `python realesrgan/train.py` puts `realesrgan/` first on the
+path, where Real-ESRGAN's own `archs` package lives — a top-level directory called `archs`
+would be shadowed by it, which is why ours is `thermal_arch`.
 
 If `basicsr` fails on `functional_tensor` (torchvision ≥ 0.17), patch the one import in
 `basicsr/data/degradations.py` to `torchvision.transforms.functional`.

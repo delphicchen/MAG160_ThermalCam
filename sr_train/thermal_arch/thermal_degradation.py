@@ -16,8 +16,8 @@ Register by adding to the yml:
     model_type: ThermalRealESRNetModel      # stage 1, L1 only
     model_type: ThermalRealESRGANModel      # stage 2, + perceptual + GAN
 
-and pointing BasicSR at this file through the `archs`/`models` import path
-(`basicsr.utils.registry` picks it up via `import_modules`, see README step 3).
+and importing this module once before `train_pipeline` runs (see README step 3) — the
+registry decorators below are what make those names resolvable.
 """
 
 import numpy as np

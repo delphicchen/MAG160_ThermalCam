@@ -20,7 +20,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1]))
-from archs.thermal_degradation import fpn_from_frames  # noqa: E402
+from thermal_arch.thermal_degradation import fpn_from_frames  # noqa: E402
 
 
 def main() -> int:
