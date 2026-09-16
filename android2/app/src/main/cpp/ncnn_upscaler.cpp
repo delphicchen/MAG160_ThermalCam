@@ -8,6 +8,8 @@
 // frame is grey, so the field is replicated across RGB on the way in and the channels are
 // averaged on the way out.
 
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <jni.h>
 
@@ -55,6 +57,45 @@ Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeInit(
     } else {
         s->vulkan = s->net.opt.use_vulkan_compute;
         LOGI("model loaded (%s), vulkan=%d", param, (int)s->vulkan);
+    }
+
+    env->ReleaseStringUTFChars(jparam, param);
+    env->ReleaseStringUTFChars(jbin, bin);
+    return reinterpret_cast<jlong>(s);
+}
+
+/** Same, but reading the model straight out of the APK's assets. */
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeInitAsset(
+        JNIEnv* env, jobject, jobject assetManager, jstring jparam, jstring jbin,
+        jboolean useVulkan) {
+    AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
+    if (mgr == nullptr) {
+        LOGE("AAssetManager_fromJava failed");
+        return 0;
+    }
+    const char* param = env->GetStringUTFChars(jparam, nullptr);
+    const char* bin = env->GetStringUTFChars(jbin, nullptr);
+
+    auto* s = new Session();
+    s->net.opt.use_vulkan_compute = useVulkan == JNI_TRUE;
+    s->net.opt.use_fp16_packed = true;
+    s->net.opt.use_fp16_storage = true;
+    s->net.opt.use_fp16_arithmetic = true;
+    s->net.opt.num_threads = 4;
+
+    int rc = s->net.load_param(mgr, param);
+    if (rc != 0) {
+        LOGE("asset load_param(%s) failed: %d", param, rc);
+        delete s;
+        s = nullptr;
+    } else if ((rc = s->net.load_model(mgr, bin)) != 0) {
+        LOGE("asset load_model(%s) failed: %d", bin, rc);
+        delete s;
+        s = nullptr;
+    } else {
+        s->vulkan = s->net.opt.use_vulkan_compute;
+        LOGI("model loaded from assets (%s), vulkan=%d", param, (int)s->vulkan);
     }
 
     env->ReleaseStringUTFChars(jparam, param);

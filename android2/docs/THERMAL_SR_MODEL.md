@@ -1,14 +1,27 @@
 # Installing a thermal SR model
 
-The "Thermal SR" upscaler runs a Real-ESRGAN-compact model trained by `sr_train/`. The
-model is **not** bundled — it is per-camera work and the app ships without it.
+The "Thermal SR" upscaler runs a Real-ESRGAN-compact model trained by `sr_train/`.
 
-## Where the files go
+## Shipping it inside the APK (the normal route once a model is good)
+
+Copy the four files into `app/src/main/assets/model/` and rebuild:
+
+    app/src/main/assets/model/thermal_120x160_fp16.param
+    app/src/main/assets/model/thermal_120x160_fp16.bin
+    app/src/main/assets/model/thermal_160x120_fp16.param
+    app/src/main/assets/model/thermal_160x120_fp16.bin
+
+`.param`/`.bin` are in `noCompress`, so ncnn maps them straight out of the APK. The repo
+ships without them and the app just falls back to Anime4K.
+
+## Testing a model without rebuilding
 
     adb push thermal_120x160_fp16.param /sdcard/Android/data/com.magnity.viewer/files/model/
     adb push thermal_120x160_fp16.bin   /sdcard/Android/data/com.magnity.viewer/files/model/
 
-The drawer prints the exact path on the device when no model is present.
+The drawer prints the exact path on the device when no model is present. A file here
+**overrides a bundled asset**, so this is how you compare a new checkpoint against the
+shipped one.
 
 ## Naming
 

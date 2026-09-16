@@ -1,3 +1,5 @@
 # ninja log v5
 0	1120	1789537218921971816	CMakeFiles/magviewer_ncnn.dir/ncnn_upscaler.cpp.o	ce8baa1f60677098
 1122	1232	1789537219025972110	/home/delphic/win_share/Delphic/mag160_thermalcam/android2/app/build/intermediates/cxx/Debug/71q1q3e5/obj/arm64-v8a/libmagviewer_ncnn.so	4b02dd9c49b836bf
+29	1885	1789538615202966021	CMakeFiles/magviewer_ncnn.dir/ncnn_upscaler.cpp.o	ce8baa1f60677098
+1886	2117	1789538615426964015	/home/delphic/win_share/Delphic/mag160_thermalcam/android2/app/build/intermediates/cxx/Debug/71q1q3e5/obj/arm64-v8a/libmagviewer_ncnn.so	4b02dd9c49b836bf

@@ -28,6 +28,11 @@ android {
         }
     }
 
+    androidResources {
+        // ncnn model weights must not be compressed — they are mmap'd from the APK
+        noCompress += listOf("param", "bin")
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
