@@ -5,6 +5,7 @@ import android.hardware.usb.UsbDevice
 import android.util.Log
 import cn.com.magnity.coresdk.MagDevice
 import cn.com.magnity.coresdk.types.CameraInfo
+import cn.com.magnity.coresdk.types.CorrectionPara
 import cn.com.magnity.coresdk.types.StatisticInfo
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
@@ -267,6 +268,27 @@ class MagDeviceWrapper {
     /** Shutter/housing temperature, milli-Celsius. GetSenorTemperature is absent here. */
     fun sensorTemp(): Int? =
         device?.getCurrentCameraInnerTemperature()?.takeIf { it != Int.MIN_VALUE }
+
+    /**
+     * Target emissivity, (0, 1]. Goes through the SDK's fix-para block
+     * (`CorrectionPara.fEmissivity` → `SetFixPara`), the same path the Elo wrapper's
+     * `setEmissivity` takes. The block is read back first so distance / ambient / RH keep
+     * the values the SDK holds. Takes effect because [pullFrameData] reads temperature
+     * with external correction enabled.
+     */
+    fun setEmissivity(e: Float): Boolean {
+        val magDev = device ?: return false
+        return try {
+            val p = CorrectionPara()
+            if (!magDev.getFixPara(p)) return false
+            p.fEmissivity = e.coerceIn(0.01f, 1f)
+            val r = magDev.setFixPara(p)
+            Log.i(TAG, "setFixPara emissivity=${p.fEmissivity} → $r")
+            true
+        } catch (e: Throwable) {
+            Log.e(TAG, "setFixPara failed", e); false
+        }
+    }
 
     fun triggerFfc(): Boolean = try {
         device?.triggrtFFC() ?: false

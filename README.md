@@ -33,10 +33,13 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 | 📱 **Works on Android 15+** | Runs where the factory MAG-Cx / MAG-Mx apps no longer do. |
 | 🌡️ **Real absolute temperature** | Straight from the factory SDK — fully corrected, no manual calibration. |
 | 🎯 **MIN / MAX / SPOT markers** | Find the hottest and coldest point instantly, plus a live colour bar and range. |
+| 🎚️ **Adjustable emissivity** | Set ε from 0.10 to 1.00, with one-tap presets for skin, matte paint and wood. |
 | 🚀 **4× AI super-resolution** | A thermal-tuned Real-ESRGAN model on the GPU via **ncnn + Vulkan** turns 160×120 into a crisp 640×480. |
 | ✨ **Anime4K GPU upscaling** | Sharp, clean display with a real-time CNN shader. |
 | 📸 **Snapshots** | One tap saves a PNG. |
 | 🎬 **Video recording** | Hardware **HEVC/H.265** encoding with automatic H.264 fallback. |
+| 📍 **Optional geo-tag** | Stamp precise GPS location into snapshots and videos — off until you turn it on. |
+| 💾 **Remembers your setup** | Palette, range, rotation, upscaler, emissivity and more survive restarts. |
 | 🚫 **No watermark** | Your images are yours. |
 | 👍 **Compact portrait UI** | Designed for one-handed use in the field. |
 

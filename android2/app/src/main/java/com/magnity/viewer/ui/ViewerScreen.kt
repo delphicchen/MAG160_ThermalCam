@@ -1,5 +1,8 @@
 package com.magnity.viewer.ui
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -94,10 +97,12 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
 
         // readouts; each one is also its marker's on/off switch
         Row(horizontalArrangement = Arrangement.spacedBy(20.dp),
-            verticalAlignment = Alignment.Bottom) {
+            verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth()) {
             Readout("MIN", fr?.tempMin, COLD, vm.showMinRoi) { vm.showMinRoi = !vm.showMinRoi }
             Readout("MAX", fr?.tempMax, HOT, vm.showMaxRoi) { vm.showMaxRoi = !vm.showMaxRoi }
             Readout("SPOT", vm.spotCelsius(), Color.White, vm.spot != null) { vm.spot = null }
+            Spacer(Modifier.weight(1f))
+            Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp)
         }
 
         // Display range in one fixed-height row: a thin two-thumb bar, draggable in
@@ -395,6 +400,54 @@ private fun DrawerControls(vm: ViewerViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.mirror, onCheckedChange = { vm.mirror = it })
             Text("Mirror ↔", color = FG)
+        }
+
+        HorizontalDivider(color = Color(0xFF30363D))
+
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Emissivity ε", color = FG, modifier = Modifier.weight(1f))
+                Text("%.2f".format(vm.emissivity), color = ACCENT, fontSize = 13.sp)
+            }
+            Slider(vm.emissivity,
+                   onValueChange = { vm.emissivity = (it * 100).roundToInt() / 100f },
+                   valueRange = 0.10f..1f)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("1.00" to 1f, "Skin .98" to 0.98f, "Matte .95" to 0.95f,
+                       "Wood .90" to 0.90f).forEach { (label, e) ->
+                    Chip(label, kotlin.math.abs(vm.emissivity - e) < 0.005f,
+                         Modifier.weight(1f)) { vm.emissivity = e }
+                }
+            }
+            Text("Shiny metal reads far too cold at any ε — tape or paint a matte patch.",
+                 color = DIM, fontSize = 9.sp)
+        }
+
+        HorizontalDivider(color = Color(0xFF30363D))
+
+        val locationPermission = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { granted ->
+            vm.geotag = granted[Manifest.permission.ACCESS_FINE_LOCATION] == true
+            if (!vm.geotag) vm.notice = "Geo-tag needs precise location permission"
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(vm.geotag, onCheckedChange = { on ->
+                if (on && !vm.hasLocationPermission()) {
+                    locationPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
+                                                      Manifest.permission.ACCESS_COARSE_LOCATION))
+                } else {
+                    vm.geotag = on
+                }
+            })
+            Column {
+                Text("Geo-tag snapshots & video", color = FG)
+                if (vm.geotag) {
+                    Text(vm.location?.let { "fix ±%.0f m".format(it.accuracy) }
+                             ?: "waiting for location fix…",
+                         color = DIM, fontSize = 10.sp)
+                }
+            }
         }
 
         HorizontalDivider(color = Color(0xFF30363D))

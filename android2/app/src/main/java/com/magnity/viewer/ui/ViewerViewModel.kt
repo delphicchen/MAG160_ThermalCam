@@ -1,16 +1,23 @@
 package com.magnity.viewer.ui
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.location.LocationRequest
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.magnity.viewer.media.FrameComposer
@@ -40,6 +47,7 @@ data class FrameResult(
     val fpa: Long?,
     val scaleLoC: Float,          // display range in °C (colour bar labels)
     val scaleHiC: Float,
+    val emissivity: Float,        // ε in effect for this frame (stamped into captures)
 )
 
 /**
@@ -66,24 +74,53 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var status by mutableStateOf("disconnected"); private set
     var connected by mutableStateOf(false); private set
     var paused by mutableStateOf(false)
-    var paletteName by mutableStateOf(Palettes.NAMES.first())
-    var autoScale by mutableStateOf(true)
+
+    // User settings persist across runs (SharedPreferences); runtime state below does not.
+    private val prefs = app.getSharedPreferences("viewer_settings", Context.MODE_PRIVATE)
+    private fun pref(key: String, def: Boolean, onSet: (Boolean) -> Unit = {}) =
+        Persisted(prefs, key, def, { k, d -> getBoolean(k, d) }, { k, v -> putBoolean(k, v) },
+                  onSet = onSet)
+    private fun pref(key: String, def: Int) =
+        Persisted(prefs, key, def, { k, d -> getInt(k, d) }, { k, v -> putInt(k, v) })
+    private fun pref(key: String, def: Float, skipWrite: () -> Boolean = { false },
+                     onSet: (Float) -> Unit = {}) =
+        Persisted(prefs, key, def, { k, d -> getFloat(k, d) }, { k, v -> putFloat(k, v) },
+                  skipWrite, onSet)
+
+    var paletteName by Persisted(prefs, "palette", Palettes.NAMES.first(),
+        { k, d -> getString(k, d)?.takeIf { it in Palettes.NAMES } ?: d },
+        { k, v -> putString(k, v) })
+    var autoScale: Boolean by pref("auto_scale", true) { auto ->
+        // the auto range is kept in memory only; save it when it becomes the manual range
+        if (!auto) prefs.edit().putFloat("scale_lo", scaleLo).putFloat("scale_hi", scaleHi).apply()
+    }
     // Module spec measurement range — the SDK's CameraInfo does not report one, so the
     // manual scale slider spans this fixed domain.
     val tempMinC = -20f
     val tempMaxC = 150f
-    var scaleLo by mutableFloatStateOf(0f)          // manual display range, °C
-    var scaleHi by mutableFloatStateOf(100f)
+    var scaleLo: Float by pref("scale_lo", 0f, skipWrite = { autoScale })   // manual display range, °C
+    var scaleHi: Float by pref("scale_hi", 100f, skipWrite = { autoScale })
     // default = camera plugged straight into the phone's USB-C port, portrait UI
-    var rotation by mutableIntStateOf(90)           // 0/90/180/270 clockwise
-    var mirror by mutableStateOf(true)
-    var upscale by mutableIntStateOf(4)             // display upscale 1/2/4 (4 → 640×480)
-    var upscaler by mutableStateOf(Upscaler.ANIME4K)
-    var spatialDenoise by mutableStateOf(true)
-    var temporalDenoise by mutableStateOf(true)     // display only — readouts stay per-frame
-    var temporalStrength by mutableFloatStateOf(0.85f)
-    var showMaxRoi by mutableStateOf(true)
-    var showMinRoi by mutableStateOf(true)
+    var rotation by pref("rotation", 90)            // 0/90/180/270 clockwise
+    var mirror by pref("mirror", true)
+    var upscale by pref("upscale", 4)               // display upscale 1/2/4 (4 → 640×480)
+    var upscaler by Persisted(prefs, "upscaler", Upscaler.ANIME4K,
+        { k, d -> runCatching { Upscaler.valueOf(getString(k, d.name)!!) }.getOrDefault(d) },
+        { k, v -> putString(k, v.name) })
+    var spatialDenoise by pref("spatial_denoise", true)
+    var temporalDenoise by pref("temporal_denoise", true)   // display only — readouts stay per-frame
+    var temporalStrength by pref("temporal_strength", 0.85f)
+    var showMaxRoi by pref("show_max", true)
+    var showMinRoi by pref("show_min", true)
+    /** Target emissivity handed to the SDK, (0, 1]; applied on connect and on change. */
+    var emissivity: Float by pref("emissivity", 1.0f, onSet = { applyEmissivity() })
+    /** Write the phone's location into snapshots and videos (needs precise location). */
+    var geotag: Boolean by pref("geotag", false) { updateLocationUpdates() }
+    /** Latest fix while [geotag] is on; null = none yet. */
+    var location by mutableStateOf<Location?>(null); private set
+    private val locationListener = LocationListener { location = it }
+    private var locationActive = false
+
     var spot: Pair<Int, Int>? by mutableStateOf(null)   // oriented (x,y), null = none
 
     var lastFrame by mutableStateOf<FrameResult?>(null); private set
@@ -100,6 +137,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var loop: Job? = null
 
     init {
+        // permission may have been revoked in system settings since the last run
+        if (geotag && !hasLocationPermission()) geotag = false else updateLocationUpdates()
+
         // Poll-based auto-connect — USB attach broadcasts are unreliable on newer
         // Androids; scanning UsbManager every 2 s always works.
         viewModelScope.launch(Dispatchers.IO) {
@@ -148,6 +188,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 MagDeviceWrapper.probeNativeLib()?.let { throw it }
                 sdk.open(ctx)
                 sdk.start()
+                if (!sdk.setEmissivity(emissivity)) Log.w(TAG, "emissivity not applied on connect")
                 connected = true
                 lastDevId = "${device.vendorId}:${device.productId}:${device.deviceId}"
                 status = "connected ${sdk.width}×${sdk.height}"
@@ -221,7 +262,64 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private var emissivityJob: Job? = null
+
+    /** Slider drags fire on every step — push only the value it settles on. */
+    private fun applyEmissivity() {
+        emissivityJob?.cancel()
+        emissivityJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(150)
+            if (connected && !sdk.setEmissivity(emissivity)) notice = "Emissivity not applied"
+        }
+    }
+
+    // ---- geo-tag --------------------------------------------------------------
+
+    fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** Listen for fixes only while geo-tagging is on; a listener on the main executor just
+     *  stores the fix, so nothing touches the processing loop. */
+    @SuppressLint("MissingPermission")
+    private fun updateLocationUpdates() {
+        val ctx = getApplication<Application>()
+        val lm = ctx.getSystemService(LocationManager::class.java) ?: return
+        val want = geotag && hasLocationPermission()
+        if (want == locationActive) return
+        if (!want) {
+            runCatching { lm.removeUpdates(locationListener) }
+            locationActive = false
+            location = null
+            return
+        }
+        val providers = if (lm.hasProvider(LocationManager.FUSED_PROVIDER))
+            listOf(LocationManager.FUSED_PROVIDER)
+        else listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+                .filter { lm.hasProvider(it) }
+        val req = LocationRequest.Builder(10_000)
+            .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
+            .setMinUpdateDistanceMeters(5f)
+            .build()
+        try {
+            location = providers.mapNotNull { lm.getLastKnownLocation(it) }.maxByOrNull { it.time }
+            providers.forEach { lm.requestLocationUpdates(it, req, ctx.mainExecutor, locationListener) }
+            locationActive = true
+        } catch (e: Exception) {
+            Log.e(TAG, "location updates failed", e)
+            notice = "Location unavailable: ${e.message}"
+        }
+    }
+
+    /** The fix to embed in a capture: null when geo-tag is off or the fix is over 10 min old. */
+    private fun captureLocation(): Location? =
+        location?.takeIf { geotag && System.currentTimeMillis() - it.time < 10 * 60_000 }
+
     override fun onCleared() {
+        if (locationActive) {
+            getApplication<Application>().getSystemService(LocationManager::class.java)
+                ?.let { lm -> runCatching { lm.removeUpdates(locationListener) } }
+        }
         loop?.cancel()
         synchronized(recLock) { recorder?.also { recorder = null } }?.stop()
         anime4k?.close()
@@ -324,6 +422,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             minPos = mnI, maxPos = mxI,
             fpa = sdk.sensorTemp()?.toLong(),
             scaleLoC = slo, scaleHiC = shi,
+            emissivity = emissivity,
         )
     }
 
@@ -429,9 +528,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val fr = lastFrame ?: return
         val ctx = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
+            val loc = captureLocation()
             notice = try {
-                MediaSaver.savePng(ctx, composite(fr))
-                    ?.let { "Snapshot saved to Pictures/MagViewer" } ?: "Snapshot failed"
+                MediaSaver.savePng(ctx, composite(fr), loc)
+                    ?.let { (_, tagged) -> "Snapshot saved to Pictures/MagViewer" + geoSuffix(loc, tagged) }
+                    ?: "Snapshot failed"
             } catch (e: Throwable) {
                 Log.e(TAG, "screenshot failed", e); "Snapshot failed: ${e.message}"
             }
@@ -445,7 +546,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val (w, h) = FrameComposer.outSize(fr)
             try {
-                synchronized(recLock) { recorder = VideoRecorder(ctx, w, h) }
+                val loc = captureLocation()
+                synchronized(recLock) { recorder = VideoRecorder(ctx, w, h, loc) }
+                if (geotag && loc == null) notice = "Recording without geo-tag — no location fix yet"
                 recordStartMs = System.currentTimeMillis()
                 recording = true
             } catch (e: Throwable) {
@@ -455,13 +558,21 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun geoSuffix(loc: Location?, tagged: Boolean) = when {
+        !geotag -> ""
+        loc == null -> " (no location fix — not geo-tagged)"
+        tagged -> " (geo-tagged)"
+        else -> " (geo-tag failed)"
+    }
+
     fun stopRecording() {
         val r = synchronized(recLock) { recorder.also { recorder = null } } ?: return
         recording = false
         viewModelScope.launch(Dispatchers.IO) {
             val uri = r.stop()
             notice = if (uri != null)
-                         "Video saved to Movies/MagViewer (${r.codecName}, ${r.frames} frames)"
+                         "Video saved to Movies/MagViewer (${r.codecName}, ${r.frames} frames" +
+                             (if (r.geoTagged) ", geo-tagged)" else ")")
                      else "Recording failed (no usable frames)"
         }
     }

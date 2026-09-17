@@ -8,6 +8,8 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.location.Location
+import android.media.ExifInterface
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
@@ -20,9 +22,13 @@ import android.provider.MediaStore
 import android.util.Log
 import android.view.Surface
 import com.magnity.viewer.ui.FrameResult
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
+import kotlin.math.abs
+import kotlin.math.roundToLong
 
 /**
  * Screenshot / video output. Everything here runs off the main thread: screenshots on
@@ -102,7 +108,8 @@ object FrameComposer {
         val hi = "%.1f°C".format(fr.scaleHiC)
         c.drawText(hi, ow - 8f - text.measureText(hi), y2, text)
         val mid = "MAX %.1f  MIN %.1f".format(fr.tempMax, fr.tempMin) +
-            (spotC?.let { "  SPOT %.1f".format(it) } ?: "")
+            (spotC?.let { "  SPOT %.1f".format(it) } ?: "") +
+            "  ε%.2f".format(fr.emissivity)
         c.drawText(mid, (ow - text.measureText(mid)) / 2f, y2, text)
         return out
     }
@@ -111,23 +118,63 @@ object FrameComposer {
 object MediaSaver {
     private fun stamp() = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
-    fun savePng(ctx: Context, bmp: Bitmap): Uri? {
-        val cr = ctx.contentResolver
-        val v = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "MagViewer_${stamp()}.png")
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/MagViewer")
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
+    /**
+     * Save [bmp] as PNG. With a [location] the PNG gets EXIF GPS tags; the image is still
+     * saved untagged if tagging fails. Returns the Uri and whether the tag made it in.
+     */
+    fun savePng(ctx: Context, bmp: Bitmap, location: Location? = null): Pair<Uri, Boolean>? {
+        // Tag a temp file first: EXIF rewriting needs a seekable file, which a MediaStore
+        // output stream is not.
+        val tmp = File.createTempFile("snap", ".png", ctx.cacheDir)
+        try {
+            tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            val tagged = location != null && runCatching {
+                ExifInterface(tmp.path).apply { setGps(location) }.saveAttributes()
+            }.onFailure { Log.e("MagViewer", "EXIF GPS failed", it) }.isSuccess
+
+            val cr = ctx.contentResolver
+            val v = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, "MagViewer_${stamp()}.png")
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/MagViewer")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v) ?: return null
+            return try {
+                cr.openOutputStream(uri)?.use { out -> tmp.inputStream().use { it.copyTo(out) } }
+                cr.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+                          null, null)
+                uri to tagged
+            } catch (e: Throwable) {
+                cr.delete(uri, null, null); throw e
+            }
+        } finally {
+            tmp.delete()
         }
-        val uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v) ?: return null
-        return try {
-            cr.openOutputStream(uri)?.use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            cr.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
-                      null, null)
-            uri
-        } catch (e: Throwable) {
-            cr.delete(uri, null, null); throw e
+    }
+
+    /** EXIF GPS block: degrees/minutes/seconds rationals, refs, altitude and UTC fix time. */
+    private fun ExifInterface.setGps(loc: Location) {
+        fun dms(v: Double): String {
+            val a = abs(v)
+            val d = a.toInt()
+            val m = ((a - d) * 60).toInt()
+            val s = ((a - d - m / 60.0) * 3600 * 10_000).roundToLong()
+            return "$d/1,$m/1,$s/10000"
         }
+        setAttribute(ExifInterface.TAG_GPS_LATITUDE, dms(loc.latitude))
+        setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, if (loc.latitude >= 0) "N" else "S")
+        setAttribute(ExifInterface.TAG_GPS_LONGITUDE, dms(loc.longitude))
+        setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, if (loc.longitude >= 0) "E" else "W")
+        if (loc.hasAltitude()) {
+            setAttribute(ExifInterface.TAG_GPS_ALTITUDE, "${(abs(loc.altitude) * 100).roundToLong()}/100")
+            setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, if (loc.altitude >= 0) "0" else "1")
+        }
+        val utc = TimeZone.getTimeZone("UTC")
+        setAttribute(ExifInterface.TAG_GPS_DATESTAMP,
+            SimpleDateFormat("yyyy:MM:dd", Locale.US).apply { timeZone = utc }.format(Date(loc.time)))
+        setAttribute(ExifInterface.TAG_GPS_TIMESTAMP,
+            SimpleDateFormat("H/1,m/1,s/1", Locale.US).apply { timeZone = utc }.format(Date(loc.time)))
     }
 
     fun newVideoUri(ctx: Context): Uri? {
@@ -146,7 +193,9 @@ object MediaSaver {
  * input Surface, so their timestamps are the post time — variable frame rate follows the
  * camera exactly, no pacing needed.
  */
-class VideoRecorder(private val ctx: Context, val width: Int, val height: Int) {
+class VideoRecorder(
+    private val ctx: Context, val width: Int, val height: Int, location: Location? = null,
+) {
     private val uri: Uri = MediaSaver.newVideoUri(ctx) ?: error("MediaStore insert failed")
     private val pfd: ParcelFileDescriptor
     private val muxer: MediaMuxer
@@ -160,10 +209,15 @@ class VideoRecorder(private val ctx: Context, val width: Int, val height: Int) {
 
     /** "HEVC" or "H.264" — whichever encoder was picked. */
     val codecName: String
+    /** True when the MP4 carries the capture location (set before the muxer starts). */
+    val geoTagged: Boolean
 
     init {
         pfd = ctx.contentResolver.openFileDescriptor(uri, "rw") ?: error("open mp4 failed")
         muxer = MediaMuxer(pfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        geoTagged = location != null && runCatching {
+            muxer.setLocation(location.latitude.toFloat(), location.longitude.toFloat())
+        }.onFailure { Log.e("MagViewer", "MP4 location failed", it) }.isSuccess
         fun format(mime: String, bitrate: Int) =
             MediaFormat.createVideoFormat(mime, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT,

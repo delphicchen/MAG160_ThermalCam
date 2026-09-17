@@ -31,3 +31,28 @@
    - 初始化或 shader 失敗 → 自動退回 bicubic 並提示。
    - 抽屜：放大方式 Bicubic / Anime4K；Temporal denoise 開關 + 強度。
    - 致謝：THIRD_PARTY_NOTICES.md + assets/anime4k/LICENSE。
+
+## 第三階段（2026-09-17，已實作）
+10. **發射率可調**（抽屜）
+    - SDK 有現成路徑：`CorrectionPara.fEmissivity` → `MagDevice.setFixPara(CorrectionPara)`
+      （Elo `ThermalController.setEmissivity(double)` 就是這樣做的，見 `lib/thermallib-release.aar`）。
+      目前 ctx+0x1900 預設 1.0，parser 夾在 (0,1]（REVERSE_ENGINEERING.md §emissivity）。
+    - 抽屜加滑桿 0.10–1.00（step 0.01）+ 常用材質快捷值；在 `MagDeviceWrapper` 加
+      `setEmissivity()`（先 getFixPara 再改 ε，保留其他參數），連線/重連後重新套用，
+      拖動時 150 ms debounce。
+    - 截圖/錄影底部資訊列帶上當下 ε（`FrameResult.emissivity`）；主畫面讀值列顯示 ε。
+      （android2 目前沒有 DDT 存檔。）
+11. **可選 geo-tag（精確位置）**
+    - 抽屜開關，預設關；開啟時才要求 `ACCESS_FINE_LOCATION`（目前 manifest 沒有任何
+      location 權限），拒絕就自動關回去。
+    - 位置取得：LocationManager（有 fused provider 用 fused，否則 GPS+network），
+      10 s / 5 m 更新，listener 只存 fix，不擋處理迴圈；fix 超過 10 分鐘不寫。
+    - PNG：平台 `android.media.ExifInterface` 寫 GPS 欄位（先寫暫存檔再複製進 MediaStore，
+      標記失敗仍存未標記的圖並提示）；
+      MP4：`MediaMuxer.setLocation(lat, lon)`（start 前呼叫）。
+12. **抽屜設定固化**
+    - 要存：palette、autoScale/手動範圍、mirror/旋轉、upscaler、spatial/temporal denoise
+      （含強度）、showMax/MinRoi、發射率、geo-tag 開關。
+      不存：spot、paused、recording 等執行期狀態。
+    - `ui/Persisted.kt`：SharedPreferences 支撐的 Compose state delegate，setter 寫入、
+      建立時讀回。auto range 每幀變動不寫盤，切到手動時才存。
