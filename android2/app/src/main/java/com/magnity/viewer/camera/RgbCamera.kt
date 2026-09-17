@@ -1,10 +1,15 @@
 package com.magnity.viewer.camera
 
 import android.content.Context
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.util.Log
 import android.util.Size
 import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
@@ -57,6 +62,14 @@ class RgbCamera(private val context: Context) {
 
     fun latest(): LumaFrame? = latestFrame
 
+    // Focus-distance reporting, read for the fusion distance source. Calibration
+    // level is a static lens characteristic (0 UNCALIBRATED / 1 APPROXIMATE /
+    // 2 CALIBRATED); diopters is the latest LENS_FOCUS_DISTANCE (1/m, 0 = ∞).
+    @Volatile var focusCalibration: Int? = null; private set
+    @Volatile var minFocusDiopters: Float? = null; private set
+    @Volatile var focusDiopters: Float? = null; private set
+    @Volatile var afActive = false; private set
+
     /** Bind the analysis stream. Main thread only; CAMERA permission must be granted. */
     fun start(onError: (String) -> Unit = {}) {
         if (running) return
@@ -82,12 +95,27 @@ class RgbCamera(private val context: Context) {
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 // Stabilisation shifts the image relative to the rigidly mounted thermal
-                // camera, so ask for it off. A HAL may ignore the request.
+                // camera, so ask for it off. A HAL may ignore the request. An
+                // analysis-only use case may not enable continuous AF by itself, so
+                // request it explicitly and read the lens focus distance per frame —
+                // the fusion overlay uses it as the AUTO object distance.
                 Camera2Interop.Extender(builder)
                     .setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
                     .setCaptureRequestOption(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                    .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE,
+                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                    .setSessionCaptureCallback(object : CameraCaptureSession.CaptureCallback() {
+                        override fun onCaptureCompleted(
+                            session: CameraCaptureSession, request: CaptureRequest,
+                            result: TotalCaptureResult,
+                        ) {
+                            focusDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+                            val af = result.get(CaptureResult.CONTROL_AF_STATE)
+                            afActive = af != null && af != CaptureResult.CONTROL_AF_STATE_INACTIVE
+                        }
+                    })
                 val analysis = builder.build()
 
                 val exec = Executors.newSingleThreadExecutor()
@@ -123,6 +151,15 @@ class RgbCamera(private val context: Context) {
                 // Registration is only valid for one lens: hold the logical camera at 1x so
                 // the HAL has no reason to hand over to the ultra-wide or telephoto.
                 camera.cameraControl.setZoomRatio(1f)
+                // Whether the focus distance above can be trusted: only APPROXIMATE
+                // (1) or CALIBRATED (2) lenses report usable values.
+                runCatching {
+                    val info = Camera2CameraInfo.from(camera.cameraInfo)
+                    focusCalibration = info.getCameraCharacteristic(
+                        CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION)
+                    minFocusDiopters = info.getCameraCharacteristic(
+                        CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+                }.onFailure { Log.w(TAG, "focus characteristics unavailable", it) }
             } catch (e: Exception) {
                 Log.e(TAG, "camera start failed", e)
                 running = false
@@ -139,5 +176,9 @@ class RgbCamera(private val context: Context) {
         analysisExecutor?.shutdown()
         analysisExecutor = null
         latestFrame = null
+        focusDiopters = null
+        afActive = false
+        focusCalibration = null
+        minFocusDiopters = null
     }
 }

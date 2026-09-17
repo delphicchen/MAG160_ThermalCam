@@ -109,3 +109,22 @@ P2 → P3（先用手動 H∞：比例/平移/旋轉滑桿，等同舊版）→ 
   - 手動對齊：主畫面 ZOOM / X / Y 滑桿（選單「Align on live image」開啟），鏡頭旋轉在選單。
   - Wide 模式：`FrameResult.inset` 帶熱像位置，標記、SPOT 點擊、截圖/錄影都經它換算。
   - 未做：物距補償、點選校正（P1/P4）、自動微調（P5）。尚未實機測試。
+- 2026-09-17　P3 物距補償完成（同一分支，未實機測試）。
+  - 多距離校正：對已知距離物體用 ZOOM / X / Y 滑桿對齊，Align 面板「Save…」輸入公尺（或 ∞）
+    存成樣本 `(invZ, zoom, dx, dy)`，JSON 存 `fusion_calib` pref；選單列出每筆殘差
+    （換算成熱像原生像素）可單筆刪除或「Clear all」；同距離重存會覆蓋舊樣本。
+  - 擬合在 `pipeline/FusionCalibration.kt`（純 Kotlin、無 Android 型別，可離機單測）：
+    zoom 取樣本平均，dx/dy 對 invZ 做最小平方直線（單筆或同距離 → 常數）；
+    無樣本時行為與舊版手動對齊完全一致。`fuse()` 每幀依目前 invZ 取擬合值，
+    截圖/錄影自動沿用（對齊中仍顯示手動滑桿值，所見即所存）。
+  - 物距來源三選一（選單，固化）：手動滑桿（1/Z 線性，1.5/2/3/5/10/∞ 刻度）／
+    固定 ∞／Auto（鏡頭對焦距離）。實際距離顯示在主畫面 ε 旁（`≈3.0 m` / `∞`）。
+  - 對焦診斷：`RgbCamera` 以 Camera2Interop 請求 `CONTROL_AF_MODE_CONTINUOUS_VIDEO`
+    （analysis-only 預設不一定開），逐幀讀 `LENS_FOCUS_DISTANCE` 與 AF 狀態，
+    綁定後讀 `LENS_INFO_FOCUS_DISTANCE_CALIBRATION` / `MINIMUM_FOCUS_DISTANCE`；
+    選單一行顯示 `Focus: APPROXIMATE · 0.33 D (3.0 m) · AF on` 或 `not reported`。
+  - 信任條件：僅 APPROXIMATE/CALIBRATED 允許 Auto（UNCALIBRATED 時選項停用並註明原因）；
+    對焦距離未回報時降回手動並在選單顯示原因。Auto 對 1/Z 做指數平滑（α=0.15/幀）
+    避免 AF 拉鋸抖動。
+  - 未做：P1/P4 點選校正、P5 自動微調；Auto 物距在 Xiaomi 14T Pro 的對焦校正等級
+    與回報品質仍需實機確認（plan 內的 adb 查法）。

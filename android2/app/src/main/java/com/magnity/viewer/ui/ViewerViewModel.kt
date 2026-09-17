@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.hardware.camera2.CameraMetadata
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -26,6 +27,7 @@ import com.magnity.viewer.media.MediaSaver
 import com.magnity.viewer.media.VideoRecorder
 import com.magnity.viewer.pipeline.Anime4kGpu
 import com.magnity.viewer.pipeline.Fusion
+import com.magnity.viewer.pipeline.FusionCalibration
 import com.magnity.viewer.pipeline.ImageOps
 import com.magnity.viewer.pipeline.NcnnUpscaler
 import com.magnity.viewer.pipeline.Palettes
@@ -68,6 +70,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         const val TAG = "MagViewer"
         const val ACTION_USB_PERMISSION = "com.magnity.viewer.USB_PERMISSION"
+        /** AUTO 1/Z smoothing factor per thermal frame (~0.3 s time constant). */
+        private const val AUTO_INVZ_ALPHA = 0.15f
     }
 
     enum class Upscaler { BICUBIC, ANIME4K, NCNN }
@@ -139,6 +143,33 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var fusionRotation by pref("fusion_rotation", 90)   // visible sensor → portrait
     /** The align sliders replace the range/action rows while this is on. */
     var fusionAligning by mutableStateOf(false)
+
+    // ---- distance-compensated registration ----
+    /** Where the object distance comes from; AUTO degrades to MANUAL while the
+     *  lens focus distance is unreported or untrusted (see [effectiveDistanceSource]). */
+    var fusionDistanceSource by Persisted(prefs, "fusion_dist_src",
+        FusionCalibration.DistanceSource.MANUAL,
+        { k, d -> runCatching {
+            FusionCalibration.DistanceSource.valueOf(getString(k, d.name)!!) }.getOrDefault(d) },
+        { k, v -> putString(k, v.name) })
+    /** Manual slider position, linear in 1/Z over 0…[FusionCalibration.MAX_INVZ]. */
+    var fusionManualInvZ by pref("fusion_manual_invz", 1f / 3f)
+    /** Saved alignments at known distances, as a small JSON string. */
+    var fusionCalibJson: String by Persisted(prefs, "fusion_calib", "",
+        { k, d -> getString(k, d) ?: d }, { k, v -> putString(k, v) },
+        onSet = { calibFit = FusionCalibration.fit(FusionCalibration.decodeSamples(it)) })
+    var calibSamples by mutableStateOf(FusionCalibration.decodeSamples(fusionCalibJson))
+        private set
+    @Volatile private var calibFit = FusionCalibration.fit(calibSamples)
+    /** Fit over [calibSamples]; not [FusionCalibration.Fit.usable] until the first sample. */
+    val calibFitState: FusionCalibration.Fit get() = calibFit
+    /** Distance currently driving the overlay ("≈3.0 m" / "∞"), updated per frame in fuse(). */
+    var fusionDistanceLabel by mutableStateOf("∞"); private set
+
+    // RGB focus diagnostics, mirrored from RgbCamera (~2 Hz) for the drawer line.
+    var focusCalibration by mutableStateOf<Int?>(null); private set
+    var focusDiopters by mutableStateOf<Float?>(null); private set
+    var afActive by mutableStateOf(false); private set
     private val rgbCameraLazy = lazy { RgbCamera(getApplication()) }
     private val rgbCamera by rgbCameraLazy
     private var appVisible = true
@@ -188,6 +219,19 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 delay(2000)
+            }
+        }
+
+        // Mirror the RGB focus diagnostics into Compose state (~2 Hz) so the drawer
+        // line updates without the camera executor touching UI state itself.
+        viewModelScope.launch {
+            while (isActive) {
+                if (rgbCameraLazy.isInitialized()) {
+                    focusCalibration = rgbCamera.focusCalibration
+                    focusDiopters = rgbCamera.focusDiopters
+                    afActive = rgbCamera.afActive
+                }
+                delay(500)
             }
         }
     }
@@ -364,6 +408,84 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         updateFusionCamera()
     }
 
+    // ---- distance compensation --------------------------------------------------
+
+    /** The lens focus distance is trustworthy only at these calibration levels. */
+    fun focusTrusted(): Boolean =
+        focusCalibration == CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_APPROXIMATE ||
+        focusCalibration == CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_CALIBRATED
+
+    private fun autoDistanceReady(): Boolean = focusTrusted() && focusDiopters != null
+
+    /** Distance source actually driving the overlay: AUTO falls back to MANUAL
+     *  while the focus distance is unreported or UNCALIBRATED. */
+    fun effectiveDistanceSource(): FusionCalibration.DistanceSource =
+        if (fusionDistanceSource == FusionCalibration.DistanceSource.AUTO && !autoDistanceReady())
+            FusionCalibration.DistanceSource.MANUAL
+        else fusionDistanceSource
+
+    /** Display text for an inverse distance: "∞", "1.5 m", "10 m". */
+    fun distanceText(invZ: Float): String {
+        if (invZ <= 1e-4f) return "∞"
+        val z = 1f / invZ
+        return if (z >= 10f) "%.0f m".format(z) else "%.1f m".format(z)
+    }
+
+    /** Save the current slider alignment as a sample at 1/invZ; the same distance
+     *  (within 1 cm⁻¹… tolerance) replaces its previous sample. */
+    fun addCalibSample(invZ: Float, zoom: Float, dx: Float, dy: Float) {
+        val rest = calibSamples.filter { kotlin.math.abs(it.invZ - invZ) > 1e-4f }
+        calibSamples = (rest + FusionCalibration.CalibSample(invZ, zoom, dx, dy))
+            .sortedByDescending { it.invZ }
+        fusionCalibJson = FusionCalibration.encodeSamples(calibSamples)
+    }
+
+    fun deleteCalibSample(index: Int) {
+        calibSamples = calibSamples.filterIndexed { i, _ -> i != index }
+        fusionCalibJson = FusionCalibration.encodeSamples(calibSamples)
+    }
+
+    fun clearCalibSamples() {
+        calibSamples = emptyList()
+        fusionCalibJson = FusionCalibration.encodeSamples(calibSamples)
+    }
+
+    // exponential smoothing of the AUTO 1/Z so AF hunting doesn't jitter the overlay
+    private var autoInvZ = 0f
+    private var lastDistSrc: FusionCalibration.DistanceSource? = null
+
+    /** Inverse distance in effect this frame (processing thread). */
+    private fun currentInvZ(): Float {
+        val src = effectiveDistanceSource()
+        if (src != lastDistSrc) {           // seed the filter on entry — no jump
+            lastDistSrc = src
+            if (src == FusionCalibration.DistanceSource.AUTO)
+                autoInvZ = rgbCamera.focusDiopters?.coerceAtLeast(0f) ?: 0f
+        }
+        return when (src) {
+            FusionCalibration.DistanceSource.INFINITY -> 0f
+            FusionCalibration.DistanceSource.MANUAL -> fusionManualInvZ
+            FusionCalibration.DistanceSource.AUTO -> {
+                // diopters are already 1/Z in m⁻¹; 0 = infinity focus
+                val d = rgbCamera.focusDiopters
+                if (d != null && d >= 0f) autoInvZ += AUTO_INVZ_ALPHA * (d - autoInvZ)
+                autoInvZ
+            }
+        }
+    }
+
+    /** The registration in effect this frame: the fit evaluated at [invZ] once
+     *  samples exist, else the manual sliders (also while aligning, so the
+     *  sliders move the overlay live). */
+    private data class Registration(val zoom: Float, val dx: Float, val dy: Float)
+
+    private fun registration(invZ: Float): Registration {
+        if (fusionAligning) return Registration(fusionZoom, fusionDx, fusionDy)
+        val f = calibFit
+        return if (f.usable) Registration(f.zoom, f.dxAt(invZ), f.dyAt(invZ))
+               else Registration(fusionZoom, fusionDx, fusionDy)
+    }
+
     private var edgeCache: FloatArray? = null
     private var edgeCacheId = -1L
 
@@ -374,12 +496,15 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun fuse(bmp: android.graphics.Bitmap): Pair<android.graphics.Bitmap, android.graphics.RectF?>? {
         val fr = rgbCamera.latest() ?: return null
+        val invZ = currentInvZ()
+        val reg = registration(invZ)
+        fusionDistanceLabel = if (invZ <= 1e-4f) "∞" else "≈" + distanceText(invZ)
         val w = bmp.width; val h = bmp.height
         val px = IntArray(w * h)
         bmp.getPixels(px, 0, w, 0, 0, w, h)
         if (fusionMode == Fusion.Mode.SEARCH) {
             val r = Fusion.composeWide(px, w, h, fr.data, fr.width, fr.height, fusionStrength,
-                                       fusionZoom, fusionDx, fusionDy, fusionRotation)
+                                       reg.zoom, reg.dx, reg.dy, fusionRotation)
             return android.graphics.Bitmap.createBitmap(r.pixels, r.width, r.height,
                        android.graphics.Bitmap.Config.ARGB_8888) to
                 android.graphics.RectF(r.rectL, r.rectT, r.rectL + r.rectW, r.rectT + r.rectH)
@@ -394,7 +519,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             edgeCache
         } else null
         Fusion.compose(px, w, h, fr.data, fr.width, fr.height, edge, fusionMode, fusionStrength,
-                       fusionZoom, fusionDx, fusionDy, fusionRotation)
+                       reg.zoom, reg.dx, reg.dy, fusionRotation)
         return android.graphics.Bitmap.createBitmap(px, w, h,
                    android.graphics.Bitmap.Config.ARGB_8888) to null
     }

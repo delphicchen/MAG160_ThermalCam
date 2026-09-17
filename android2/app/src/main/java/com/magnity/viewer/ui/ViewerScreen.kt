@@ -1,6 +1,7 @@
 package com.magnity.viewer.ui
 
 import android.Manifest
+import android.hardware.camera2.CameraMetadata
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -25,6 +26,9 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
@@ -33,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.magnity.viewer.pipeline.Fusion
+import com.magnity.viewer.pipeline.FusionCalibration
 import com.magnity.viewer.pipeline.Palettes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -107,6 +112,7 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             Readout("MAX", fr?.tempMax, HOT, vm.showMaxRoi) { vm.showMaxRoi = !vm.showMaxRoi }
             Readout("SPOT", vm.spotCelsius(), Color.White, vm.spot != null) { vm.spot = null }
             Spacer(Modifier.weight(1f))
+            if (vm.fusionOn) Text(vm.fusionDistanceLabel, color = DIM, fontSize = 12.sp)
             Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp)
         }
 
@@ -507,11 +513,55 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
                     }
                 }
             }
+
+            FocusLine(vm)
+
+            Text("Object distance", color = DIM, fontSize = 11.sp)
+            val distSrc = vm.fusionDistanceSource
+            val effSrc = vm.effectiveDistanceSource()
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Chip("Auto focus", distSrc == FusionCalibration.DistanceSource.AUTO,
+                     Modifier.weight(1f),
+                     enabled = vm.focusCalibration !=
+                         CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_UNCALIBRATED) {
+                    vm.fusionDistanceSource = FusionCalibration.DistanceSource.AUTO
+                }
+                Chip("Manual", distSrc == FusionCalibration.DistanceSource.MANUAL,
+                     Modifier.weight(1f)) {
+                    vm.fusionDistanceSource = FusionCalibration.DistanceSource.MANUAL
+                }
+                Chip("∞", distSrc == FusionCalibration.DistanceSource.INFINITY,
+                     Modifier.weight(1f)) {
+                    vm.fusionDistanceSource = FusionCalibration.DistanceSource.INFINITY
+                }
+            }
+            if (distSrc == FusionCalibration.DistanceSource.AUTO &&
+                effSrc == FusionCalibration.DistanceSource.MANUAL) {
+                Text("Auto unavailable — using manual (" +
+                     (if (vm.focusCalibration == null) "focus not reported"
+                      else "focus " + focusCalName(vm.focusCalibration)) + ")",
+                     color = Color(0xFFD6A93D), fontSize = 10.sp)
+            }
+            if (effSrc == FusionCalibration.DistanceSource.MANUAL) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Distance", color = FG, modifier = Modifier.weight(1f))
+                    Text(vm.distanceText(vm.fusionManualInvZ), color = ACCENT, fontSize = 12.sp)
+                }
+                // linear in 1/Z: equal thumb travel = equal parallax change
+                Slider(value = vm.fusionManualInvZ,
+                       onValueChange = {
+                           vm.fusionManualInvZ = it.coerceIn(0f, FusionCalibration.MAX_INVZ)
+                       },
+                       valueRange = 0f..FusionCalibration.MAX_INVZ)
+                InvZStopLabels()
+            }
+
             Button(onClick = onAlign, modifier = Modifier.fillMaxWidth()) {
                 Text("Align on live image")
             }
             Text("zoom ×%.2f · offset %+.3f / %+.3f".format(vm.fusionZoom, vm.fusionDx, vm.fusionDy),
                  color = DIM, fontSize = 10.sp)
+            CalibrationSection(vm)
         }
 
         HorizontalDivider(color = Color(0xFF30363D))
@@ -566,6 +616,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
 /** Live registration sliders under the image — the drawer would cover what you align. */
 @Composable
 private fun AlignPanel(vm: ViewerViewModel) {
+    var saveDlg by remember { mutableStateOf(false) }
     Column {
         AlignSlider("ZOOM", vm.fusionZoom, 1f..3f, "×%.2f") { vm.fusionZoom = it }
         AlignSlider("X", vm.fusionDx, -0.3f..0.3f, "%+.3f") { vm.fusionDx = it }
@@ -573,10 +624,60 @@ private fun AlignPanel(vm: ViewerViewModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { vm.fusionZoom = 1.6f; vm.fusionDx = 0f; vm.fusionDy = 0f },
                            modifier = Modifier.weight(1f)) { Text("Reset") }
+            OutlinedButton(onClick = { saveDlg = true }, modifier = Modifier.weight(1f)) {
+                Text("Save…")
+            }
             Button(onClick = { vm.fusionAligning = false },
                    modifier = Modifier.weight(1f)) { Text("Done") }
         }
     }
+    if (saveDlg) SaveSampleDialog(vm, onClose = { saveDlg = false })
+}
+
+/** Distance entry for saving the current alignment as a calibration sample. */
+@Composable
+private fun SaveSampleDialog(vm: ViewerViewModel, onClose: () -> Unit) {
+    var text by remember { mutableStateOf("3") }
+    var error by remember { mutableStateOf(false) }
+
+    /** Metres (or "∞") → invZ; null = invalid. */
+    fun parse(s: String): Float? = when (s.trim().lowercase()) {
+        "∞", "inf", "infinity" -> 0f
+        else -> s.trim().toFloatOrNull()?.takeIf { it > 0f }?.let { 1f / it }
+    }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Save alignment at distance") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Distance to the object you just aligned on, in metres (or ∞):",
+                     color = DIM, fontSize = 12.sp)
+                TextField(value = text, onValueChange = { text = it; error = false },
+                          singleLine = true,
+                          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                // a phone keyboard has no ∞ key — offer the usual calibration distances
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("1.5", "3", "5", "∞").forEach { v ->
+                        Chip(v, text.trim() == v, Modifier.weight(1f)) { text = v; error = false }
+                    }
+                }
+                if (error) Text("Enter metres > 0, or ∞", color = HOT, fontSize = 11.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val invZ = parse(text)
+                if (invZ == null) {
+                    error = true
+                } else {
+                    vm.addCalibSample(invZ, vm.fusionZoom, vm.fusionDx, vm.fusionDy)
+                    onClose()
+                }
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -591,16 +692,98 @@ private fun AlignSlider(label: String, value: Float, range: ClosedFloatingPointR
 
 @Composable
 private fun Chip(label: String, selected: Boolean, modifier: Modifier = Modifier,
-                 onClick: () -> Unit) {
+                 enabled: Boolean = true, onClick: () -> Unit) {
     if (selected) {
-        Button(onClick = onClick, modifier = modifier.height(36.dp),
+        Button(onClick = onClick, modifier = modifier.height(36.dp), enabled = enabled,
                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)) {
             Text(label, fontSize = 11.sp)
         }
     } else {
-        OutlinedButton(onClick = onClick, modifier = modifier.height(36.dp),
+        OutlinedButton(onClick = onClick, modifier = modifier.height(36.dp), enabled = enabled,
                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)) {
             Text(label, fontSize = 11.sp, color = DIM)
         }
+    }
+}
+
+private fun focusCalName(c: Int?): String = when (c) {
+    CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_CALIBRATED -> "CALIBRATED"
+    CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_APPROXIMATE -> "APPROXIMATE"
+    else -> "UNCALIBRATED"
+}
+
+/** One small diagnostics line: what the lens reports about its own focus distance. */
+@Composable
+private fun FocusLine(vm: ViewerViewModel) {
+    val d = vm.focusDiopters
+    val text = when {
+        vm.focusCalibration == null && d == null -> "Focus: not reported"
+        d == null || d < 0f ->
+            "Focus: " + focusCalName(vm.focusCalibration) + " · not reported"
+        else -> "Focus: " + focusCalName(vm.focusCalibration) +
+                " · %.2f D".format(d) + " (" + vm.distanceText(d) + ")" +
+                if (vm.afActive) " · AF on" else ""
+    }
+    Text(text, color = DIM, fontSize = 10.sp)
+}
+
+/**
+ * Tick labels for the manual-distance slider, positioned by their 1/Z value so
+ * the labels sit under the thumb stops (the slider itself is linear in 1/Z,
+ * left edge = ∞, right edge = 1.5 m).
+ */
+@Composable
+private fun InvZStopLabels() {
+    val stops = FusionCalibration.DISTANCE_STOPS_M
+        .map { (if (it.isInfinite()) 0f else 1f / it) to it }
+        .sortedBy { it.first }
+    val f = stops.map { it.first / FusionCalibration.MAX_INVZ }
+    val mids = f.zipWithNext().map { (a, b) -> (a + b) / 2f }
+    Row(Modifier.fillMaxWidth()) {
+        f.indices.forEach { i ->
+            val l = if (i == 0) 0f else mids[i - 1]
+            val r = if (i == f.lastIndex) 1f else mids[i]
+            val v = stops[i].second
+            val label = if (v.isInfinite()) "∞"
+                        else if (v == v.toInt().toFloat()) "${v.toInt()}" else "$v"
+            Text(label, color = DIM, fontSize = 9.sp, textAlign = TextAlign.Center,
+                 modifier = Modifier.weight((r - l).coerceAtLeast(0.01f)))
+        }
+    }
+}
+
+/** Saved distance samples, each with its fit residual in native thermal pixels. */
+@Composable
+private fun CalibrationSection(vm: ViewerViewModel) {
+    val samples = vm.calibSamples
+    if (samples.isEmpty()) {
+        Text("Tip: align at a known distance, then “Save at distance” under the image.",
+             color = DIM, fontSize = 10.sp)
+        return
+    }
+    val fit = vm.calibFitState
+    val tw = vm.lastFrame?.w ?: 160
+    val th = vm.lastFrame?.h ?: 120
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Distance fit", color = DIM, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text("%d sample%s · zoom ×%.2f".format(
+                 samples.size, if (samples.size == 1) "" else "s", fit.zoom),
+             color = DIM, fontSize = 10.sp)
+    }
+    samples.forEachIndexed { i, s ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("%s · ×%.2f %+.3f %+.3f · Δ %.1f px".format(
+                     vm.distanceText(s.invZ), s.zoom, s.dx, s.dy,
+                     fit.residualPx(s, tw, th)),
+                 color = FG, fontSize = 10.sp, maxLines = 1,
+                 modifier = Modifier.weight(1f))
+            TextButton(onClick = { vm.deleteCalibSample(i) },
+                       contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Text("✕", color = HOT, fontSize = 12.sp)
+            }
+        }
+    }
+    TextButton(onClick = { vm.clearCalibSamples() }, modifier = Modifier.fillMaxWidth()) {
+        Text("Clear all samples", color = HOT, fontSize = 11.sp)
     }
 }
