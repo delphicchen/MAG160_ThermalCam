@@ -13,6 +13,8 @@
 
 </div>
 
+<p align="center"><img src="docs/android_screenshot.jpg" width="320" alt="在 Xiaomi 14T Pro 上的即時熱像畫面"></p>
+
 ---
 
 ## 😤 痛點
@@ -44,7 +46,7 @@ Magnity **MAG-Mx / MAG-Cx** USB 熱像儀（VID `0x833C`）硬體很好，但原
 
 ## 🚀 開始使用
 
-1. 編譯 App：
+1. **從 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases) 下載 APK**（arm64、Android 13 以上），或自行編譯：
    ```sh
    cd android2
    JAVA_HOME=/path/to/android-studio/jbr ./gradlew :app:assembleDebug

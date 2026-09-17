@@ -13,6 +13,8 @@
 
 </div>
 
+<p align="center"><img src="docs/android_screenshot.jpg" width="320" alt="Live thermal view on a Xiaomi 14T Pro"></p>
+
 ---
 
 ## 😤 The problem
@@ -45,7 +47,7 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 
 ## 🚀 Get started
 
-1. Build the app:
+1. **Download the APK** from [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases) (arm64, Android 13+), or build it yourself:
    ```sh
    cd android2
    JAVA_HOME=/path/to/android-studio/jbr ./gradlew :app:assembleDebug
