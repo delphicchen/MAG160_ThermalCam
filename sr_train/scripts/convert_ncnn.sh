@@ -5,41 +5,51 @@
 # graph closer to the original and folds better. onnx2ncnn is the fallback when pnnx
 # chokes on an op.
 #
-#   ./scripts/convert_ncnn.sh export/thermal_x4 160 120
+#   ./scripts/convert_ncnn.sh export/thermal_x4_160x120 160 120 thermal_160x120
+#   -> export/thermal_160x120_fp16.param / .bin
 #
-# Needs: pnnx (https://github.com/pnnx/pnnx/releases) and/or ncnn's onnx2ncnn +
-# ncnnoptimize on PATH.
+# Needs: pnnx (pip install pnnx), or ncnn's onnx2ncnn + ncnnoptimize on PATH.
+# pnnx writes fp16 weights itself (fp16=1), so ncnnoptimize is only needed for the
+# onnx2ncnn route — `pip install ncnn` does not ship it.
 set -euo pipefail
 
-BASE="${1:?usage: convert_ncnn.sh <export/basename> [W] [H]}"
+BASE="${1:?usage: convert_ncnn.sh <export/basename> [W] [H] [output name]}"
 W="${2:-160}"
 H="${3:-120}"
+NAME="${4:-thermal_x4}"
 OUT="$(dirname "$BASE")"
+PARAM="$OUT/${NAME}_fp16.param"
+BIN="$OUT/${NAME}_fp16.bin"
 
 if command -v pnnx >/dev/null 2>&1 && [ -f "$BASE.pt" ]; then
   echo "== pnnx route =="
-  # inputshape drives shape inference; pnnx emits .param/.bin next to the input
-  pnnx "$BASE.pt" inputshape="[1,3,$H,$W]" device=cpu
-  # pnnx names its output <base>.ncnn.param / .ncnn.bin
-  mv -f "$BASE.ncnn.param" "$OUT/thermal_x4.param"
-  mv -f "$BASE.ncnn.bin"   "$OUT/thermal_x4.bin"
-elif command -v onnx2ncnn >/dev/null 2>&1 && [ -f "$BASE.onnx" ]; then
+  # inputshape drives shape inference; pnnx emits <base>.ncnn.param / .ncnn.bin
+  pnnx "$BASE.pt" inputshape="[1,3,$H,$W]" device=cpu fp16=1
+  mv -f "$BASE.ncnn.bin" "$BIN"
+  # pnnx names the blobs in0 / out0; the app and verify_ncnn.py look up data / output
+  # (the names the ONNX route carries), so rename them as whole tokens.
+  sed 's/\<in0\>/data/g; s/\<out0\>/output/g' "$BASE.ncnn.param" > "$PARAM"
+  rm -f "$BASE.ncnn.param"
+elif command -v onnx2ncnn >/dev/null 2>&1 && command -v ncnnoptimize >/dev/null 2>&1 \
+     && [ -f "$BASE.onnx" ]; then
   echo "== onnx2ncnn route =="
   # simplify first or onnx2ncnn trips over shape ops emitted by the exporter
   python -m onnxsim "$BASE.onnx" "$BASE.sim.onnx"
-  onnx2ncnn "$BASE.sim.onnx" "$OUT/thermal_x4.param" "$OUT/thermal_x4.bin"
+  onnx2ncnn "$BASE.sim.onnx" "$OUT/${NAME}.param" "$OUT/${NAME}.bin"
+  echo "== ncnnoptimize (fp16 storage + arithmetic) =="
+  # the trailing 1 selects fp16; use 0 to keep fp32 when chasing an accuracy problem
+  ncnnoptimize "$OUT/${NAME}.param" "$OUT/${NAME}.bin" "$PARAM" "$BIN" 1
 else
-  echo "neither pnnx nor onnx2ncnn found (or inputs missing)" >&2
+  echo "no usable route: need pnnx + $BASE.pt, or onnx2ncnn + ncnnoptimize + $BASE.onnx" >&2
   exit 1
 fi
 
-echo "== ncnnoptimize (fp16 storage + arithmetic) =="
-# the trailing 1 selects fp16; use 0 to keep fp32 when chasing an accuracy problem
-ncnnoptimize "$OUT/thermal_x4.param" "$OUT/thermal_x4.bin" \
-             "$OUT/thermal_x4_fp16.param" "$OUT/thermal_x4_fp16.bin" 1
+for blob in data output; do
+  grep -qw "$blob" "$PARAM" || { echo "blob '$blob' missing from $PARAM" >&2; exit 1; }
+done
 
 echo
 echo "wrote:"
-ls -la "$OUT"/thermal_x4*.param "$OUT"/thermal_x4*.bin
+ls -la "$PARAM" "$BIN"
 echo
-echo "next: python scripts/verify_ncnn.py --ref ${BASE}_ref.pt --param $OUT/thermal_x4_fp16.param --bin $OUT/thermal_x4_fp16.bin"
+echo "next: python scripts/verify_ncnn.py --ref ${BASE}_ref.pt --param $PARAM --bin $BIN"

@@ -221,14 +221,15 @@ improving but invented peaks have not yet risen — usually well before the last
 ```sh
 python scripts/export_onnx.py \
     --ckpt experiments/thermal_srvgg_x4_gan/models/net_g_100000.pth \
-    --arch srvgg --size 160x120 --out export/thermal_x4
+    --arch srvgg --size 160x120 --out export/thermal_x4_160x120
 
-./scripts/convert_ncnn.sh export/thermal_x4 160 120     # pnnx → ncnnoptimize fp16
+# pnnx → fp16 .param/.bin with the data/output blob names the app looks up
+./scripts/convert_ncnn.sh export/thermal_x4_160x120 160 120 thermal_160x120
 
-python scripts/verify_ncnn.py --ref export/thermal_x4_ref.pt \
-    --param export/thermal_x4_fp16.param --bin export/thermal_x4_fp16.bin
-python scripts/verify_ncnn.py --ref export/thermal_x4_ref.pt \
-    --param export/thermal_x4_fp16.param --bin export/thermal_x4_fp16.bin --vulkan
+python scripts/verify_ncnn.py --ref export/thermal_x4_160x120_ref.pt \
+    --param export/thermal_160x120_fp16.param --bin export/thermal_160x120_fp16.bin
+python scripts/verify_ncnn.py --ref export/thermal_x4_160x120_ref.pt \
+    --param export/thermal_160x120_fp16.param --bin export/thermal_160x120_fp16.bin --vulkan
 ```
 
 Input shape is fixed at 160×120 on purpose: the frame size never varies, and a static

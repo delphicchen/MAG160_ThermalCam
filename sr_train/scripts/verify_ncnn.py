@@ -2,8 +2,8 @@
 """
 Check that the ncnn model computes what PyTorch computed.
 
-    python scripts/verify_ncnn.py --ref export/thermal_x4_ref.pt \
-        --param export/thermal_x4_fp16.param --bin export/thermal_x4_fp16.bin
+    python scripts/verify_ncnn.py --ref export/thermal_x4_160x120_ref.pt \
+        --param export/thermal_160x120_fp16.param --bin export/thermal_160x120_fp16.bin
 
 Feeds the exact tensor that produced the reference output and reports max / mean
 absolute difference in 0..1 units and in 8-bit levels.
@@ -58,7 +58,9 @@ def main() -> int:
     net.load_param(args.param)
     net.load_model(args.bin)
 
-    mat_in = ncnn.Mat(x.transpose(1, 2, 0).copy())   # ncnn wants HWC
+    # a 3-D numpy array maps to ncnn.Mat as (c, h, w) — pass CHW as-is; an HWC array
+    # would be read as 120 channels of 160x3
+    mat_in = ncnn.Mat(np.ascontiguousarray(x))
     ex = net.create_extractor()                      # not a context manager in all builds
     ex.input('data', mat_in)
     ret, mat_out = ex.extract('output')
