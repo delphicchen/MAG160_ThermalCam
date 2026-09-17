@@ -40,3 +40,8 @@ flatfield.npy
 .kotlin/
 local.properties
 
+
+# trained SR checkpoints (restore from a Colab progress zip)
+sr_train/checkpoints/
+# the bundled thermal SR model ships inside the APK
+!android2/app/src/main/assets/model/*.bin
