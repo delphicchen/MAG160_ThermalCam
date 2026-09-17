@@ -33,9 +33,20 @@ android {
         noCompress += listOf("param", "bin")
     }
 
+    defaultConfig.manifestPlaceholders["appLabel"] = "MagViewer"
+
     buildTypes {
         release {
             isMinifyEnabled = false
+        }
+        // Side-by-side test build: own application id, so it installs next to the stable
+        // app (separate settings and model dir) and is labelled "MagViewer β".
+        create("beta") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".beta"
+            versionNameSuffix = "-beta"
+            manifestPlaceholders["appLabel"] = "MagViewer β"
+            matchingFallbacks += listOf("debug")
         }
     }
     compileOptions {
@@ -55,4 +66,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
+    // visible-camera fusion: phone camera luma stream via CameraX ImageAnalysis
+    implementation("androidx.camera:camera-core:1.4.1")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
 }

@@ -80,6 +80,16 @@ class MainActivity : ComponentActivity() {
         if (target != null) requestPermission(usb, target)
     }
 
+    override fun onStart() {
+        super.onStart()
+        vm.onAppVisible(true)
+    }
+
+    override fun onStop() {
+        vm.onAppVisible(false)      // release the phone camera while in the background
+        super.onStop()
+    }
+
     private fun requestPermission(usb: UsbManager, device: UsbDevice) {
         if (usb.hasPermission(device)) {
             vm.connect(device, true)

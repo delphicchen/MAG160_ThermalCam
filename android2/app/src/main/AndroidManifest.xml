@@ -7,9 +7,12 @@
     <!-- optional geo-tag on snapshots / video; asked for only when the user turns it on -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- optional visible-camera fusion; asked for only when the user turns it on -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
-        android:label="MagViewer"
+        android:label="${appLabel}"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.MagViewer">
         <activity

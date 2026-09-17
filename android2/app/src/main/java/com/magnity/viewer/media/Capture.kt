@@ -48,10 +48,15 @@ object FrameComposer {
      * height is left.
      */
     fun outSize(fr: FrameResult): Pair<Int, Int> {
-        val w = align16(fr.w * SCALE)
-        val h = align16(fr.h * SCALE + BAR_MIN)
-        return w to h
+        val (iw, ih) = imageSize(fr)
+        return align16(iw) to align16(ih + BAR_MIN)
     }
+
+    /** Image area: the 4× thermal grid, or in wide-search fusion the whole visible frame
+     *  (already about that size) with the thermal grid inset inside it. */
+    private fun imageSize(fr: FrameResult): Pair<Int, Int> =
+        if (fr.inset == null) fr.w * SCALE to fr.h * SCALE
+        else fr.bitmap.width to fr.bitmap.height
 
     private fun align16(v: Int) = (v + 15) / 16 * 16
 
@@ -71,15 +76,18 @@ object FrameComposer {
             style = Paint.Style.STROKE; strokeWidth = 3f
         }
         val (ow, oh) = outSize(fr)
-        val iw = fr.w * SCALE; val ih = fr.h * SCALE
+        val (iw, ih) = imageSize(fr)
         val out = Bitmap.createBitmap(ow, oh, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
         c.drawColor(Color.rgb(0x0D, 0x11, 0x17))
         c.drawBitmap(fr.bitmap, null, Rect(0, 0, iw, ih), filter)
 
-        val s = SCALE.toFloat()
+        // thermal grid cell centre → output pixel, through the inset rect when present
+        val r = fr.inset
+        fun px(gx: Int) = ((r?.left ?: 0f) + (gx + 0.5f) / fr.w * (r?.width() ?: 1f)) * iw
+        fun py(gy: Int) = ((r?.top ?: 0f) + (gy + 0.5f) / fr.h * (r?.height() ?: 1f)) * ih
         fun marker(pos: Int, color: Int, v: Float) {
-            val x = (pos % fr.w + 0.5f) * s; val y = (pos / fr.w + 0.5f) * s
+            val x = px(pos % fr.w); val y = py(pos / fr.w)
             ring.color = color
             c.drawCircle(x, y, 10f, ring)
             val label = "%.1f°C".format(v)
@@ -92,7 +100,7 @@ object FrameComposer {
         if (showMax) marker(fr.maxPos, Color.rgb(0xF8, 0x51, 0x49), fr.tempMax)
         if (showMin) marker(fr.minPos, Color.rgb(0x3F, 0xB9, 0x50), fr.tempMin)
         spot?.let { (sx, sy) ->
-            val x = (sx + 0.5f) * s; val y = (sy + 0.5f) * s
+            val x = px(sx); val y = py(sy)
             ring.color = Color.WHITE
             c.drawLine(x - 14f, y, x + 14f, y, ring)
             c.drawLine(x, y - 14f, x, y + 14f, ring)

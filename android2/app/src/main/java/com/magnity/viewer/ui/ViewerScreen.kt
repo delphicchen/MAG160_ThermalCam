@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.magnity.viewer.pipeline.Fusion
 import com.magnity.viewer.pipeline.Palettes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -55,7 +56,10 @@ fun ViewerScreen(vm: ViewerViewModel = viewModel()) {
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(drawerContainerColor = Color(0xFF161B22)) {
-                DrawerControls(vm)
+                DrawerControls(vm, onAlign = {
+                    vm.fusionAligning = true
+                    scope.launch { drawerState.close() }
+                })
             }
         },
     ) {
@@ -79,14 +83,15 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                 val barH = 40.dp
                 val paneWpx = with(density) { maxWidth.toPx() }
                 val paneHpx = with(density) { (maxHeight - barH).toPx() }
-                val scale = min(paneWpx / fr.w, paneHpx / fr.h)
-                val dispW = (fr.w * scale).roundToInt()
-                val dispH = (fr.h * scale).roundToInt()
+                // bitmap aspect, not the grid's: wide-search fusion shows the visible frame
+                val bw = fr.bitmap.width.toFloat(); val bh = fr.bitmap.height.toFloat()
+                val scale = min(paneWpx / bw, paneHpx / bh)
+                val dispW = (bw * scale).roundToInt()
+                val dispH = (bh * scale).roundToInt()
                 val dispWdp = with(density) { dispW.toDp() }
                 val dispHdp = with(density) { dispH.toDp() }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    ThermalImage(vm, fr, scale, dispW, dispH,
-                                 Modifier.size(dispWdp, dispHdp))
+                    ThermalImage(vm, fr, dispW, dispH, Modifier.size(dispWdp, dispHdp))
                     Spacer(Modifier.height(6.dp))
                     ColorBar(vm.paletteName, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
                 }
@@ -105,45 +110,50 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp)
         }
 
-        // Display range in one fixed-height row: a thin two-thumb bar, draggable in
-        // manual, tracking the auto range otherwise. No extra row appears, so the image
-        // keeps its space.
-        Row(verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.height(48.dp)) {
-            Text("RANGE", color = DIM, fontSize = 11.sp)
-            RangeBar(
-                lo = vm.scaleLo, hi = vm.scaleHi,
-                domLo = vm.tempMinC, domHi = vm.tempMaxC,
-                enabled = !vm.autoScale,
-                onChange = { l, h -> vm.scaleLo = l; vm.scaleHi = h },
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-            )
-            OutlinedButton(onClick = { vm.autoScale = !vm.autoScale },
-                           modifier = Modifier.height(34.dp),
-                           contentPadding = PaddingValues(horizontal = 8.dp)) {
-                Text(if (vm.autoScale) "AUTO" else "MAN", fontSize = 11.sp,
-                     color = if (vm.autoScale) DIM else ACCENT)
+        if (vm.fusionOn && vm.fusionAligning) {
+            AlignPanel(vm)
+        } else {
+            // Display range in one fixed-height row: a thin two-thumb bar, draggable in
+            // manual, tracking the auto range otherwise. No extra row appears, so the image
+            // keeps its space.
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.height(48.dp)) {
+                Text("RANGE", color = DIM, fontSize = 11.sp)
+                RangeBar(
+                    lo = vm.scaleLo, hi = vm.scaleHi,
+                    domLo = vm.tempMinC, domHi = vm.tempMaxC,
+                    enabled = !vm.autoScale,
+                    onChange = { l, h -> vm.scaleLo = l; vm.scaleHi = h },
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+                OutlinedButton(onClick = { vm.autoScale = !vm.autoScale },
+                               modifier = Modifier.height(34.dp),
+                               contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text(if (vm.autoScale) "AUTO" else "MAN", fontSize = 11.sp,
+                         color = if (vm.autoScale) DIM else ACCENT)
+                }
             }
-        }
 
-        // actions
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { vm.doFfc() }, enabled = vm.connected && !vm.ffcBusy,
-                   modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                Text(if (vm.ffcBusy) "FFC…" else "FFC") }
-            Button(onClick = { vm.paused = !vm.paused }, enabled = vm.connected,
-                   modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                Text(if (vm.paused) "Resume" else "Pause") }
-            FilledTonalButton(onClick = { vm.takeScreenshot() }, enabled = fr != null,
-                              modifier = Modifier.weight(1f),
-                              contentPadding = PaddingValues(4.dp)) { Text("Snap") }
-            Button(onClick = { vm.toggleRecording() }, enabled = fr != null || vm.recording,
-                   colors = ButtonDefaults.buttonColors(
-                       containerColor = if (vm.recording) Color(0xFFDA3633) else Color(0xFF5A2E2E),
-                       contentColor = Color.White),
-                   modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                Text(if (vm.recording) "Stop" else "Rec") }
+            // actions
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { vm.doFfc() }, enabled = vm.connected && !vm.ffcBusy,
+                       modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                    Text(if (vm.ffcBusy) "FFC…" else "FFC") }
+                Button(onClick = { vm.paused = !vm.paused }, enabled = vm.connected,
+                       modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                    Text(if (vm.paused) "Resume" else "Pause") }
+                FilledTonalButton(onClick = { vm.takeScreenshot() }, enabled = fr != null,
+                                  modifier = Modifier.weight(1f),
+                                  contentPadding = PaddingValues(4.dp)) { Text("Snap") }
+                Button(onClick = { vm.toggleRecording() }, enabled = fr != null || vm.recording,
+                       colors = ButtonDefaults.buttonColors(
+                           containerColor = if (vm.recording) Color(0xFFDA3633) else Color(0xFF5A2E2E),
+                           contentColor = Color.White),
+                       modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                    Text(if (vm.recording) "Stop" else "Rec") }
+            }
+
         }
 
         // menu + palette + REC timer + status
@@ -191,9 +201,13 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
 
 @Composable
 private fun ThermalImage(
-    vm: ViewerViewModel, fr: FrameResult, scale: Float, dispW: Int, dispH: Int,
+    vm: ViewerViewModel, fr: FrameResult, dispW: Int, dispH: Int,
     modifier: Modifier,
 ) {
+    // thermal grid ↔ screen, through the inset rect in wide-search fusion
+    val r = fr.inset
+    val left = (r?.left ?: 0f) * dispW; val top = (r?.top ?: 0f) * dispH
+    val cellW = (r?.width() ?: 1f) * dispW / fr.w; val cellH = (r?.height() ?: 1f) * dispH / fr.h
     val image = remember(fr) { fr.bitmap.asImageBitmap() }
     val labelPaint = remember {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
@@ -201,19 +215,20 @@ private fun ThermalImage(
             setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
         }
     }
-    Canvas(modifier.pointerInput(fr.w, fr.h, scale) {
+    Canvas(modifier.pointerInput(fr.w, fr.h, dispW, dispH, r) {
         detectTapGestures(
             onTap = { off ->
-                val gx = (off.x / scale).toInt().coerceIn(0, fr.w - 1)
-                val gy = (off.y / scale).toInt().coerceIn(0, fr.h - 1)
-                vm.spot = gx to gy
+                val gx = ((off.x - left) / cellW).toInt()
+                val gy = ((off.y - top) / cellH).toInt()
+                // outside the thermal inset there is no temperature to read
+                if (gx in 0 until fr.w && gy in 0 until fr.h) vm.spot = gx to gy
             },
             onLongPress = { vm.spot = null },
         )
     }) {
         drawImage(image, dstSize = IntSize(dispW, dispH), filterQuality = FilterQuality.Low)
         fun marker(pos: Int, color: Color, v: Float) {
-            val c = Offset((pos % fr.w + 0.5f) * scale, (pos / fr.w + 0.5f) * scale)
+            val c = Offset(left + (pos % fr.w + 0.5f) * cellW, top + (pos / fr.w + 0.5f) * cellH)
             drawCircle(color, 18f, c, style = Stroke(4f, cap = StrokeCap.Round))
             val label = "%.1f°C".format(v)
             labelPaint.color = color.toArgb()
@@ -225,7 +240,7 @@ private fun ThermalImage(
         if (vm.showMaxRoi) marker(fr.maxPos, HOT, fr.tempMax)
         if (vm.showMinRoi) marker(fr.minPos, COLD, fr.tempMin)
         vm.spot?.let { (sx, sy) ->
-            val c = Offset((sx + 0.5f) * scale, (sy + 0.5f) * scale)
+            val c = Offset(left + (sx + 0.5f) * cellW, top + (sy + 0.5f) * cellH)
             drawLine(Color.White, c - Offset(18f, 0f), c + Offset(18f, 0f), 3f)
             drawLine(Color.White, c - Offset(0f, 18f), c + Offset(0f, 18f), 3f)
         }
@@ -354,7 +369,7 @@ private fun Readout(label: String, value: Float?, color: Color, on: Boolean,
 }
 
 @Composable
-private fun DrawerControls(vm: ViewerViewModel) {
+private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
     Column(
         Modifier.fillMaxHeight().verticalScroll(rememberScrollState()).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -452,6 +467,55 @@ private fun DrawerControls(vm: ViewerViewModel) {
 
         HorizontalDivider(color = Color(0xFF30363D))
 
+        val cameraPermission = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            vm.fusionOn = granted
+            if (!granted) vm.notice = "Visible fusion needs camera permission"
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(vm.fusionOn, onCheckedChange = { on ->
+                if (on && !vm.hasCameraPermission()) {
+                    cameraPermission.launch(Manifest.permission.CAMERA)
+                } else {
+                    vm.fusionOn = on
+                }
+            })
+            Text("Visible fusion (beta)", color = FG)
+        }
+        if (vm.fusionOn) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("MSX edges" to Fusion.Mode.EDGES, "Blend" to Fusion.Mode.BLEND,
+                       "Wide" to Fusion.Mode.SEARCH).forEach { (label, m) ->
+                    Chip(label, vm.fusionMode == m, Modifier.weight(1f)) { vm.fusionMode = m }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(when (vm.fusionMode) {
+                         Fusion.Mode.EDGES -> "Edge strength"
+                         Fusion.Mode.BLEND -> "Thermal weight"
+                         Fusion.Mode.SEARCH -> "Thermal opacity"
+                     }, color = FG, modifier = Modifier.weight(1f))
+                Text("%.2f".format(vm.fusionStrength), color = DIM, fontSize = 11.sp)
+            }
+            Slider(vm.fusionStrength, onValueChange = { vm.fusionStrength = it })
+            Text("Visible camera rotation", color = DIM, fontSize = 11.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(0, 90, 180, 270).forEach { deg ->
+                    Chip("$deg°", vm.fusionRotation == deg, Modifier.weight(1f)) {
+                        vm.fusionRotation = deg
+                    }
+                }
+            }
+            Button(onClick = onAlign, modifier = Modifier.fillMaxWidth()) {
+                Text("Align on live image")
+            }
+            Text("zoom ×%.2f · offset %+.3f / %+.3f".format(vm.fusionZoom, vm.fusionDx, vm.fusionDy),
+                 color = DIM, fontSize = 10.sp)
+        }
+
+        HorizontalDivider(color = Color(0xFF30363D))
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.temporalDenoise, onCheckedChange = { vm.temporalDenoise = it })
             Text("Temporal denoise", color = FG, modifier = Modifier.weight(1f))
@@ -496,6 +560,32 @@ private fun DrawerControls(vm: ViewerViewModel) {
              "Tap MIN / MAX / SPOT under the image to hide a marker.\n" +
              "Red ring = MAX, green ring = MIN.",
              color = DIM, fontSize = 10.sp)
+    }
+}
+
+/** Live registration sliders under the image — the drawer would cover what you align. */
+@Composable
+private fun AlignPanel(vm: ViewerViewModel) {
+    Column {
+        AlignSlider("ZOOM", vm.fusionZoom, 1f..3f, "×%.2f") { vm.fusionZoom = it }
+        AlignSlider("X", vm.fusionDx, -0.3f..0.3f, "%+.3f") { vm.fusionDx = it }
+        AlignSlider("Y", vm.fusionDy, -0.3f..0.3f, "%+.3f") { vm.fusionDy = it }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { vm.fusionZoom = 1.6f; vm.fusionDx = 0f; vm.fusionDy = 0f },
+                           modifier = Modifier.weight(1f)) { Text("Reset") }
+            Button(onClick = { vm.fusionAligning = false },
+                   modifier = Modifier.weight(1f)) { Text("Done") }
+        }
+    }
+}
+
+@Composable
+private fun AlignSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>,
+                        fmt: String, onChange: (Float) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.height(36.dp)) {
+        Text(label, color = DIM, fontSize = 11.sp, modifier = Modifier.width(40.dp))
+        Slider(value, onValueChange = onChange, valueRange = range, modifier = Modifier.weight(1f))
+        Text(fmt.format(value), color = FG, fontSize = 11.sp, modifier = Modifier.width(52.dp))
     }
 }
 

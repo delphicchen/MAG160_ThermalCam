@@ -20,10 +20,12 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.magnity.viewer.camera.RgbCamera
 import com.magnity.viewer.media.FrameComposer
 import com.magnity.viewer.media.MediaSaver
 import com.magnity.viewer.media.VideoRecorder
 import com.magnity.viewer.pipeline.Anime4kGpu
+import com.magnity.viewer.pipeline.Fusion
 import com.magnity.viewer.pipeline.ImageOps
 import com.magnity.viewer.pipeline.NcnnUpscaler
 import com.magnity.viewer.pipeline.Palettes
@@ -48,6 +50,9 @@ data class FrameResult(
     val scaleLoC: Float,          // display range in °C (colour bar labels)
     val scaleHiC: Float,
     val emissivity: Float,        // ε in effect for this frame (stamped into captures)
+    /** Where the thermal grid sits inside [bitmap], normalized; null = it fills it
+     *  (everything except the wide-search fusion mode). Markers and taps map through it. */
+    val inset: android.graphics.RectF? = null,
 )
 
 /**
@@ -121,6 +126,23 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private val locationListener = LocationListener { location = it }
     private var locationActive = false
 
+    // ---- visible-camera fusion (beta) ----
+    var fusionOn: Boolean by pref("fusion_on", false) { updateFusionCamera() }
+    var fusionMode by Persisted(prefs, "fusion_mode", Fusion.Mode.EDGES,
+        { k, d -> runCatching { Fusion.Mode.valueOf(getString(k, d.name)!!) }.getOrDefault(d) },
+        { k, v -> putString(k, v.name) })
+    var fusionStrength by pref("fusion_strength", 0.6f)
+    // manual registration: the visible FOV (~75°) is wider than the thermal lens (~50°)
+    var fusionZoom by pref("fusion_zoom", 1.6f)
+    var fusionDx by pref("fusion_dx", 0f)
+    var fusionDy by pref("fusion_dy", 0f)
+    var fusionRotation by pref("fusion_rotation", 90)   // visible sensor → portrait
+    /** The align sliders replace the range/action rows while this is on. */
+    var fusionAligning by mutableStateOf(false)
+    private val rgbCameraLazy = lazy { RgbCamera(getApplication()) }
+    private val rgbCamera by rgbCameraLazy
+    private var appVisible = true
+
     var spot: Pair<Int, Int>? by mutableStateOf(null)   // oriented (x,y), null = none
 
     var lastFrame by mutableStateOf<FrameResult?>(null); private set
@@ -139,6 +161,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     init {
         // permission may have been revoked in system settings since the last run
         if (geotag && !hasLocationPermission()) geotag = false else updateLocationUpdates()
+        if (fusionOn && !hasCameraPermission()) fusionOn = false else updateFusionCamera()
 
         // Poll-based auto-connect — USB attach broadcasts are unreliable on newer
         // Androids; scanning UsbManager every 2 s always works.
@@ -315,7 +338,69 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private fun captureLocation(): Location? =
         location?.takeIf { geotag && System.currentTimeMillis() - it.time < 10 * 60_000 }
 
+    // ---- visible-camera fusion ------------------------------------------------
+
+    fun hasCameraPermission(): Boolean =
+        ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** Main thread. The phone camera runs only while fusion is on AND the app is in the
+     *  foreground — Android revokes background camera access anyway. */
+    private fun updateFusionCamera() {
+        if (!fusionOn) fusionAligning = false
+        val want = fusionOn && appVisible && hasCameraPermission()
+        if (want == (rgbCameraLazy.isInitialized() && rgbCamera.running)) return
+        if (want) {
+            rgbCamera.start { msg -> fusionOn = false; notice = "Visible camera failed: $msg" }
+        } else {
+            rgbCamera.stop()
+            edgeCache = null
+        }
+    }
+
+    /** From the Activity's onStart / onStop. */
+    fun onAppVisible(visible: Boolean) {
+        appVisible = visible
+        updateFusionCamera()
+    }
+
+    private var edgeCache: FloatArray? = null
+    private var edgeCacheId = -1L
+
+    /**
+     * Blend the visible camera into the display bitmap (processing thread). Overlay modes
+     * keep the frame size; wide search returns the whole visible frame with the thermal
+     * image inset, plus that inset's rect. Null = no visible frame yet, draw thermal only.
+     */
+    private fun fuse(bmp: android.graphics.Bitmap): Pair<android.graphics.Bitmap, android.graphics.RectF?>? {
+        val fr = rgbCamera.latest() ?: return null
+        val w = bmp.width; val h = bmp.height
+        val px = IntArray(w * h)
+        bmp.getPixels(px, 0, w, 0, 0, w, h)
+        if (fusionMode == Fusion.Mode.SEARCH) {
+            val r = Fusion.composeWide(px, w, h, fr.data, fr.width, fr.height, fusionStrength,
+                                       fusionZoom, fusionDx, fusionDy, fusionRotation)
+            return android.graphics.Bitmap.createBitmap(r.pixels, r.width, r.height,
+                       android.graphics.Bitmap.Config.ARGB_8888) to
+                android.graphics.RectF(r.rectL, r.rectT, r.rectL + r.rectW, r.rectT + r.rectH)
+        }
+        val edge = if (fusionMode == Fusion.Mode.EDGES) {
+            if (edgeCacheId != fr.id || edgeCache?.size != fr.data.size) {
+                // one Sobel pass per visible frame, not per thermal frame
+                edgeCache = Fusion.edgeMap(fr.data, fr.width, fr.height,
+                    edgeCache?.takeIf { it.size == fr.data.size } ?: FloatArray(fr.data.size))
+                edgeCacheId = fr.id
+            }
+            edgeCache
+        } else null
+        Fusion.compose(px, w, h, fr.data, fr.width, fr.height, edge, fusionMode, fusionStrength,
+                       fusionZoom, fusionDx, fusionDy, fusionRotation)
+        return android.graphics.Bitmap.createBitmap(px, w, h,
+                   android.graphics.Bitmap.Config.ARGB_8888) to null
+    }
+
     override fun onCleared() {
+        if (rgbCameraLazy.isInitialized()) rgbCamera.stop()
         if (locationActive) {
             getApplication<Application>().getSystemService(LocationManager::class.java)
                 ?.let { lm -> runCatching { lm.removeUpdates(locationListener) } }
@@ -416,13 +501,18 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             slo = scaleLo; shi = scaleHi
         }
 
+        var bitmap = render(oriented, ow, oh, slo, shi)
+        var inset: android.graphics.RectF? = null
+        if (fusionOn) fuse(bitmap)?.let { (b, r) -> bitmap = b; inset = r }
+
         return FrameResult(
-            bitmap = render(oriented, ow, oh, slo, shi), w = ow, h = oh,
+            bitmap = bitmap, w = ow, h = oh,
             tempMin = mn, tempMax = mx,
             minPos = mnI, maxPos = mxI,
             fpa = sdk.sensorTemp()?.toLong(),
             scaleLoC = slo, scaleHiC = shi,
             emissivity = emissivity,
+            inset = inset,
         )
     }
 
