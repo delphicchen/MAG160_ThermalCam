@@ -576,8 +576,16 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
                    valueRange = 0.5f..0.95f)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(vm.spatialDenoise, onCheckedChange = { vm.spatialDenoise = it })
-            Text("Spatial denoise", color = FG)
+            Checkbox(vm.spatialDenoise && !vm.thermalSrActive,
+                     onCheckedChange = { vm.spatialDenoise = it },
+                     enabled = !vm.thermalSrActive)
+            Column {
+                Text("Spatial denoise", color = if (vm.thermalSrActive) DIM else FG)
+                if (vm.thermalSrActive) {
+                    Text("off while Thermal SR is on — the model denoises itself",
+                         color = DIM, fontSize = 10.sp)
+                }
+            }
         }
 
         HorizontalDivider(color = Color(0xFF30363D))

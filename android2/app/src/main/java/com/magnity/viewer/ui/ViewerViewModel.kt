@@ -117,6 +117,14 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         { k, d -> runCatching { Upscaler.valueOf(getString(k, d.name)!!) }.getOrDefault(d) },
         { k, v -> putString(k, v.name) })
     var spatialDenoise by pref("spatial_denoise", true)
+    /**
+     * The thermal SR model was trained on noisy, FPN-degraded input and denoises on its
+     * own; a bilateral pass in front of it only removes detail the model reconstructs from
+     * and costs frame time. Spatial denoise is skipped while this is true — the saved
+     * setting is untouched, so it comes back with Anime4K / bicubic. Temporal denoise
+     * stays: a single-frame model cannot remove frame-to-frame flicker.
+     */
+    val thermalSrActive: Boolean get() = upscaler == Upscaler.NCNN && upscale > 1
     var temporalDenoise by pref("temporal_denoise", true)   // display only — readouts stay per-frame
     var temporalStrength by pref("temporal_strength", 0.85f)
     var showMaxRoi by pref("show_max", true)
@@ -609,7 +617,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         oriented = temporal(oriented)
-        if (spatialDenoise) {
+        if (spatialDenoise && !thermalSrActive) {
             // sigmaColor is in °C — 80 counts of range tolerance would be 80 °C here
             // and would flatten the whole scene.
             oriented = ImageOps.bilateral(oriented, ow, oh, 5, 0.5f, 5f)

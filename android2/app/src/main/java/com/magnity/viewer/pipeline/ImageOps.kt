@@ -106,38 +106,76 @@ object ImageOps {
 
     // ---- bilateral filter (edge-preserving spatial denoise) ---------------------
 
+    /**
+     * Edge-preserving bilateral filter over a (2r+1)² window, r = d/2.
+     *
+     * It runs on every frame, so the inner loop is kept cheap: the range weight
+     * exp(-dc²/2σc²) comes from [RANGE_LUT] instead of one exp() per tap, weights below
+     * exp(-[RANGE_Q_MAX]) are skipped, and interior pixels read through precomputed index
+     * offsets — only the r-wide border takes the clamped path. Output matches the direct
+     * form to within the table step.
+     */
     fun bilateral(src: FloatArray, w: Int, h: Int, d: Int, sigmaColor: Float, sigmaSpace: Float): FloatArray {
         val radius = max(1, d / 2)
-        val spatial = FloatArray((2 * radius + 1) * (2 * radius + 1))
-        var idx = 0
+        val n = (2 * radius + 1) * (2 * radius + 1)
+        val spatial = FloatArray(n)
+        val offset = IntArray(n)
         val ss = 2f * sigmaSpace * sigmaSpace
+        var k = 0
         for (dy in -radius..radius) for (dx in -radius..radius) {
-            spatial[idx++] = exp(-(dx * dx + dy * dy) / ss)
+            spatial[k] = exp(-(dx * dx + dy * dy) / ss)
+            offset[k++] = dy * w + dx
         }
-        val sc = 2f * sigmaColor * sigmaColor
+        // dc² → table index; a huge dc saturates toInt() past the end and is skipped
+        val qToIndex = RANGE_LUT_N / (RANGE_Q_MAX * 2f * sigmaColor * sigmaColor)
+        val lut = RANGE_LUT
         val dst = FloatArray(src.size)
         for (y in 0 until h) {
+            val row = y * w
+            val innerRow = y >= radius && y < h - radius
             for (x in 0 until w) {
-                val c = src[y * w + x]
+                val i = row + x
+                val c = src[i]
                 var acc = 0f
                 var wsum = 0f
-                idx = 0
-                for (dy in -radius..radius) {
-                    val yy = (y + dy).coerceIn(0, h - 1) * w
-                    for (dx in -radius..radius) {
-                        val xx = (x + dx).coerceIn(0, w - 1)
-                        val v = src[yy + xx]
+                if (innerRow && x >= radius && x < w - radius) {
+                    for (t in 0 until n) {
+                        val v = src[i + offset[t]]
                         val dc = v - c
-                        val wgt = spatial[idx++] * exp(-(dc * dc) / sc)
-                        acc += wgt * v
-                        wsum += wgt
+                        val qi = (dc * dc * qToIndex).toInt()
+                        if (qi < RANGE_LUT_N) {
+                            val wgt = spatial[t] * lut[qi]
+                            acc += wgt * v
+                            wsum += wgt
+                        }
+                    }
+                } else {
+                    var t = 0
+                    for (dy in -radius..radius) {
+                        val yy = (y + dy).coerceIn(0, h - 1) * w
+                        for (dx in -radius..radius) {
+                            val v = src[yy + (x + dx).coerceIn(0, w - 1)]
+                            val dc = v - c
+                            val qi = (dc * dc * qToIndex).toInt()
+                            if (qi < RANGE_LUT_N) {
+                                val wgt = spatial[t] * lut[qi]
+                                acc += wgt * v
+                                wsum += wgt
+                            }
+                            t++
+                        }
                     }
                 }
-                dst[y * w + x] = if (wsum > 0f) acc / wsum else c
+                dst[i] = if (wsum > 0f) acc / wsum else c
             }
         }
         return dst
     }
+
+    private const val RANGE_LUT_N = 2048
+    private const val RANGE_Q_MAX = 10f         // exp(-10) ≈ 4.5e-5: negligible weight
+    /** exp(-q) sampled at bin centres over q ∈ [0, RANGE_Q_MAX). */
+    private val RANGE_LUT = FloatArray(RANGE_LUT_N) { exp(-(it + 0.5f) * RANGE_Q_MAX / RANGE_LUT_N) }
 
     // ---- bicubic resize (INTER_CUBIC-style, a = -0.75) ---------------------------
 
