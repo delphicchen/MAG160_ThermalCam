@@ -1,123 +1,84 @@
-# Magnity MAG-Mx Thermal Camera — Linux app
+<div align="center">
 
-A native Linux viewer for the Magnity 833c USB thermal camera (the camera whose only
-official software is the Android `MAG-Mx.apk`). Built by reverse-engineering the USB
-protocol from the APK's native libs + live probing — see **`PROTOCOL.md`**.
+# 🔥 MAG160 ThermalCam
 
-## What works
-- Live thermal stream **160×120 @ 15 fps** over USB (pure Python / pyusb).
-- **FFC (flat-field / shutter) correction** → clean image, no fixed-pattern noise.
-- PySide6 viewer: color palettes, auto/manual range, hot/cold spot markers, cursor
-  readout, snapshot, on-demand FFC.
-- **Tier-1 image enhancement** (`enhance.py`, toggleable in the viewer):
-  - **Flat-field / shading correction** — the shutter FFC can't remove the lens-shading
-    vignette (bright edges / dark centre) or residual column stripes, because the shutter
-    sits behind the lens. Point at a uniform-temperature surface and click **“Flat-field
-    cal”**: it builds a per-pixel shading map and subtracts it (here: full-frame
-    non-uniformity dropped **227 → 21 counts, ~11×**). Saved to `flatfield.npy`.
-  - **Bad-pixel correction** — the original app masks the sensor's bad/blinking pixels;
-    we rebuild that map automatically (learned on FFC, ~30 pixels here) and replace them
-    with the neighbourhood median, plus a per-frame impulse catcher.
-  - **Temporal denoise** — motion-adaptive frame averaging (halves frame-to-frame noise
-    on static scenes, no ghosting on motion).
-  - **Spatial denoise** — edge-preserving bilateral filter.
-  - **Super-res ×2 (multi-frame)** — registers recent frames with sub-pixel phase
-    correlation and shift-and-adds them onto a 2× grid (natural hand jitter supplies the
-    sub-pixel diversity; degrades gracefully to cubic upscale when static). Display-only.
-  - Measurement vs display are separated: °C / min / max use the value-safe layer
-    (bad-pixel + temporal only); spatial smoothing / super-res are display-only.
-- **Factory NUC (radiometric)** — the camera's own per-pixel, multi-segment
-  piecewise-linear non-uniformity correction, reversed out of `mag_cali.bin` by running
-  the firmware build chain under ARM emulation (the numpy apply is **bit-exact** to the
-  SDK). Tables are pre-stored over a grid of FPA (sensor) temperatures
-  (`factory_nuc_grid.npz`, built with `recon/build_nuc_grid.py`); the viewer reads the
-  **live FPA temp** (frame tail+8) and interpolates the grid, then applies the firmware's
-  exact per-pixel correction. Toggle **“Factory NUC (radiometric)”** — it runs on the
-  uncorrected raw using the shutter dark frame as the offset reference (auto-captured on
-  enable) plus the factory per-pixel gain + piecewise curve, replacing the flat-field /
-  gain stages. On a near-uniform scene it cut column fixed-pattern noise ~**4×** vs the
-  plain FFC. See `recon/EMULATION_NUC.md` for the full reverse-engineering write-up.
-- **View options:** **Auto-FFC** (timer-based, default 60 s — the microbolometer drifts
-  so the shutter reference needs periodic refreshing; this re-FFCs for you), and
-  **Mirror (left-right)** flip (applied at input so display, cursor and measurement stay
-  consistent).
+### Your Magnity thermal camera, reborn on modern Android.
 
-- **Temperature (°C)** via `radiometry.py`: the full raw→temperature formula was
-  reverse-engineered from the SDK (`radiance = a*raw+b → Planck LUT → °C`); the camera's
-  built-in Planck radiance curves were extracted (`recon/planck_luts.npy`). The two
-  per-camera coefficients are recovered from a few **known-temperature reference points**
-  (the proprietary on-camera coefficient blob is expanded by an ARM-only parser we can't
-  run on x86, so we anchor with references instead — see `PROTOCOL.md`).
+**English** · [繁體中文](README.zh-TW.md) · [简体中文](README.zh-CN.md)
 
-### Calibrating temperature
-1. Run `viewer.py`, let it warm up, hit **FFC** once.
-2. Point the cursor at an object whose temperature you know (e.g. ice water ≈ 0 °C, a cup
-   of warm water you measured, your hand via a clinical/IR thermometer ≈ 33 °C).
-3. Click **“+ Add cal point”** and enter the °C. Repeat for ≥2 points spread across the
-   range you care about (3–4 points = better).
-4. After 2 points the readout switches to °C automatically. Calibration is saved to
-   `calibration.json` and reloaded next run.
-   - Re-running **FFC** shifts the raw values, so calibrate after the FFC you'll use; if
-     you re-FFC and readings drift, just add a fresh point or clear & redo.
+![Android](https://img.shields.io/badge/Android-15%2B-3DDC84?logo=android&logoColor=white)
+![Sensor](https://img.shields.io/badge/sensor-160×120%20%40%2015%20fps-orange)
+![GPU](https://img.shields.io/badge/AI%20upscale-ncnn%20%2B%20Vulkan-purple)
+![License](https://img.shields.io/badge/license-noncommercial-blue)
 
-## Not done yet
-- Box / line ROI temperature tools (only point + hot/cold spot so far).
-- Refining the milli-Kelvin unit assumption — more reference points across a wide range
-  will tighten absolute accuracy.
+</div>
 
-## Setup
-```bash
-pip install pyusb numpy pillow PySide6 matplotlib   # (most already present)
-# one-time USB permission (lets the 'plugdev' group talk to the camera):
-sudo cp 99-magnity-thermal.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
-# then replug the camera
-```
+---
 
-## Run
-```bash
-python3 viewer.py          # the GUI
-python3 magcam.py          # headless self-test: grabs a frame, writes /tmp/mag_raw.png + /tmp/mag_ffc.png
-```
+## 😤 The problem
 
-## Files
-- `viewer.py`   — PySide6 live viewer (entry point).
-- `magcam.py`   — `MagCamera` driver: open / stream / FFC / get_frame.
-- `PROTOCOL.md` — full reverse-engineered USB protocol + remaining work.
-- `recon/`      — reverse-engineering scripts (`disasm.py`, `probe.py`, `grab3.py`, …).
-- `99-magnity-thermal.rules` — udev rule for non-root USB access.
+The Magnity **MAG-Mx / MAG-Cx** USB thermal camera (VID `0x833C`) is great hardware — but its
+official apps **stopped working on Android 15+**. Plug it into a new phone and you get
+nothing.
 
-## Notes
-- The camera re-enumerates (new USB address) between runs / on protocol errors; this is
-  normal and the udev rule matches by vendor id so access keeps working.
-- **Every command must be followed by a read of its EP-0x82 ack** or the firmware wedges
-  — this is the key protocol gotcha (handled in `magcam.py`).
+## 💡 The fix
 
-## Android app (`android2/`)
-Portrait thermal viewer for Android 15+, written because the factory `MAG-Cx` / `MAG-Mx`
-apps no longer run there. Absolute temperature from the factory SDK, MIN/MAX/SPOT
-markers, colour bar, snapshot (PNG) and video recording (HEVC/H.264), and GPU display
-upscaling with the Anime4K CNN shader. Build:
+**MAG160 ThermalCam** is a brand-new Android app for this camera, rebuilt from the ground up
+by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you already own.
 
-```sh
-cd android2
-JAVA_HOME=/path/to/android-studio/jbr ./gradlew :app:assembleDebug
-```
+## ✨ Android app features
 
-The vendor SDK (`libcoresdk.so` / the AAR files under `android2/lib/`) is **not** in this
-repository — supply it from your own copy of the vendor software.
+| | |
+|---|---|
+| 📱 **Works on Android 15+** | Runs where the factory MAG-Cx / MAG-Mx apps no longer do. |
+| 🌡️ **Real absolute temperature** | Straight from the factory SDK — fully corrected, no manual calibration. |
+| 🎯 **MIN / MAX / SPOT markers** | Find the hottest and coldest point instantly, plus a live colour bar and range. |
+| 🚀 **4× AI super-resolution** | A thermal-tuned Real-ESRGAN model on the GPU via **ncnn + Vulkan** turns 160×120 into a crisp 640×480. |
+| ✨ **Anime4K GPU upscaling** | Sharp, clean display with a real-time CNN shader. |
+| 📸 **Snapshots** | One tap saves a PNG. |
+| 🎬 **Video recording** | Hardware **HEVC/H.265** encoding with automatic H.264 fallback. |
+| 🚫 **No watermark** | Your images are yours. |
+| 👍 **Compact portrait UI** | Designed for one-handed use in the field. |
 
-## Licence
-**Noncommercial use only** — see [`LICENSE`](LICENSE). Personal, research, educational
-and hobby use are free; commercial use needs a separate written licence. This is a short
-custom licence, not an OSI-approved one, so it is deliberately plain about what it
-allows.
+## 🚀 Get started
 
-Third-party components keep their own terms — see
-[`android2/THIRD_PARTY_NOTICES.md`](android2/THIRD_PARTY_NOTICES.md). The Magnity / Elo
-camera SDK is proprietary and is neither licensed nor redistributed here.
+1. Build the app:
+   ```sh
+   cd android2
+   JAVA_HOME=/path/to/android-studio/jbr ./gradlew :app:assembleDebug
+   ```
+2. Connect the camera to your phone with a **USB-C OTG adapter**.
+3. Open the app, accept the USB permission — you're streaming.
+
+> **Note:** the vendor SDK (`libcoresdk.so` / the AAR files under `android2/lib/`) is **not**
+> included in this repository. Supply it from your own copy of the vendor software.
+
+## 🧰 Also in this repository
+
+- **🐧 Linux desktop viewer** (`viewer.py`) — live 160×120 @ 15 fps in pure Python, bit-exact
+  factory NUC, flat-field / bad-pixel / denoise pipeline, Planck-based °C readout.
+  Quick start:
+  ```bash
+  pip install pyusb numpy pillow PySide6 matplotlib
+  sudo cp 99-magnity-thermal.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules
+  python3 viewer.py
+  ```
+- **🧠 Train your own thermal SR model** — a Colab pipeline in [`sr_train/`](sr_train/README.md).
+- **🔬 Reverse-engineering notes** — the full USB protocol in [`PROTOCOL.md`](PROTOCOL.md) and
+  the SDK / calibration write-up in
+  [`android2/REVERSE_ENGINEERING.md`](android2/REVERSE_ENGINEERING.md).
+- **`android/`** — an earlier Android port that runs the fully open, SDK-free pipeline.
+
+## 📜 Licence
+
+**Free for noncommercial use** — personal, research, educational and hobby use. Commercial use
+needs a separate written licence; see [`LICENSE`](LICENSE). Third-party components keep their
+own terms ([`android2/THIRD_PARTY_NOTICES.md`](android2/THIRD_PARTY_NOTICES.md)). The Magnity /
+Elo SDK is proprietary and is neither licensed nor redistributed here.
 
 Temperature readings are informational only; this is not a calibrated instrument.
 
-## If this helped you
-A ⭐ on the repository is appreciated — it is how I gauge whether to keep polishing it.
+## ⭐ Brought your camera back to life?
+
+**Give the repository a star** — it's how I decide whether to keep polishing it.
+Issues and pull requests are welcome.
