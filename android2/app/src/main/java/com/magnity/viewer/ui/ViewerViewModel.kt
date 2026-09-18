@@ -875,7 +875,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 val xm = if (x > 0) x - 1 else 0
                 val xp = if (x < w - 1) x + 1 else w - 1
                 val i = row + x
-                val mag = abs(field[i + xp] - field[i + xm]) +
+                // horizontal taps use the ROW base + neighbour column — i already
+                // contains x, so field[i + xp] would run past the row end
+                val mag = abs(field[row + xp] - field[row + xm]) +
                           abs(field[yp + x] - field[ym + x])
                 val t = mag * inv
                 g[i] = if (t >= 1f) 0f else 1f - t
