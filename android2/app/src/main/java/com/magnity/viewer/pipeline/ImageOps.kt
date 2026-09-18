@@ -482,4 +482,32 @@ object ImageOps {
         val frac = pos - i
         return if (i + 1 < c.size) c[i] * (1 - frac) + c[i + 1] * frac else c[i]
     }
+
+    /**
+     * [pLo]/[pHi] percentiles from ONE histogram pass — O(n), no sort and no
+     * full-array copy. The auto range calls this every frame, where the sorted
+     * version's two copies + two sorts dominated the small-field stage. Bin
+     * quantization is ~range/512, far below anything the display range shows.
+     */
+    fun percentileRange(a: FloatArray, pLo: Float, pHi: Float, bins: Int = 512): Pair<Float, Float> {
+        if (a.isEmpty()) return 0f to 0f
+        var lo = Float.MAX_VALUE; var hi = -Float.MAX_VALUE
+        for (v in a) { if (v < lo) lo = v; if (v > hi) hi = v }
+        if (hi - lo < 1e-12f) return lo to hi
+        val scale = (bins - 1) / (hi - lo)
+        val hist = IntArray(bins)
+        for (v in a) hist[((v - lo) * scale).toInt()]++
+        val n = a.size
+        val tLo = pLo / 100f * n
+        val tHi = pHi / 100f * n
+        var cum = 0
+        var vLo = lo; var vHi = hi
+        var foundLo = false
+        for (i in 0 until bins) {
+            cum += hist[i]
+            if (!foundLo && cum >= tLo) { vLo = lo + i / scale; foundLo = true }
+            if (cum >= tHi) { vHi = lo + i / scale; return vLo to vHi }
+        }
+        return vLo to vHi
+    }
 }

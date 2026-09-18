@@ -66,6 +66,10 @@ object Fusion {
      *
      * @param luma      sensor-orientation luma frame (lw x lh)
      * @param edge      edge map from [edgeMap] (required for EDGES mode, same dims as luma)
+     * @param gate      EDGES: thermal-gradient gating field (gw x gh, 1 = flat thermal,
+     *                  overlay shows fully; →0 where the thermal gradient already
+     *                  carries structure — suppresses double edges). Null = no gating.
+     * @param gw, gh    dimensions of [gate] (the oriented thermal grid)
      * @param strength  EDGES: overlay opacity; BLEND: thermal weight (0..1)
      * @param zoom      registration scale (>1 crops into the wider visible FOV)
      * @param dx, dy    registration offset, in fractions of the upright visible frame
@@ -75,6 +79,7 @@ object Fusion {
         pixels: IntArray, dispW: Int, dispH: Int,
         luma: ByteArray, lw: Int, lh: Int,
         edge: FloatArray?,
+        gate: FloatArray?, gw: Int, gh: Int,
         mode: Mode, strength: Float,
         zoom: Float, dx: Float, dy: Float, rotation: Int,
     ) {
@@ -88,6 +93,8 @@ object Fusion {
             val uy = (ny * uh).toInt()
             if (uy < 0 || uy >= uh) continue
             val rowBase = y * dispW
+            // gate row for this display row (identity when display == thermal grid)
+            val gRow = if (gate != null) (y * gh / dispH) * gw else 0
             for (x in 0 until dispW) {
                 val nx = ((x + 0.5f) / dispW - 0.5f) * invZoom + 0.5f + dx
                 val ux = (nx * uw).toInt()
@@ -107,11 +114,26 @@ object Fusion {
                 var g = (c shr 8) and 0xFF
                 var b = c and 0xFF
                 if (mode == Mode.EDGES) {
-                    val e = (edge ?: return) [idx] * s
+                    // thermal-aware gating: the overlay fills in where the thermal
+                    // field is flat; where the thermal gradient already shows
+                    // structure the visible edge is suppressed (no double edges)
+                    val gv = if (gate != null) gate[gRow + x * gw / dispW] else 1f
+                    val e = (edge ?: return)[idx] * s * gv
                     if (e > 0.004f) {
-                        r += (e * (255 - r)).toInt()
-                        g += (e * (255 - g)).toInt()
-                        b += (e * (255 - b)).toInt()
+                        // adaptive contrast colour: pull toward the OPPOSITE extreme
+                        // of the local thermal luminance — visible on both bright and
+                        // dark palette colours, where fixed white vanished on hot
+                        // yellows/whites
+                        val lum = (r * 299 + g * 587 + b * 114) / 1000
+                        if (lum < 128) {
+                            r += (e * (255 - r)).toInt()
+                            g += (e * (255 - g)).toInt()
+                            b += (e * (255 - b)).toInt()
+                        } else {
+                            r -= (e * r).toInt()
+                            g -= (e * g).toInt()
+                            b -= (e * b).toInt()
+                        }
                     }
                 } else {
                     val vis = luma[idx].toInt() and 0xFF

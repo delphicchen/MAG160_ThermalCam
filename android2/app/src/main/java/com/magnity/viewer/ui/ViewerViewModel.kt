@@ -33,6 +33,7 @@ import com.magnity.viewer.pipeline.NcnnUpscaler
 import com.magnity.viewer.pipeline.Palettes
 import com.magnity.viewer.pipeline.TemporalDenoise
 import com.magnity.viewer.usb.MagDeviceWrapper
+import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -72,6 +73,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         const val ACTION_USB_PERMISSION = "com.magnity.viewer.USB_PERMISSION"
         /** AUTO 1/Z smoothing factor per thermal frame (~0.3 s time constant). */
         private const val AUTO_INVZ_ALPHA = 0.15f
+        /** Share of the previous smoothed edge map kept per visible frame — kills
+         *  frame-to-frame Sobel flicker at the cost of one frame of trail. */
+        private const val EDGE_IIR_KEEP = 0.5f
+        /** Thermal gradient, as a fraction of the display range per pixel, at which
+         *  the EDGES overlay is fully suppressed (double-edge suppression knee). */
+        private const val GATE_GRAD_REL = 0.03f
     }
 
     enum class Upscaler { BICUBIC, ANIME4K, NCNN }
@@ -407,6 +414,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             rgbCamera.stop()
             edgeCache = null
+            edgeSmooth = null
         }
     }
 
@@ -495,14 +503,17 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private var edgeCache: FloatArray? = null
+    private var edgeSmooth: FloatArray? = null
     private var edgeCacheId = -1L
 
     /**
      * Blend the visible camera into the display bitmap (processing thread). Overlay modes
      * keep the frame size; wide search returns the whole visible frame with the thermal
      * image inset, plus that inset's rect. Null = no visible frame yet, draw thermal only.
+     * [gate] is the thermal-gradient gating field for EDGES (see [thermalGate]).
      */
-    private fun fuse(bmp: android.graphics.Bitmap): Pair<android.graphics.Bitmap, android.graphics.RectF?>? {
+    private fun fuse(bmp: android.graphics.Bitmap, gate: FloatArray?, gw: Int, gh: Int)
+            : Pair<android.graphics.Bitmap, android.graphics.RectF?>? {
         val fr = rgbCamera.latest() ?: return null
         val invZ = currentInvZ()
         val reg = registration(invZ)
@@ -523,10 +534,18 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 edgeCache = Fusion.edgeMap(fr.data, fr.width, fr.height,
                     edgeCache?.takeIf { it.size == fr.data.size } ?: FloatArray(fr.data.size))
                 edgeCacheId = fr.id
+                // temporal IIR on the magnitude: Sobel flickers frame-to-frame on
+                // noisy luma; the smoothed map is what compose() samples
+                val src = edgeCache!!
+                val sm = edgeSmooth?.takeIf { it.size == src.size }
+                    ?: FloatArray(src.size).also { edgeSmooth = it }
+                val keep = EDGE_IIR_KEEP
+                for (i in src.indices) sm[i] = keep * sm[i] + (1f - keep) * src[i]
             }
-            edgeCache
+            edgeSmooth
         } else null
-        Fusion.compose(px, w, h, fr.data, fr.width, fr.height, edge, fusionMode, fusionStrength,
+        Fusion.compose(px, w, h, fr.data, fr.width, fr.height, edge, gate, gw, gh,
+                       fusionMode, fusionStrength,
                        reg.zoom, reg.dx, reg.dy, fusionRotation)
         return android.graphics.Bitmap.createBitmap(px, w, h,
                    android.graphics.Bitmap.Config.ARGB_8888) to null
@@ -625,8 +644,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
         val slo: Float; val shi: Float
         if (autoScale) {
-            val p1 = ImageOps.percentile(oriented, 1f)
-            val p99 = ImageOps.percentile(oriented, 99f)
+            // one histogram pass for both percentiles — the sorted version's two
+            // copies + two sorts per frame were the dominant cost of this stage
+            val (p1, p99) = ImageOps.percentileRange(oriented, 1f, 99f)
             slo = p1
             shi = if (p99 - p1 < 0.1f) p1 + 0.1f else p99
             scaleLo = slo; scaleHi = shi
@@ -636,7 +656,14 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
         var bitmap = render(oriented, ow, oh, slo, shi)
         var inset: android.graphics.RectF? = null
-        if (fusionOn) fuse(bitmap)?.let { (b, r) -> bitmap = b; inset = r }
+        if (fusionOn) {
+            // EDGES: gate the overlay by the thermal gradient so visible structure
+            // only fills flat thermal areas (fusion is display-only; the readouts
+            // came from the raw field above)
+            val gate = if (fusionMode == Fusion.Mode.EDGES)
+                thermalGate(oriented, ow, oh, shi - slo) else null
+            fuse(bitmap, gate, ow, oh)?.let { (b, r) -> bitmap = b; inset = r }
+        }
 
         return FrameResult(
             bitmap = bitmap, w = ow, h = oh,
@@ -827,6 +854,35 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private var lastCounts: FloatArray? = null
+
+    private var gateBuf: FloatArray? = null
+
+    /**
+     * Per-frame gating field for the EDGES overlay (w×h, 1 = thermally flat, the
+     * visible edge shows fully; →0 where the thermal gradient already carries
+     * structure, suppressing double edges). Gradients are measured against the
+     * display range so the gate is independent of the palette scale.
+     */
+    private fun thermalGate(field: FloatArray, w: Int, h: Int, range: Float): FloatArray {
+        val g = gateBuf?.takeIf { it.size == field.size }
+            ?: FloatArray(field.size).also { gateBuf = it }
+        val inv = 1f / (range.coerceAtLeast(0.1f) * GATE_GRAD_REL)
+        for (y in 0 until h) {
+            val ym = (if (y > 0) y - 1 else 0) * w
+            val yp = (if (y < h - 1) y + 1 else h - 1) * w
+            val row = y * w
+            for (x in 0 until w) {
+                val xm = if (x > 0) x - 1 else 0
+                val xp = if (x < w - 1) x + 1 else w - 1
+                val i = row + x
+                val mag = abs(field[i + xp] - field[i + xm]) +
+                          abs(field[yp + x] - field[ym + x])
+                val t = mag * inv
+                g[i] = if (t >= 1f) 0f else 1f - t
+            }
+        }
+        return g
+    }
 
     /** rotate then mirror, applied at input so markers/stats stay consistent. */
     private fun orient(src: FloatArray, w: Int, h: Int): FloatArray {
