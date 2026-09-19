@@ -88,3 +88,11 @@ Temperature readings are informational only; this is not a calibrated instrument
 
 **Give the repository a star** — it's how I decide whether to keep polishing it.
 Issues and pull requests are welcome.
+
+---
+
+## 🔗 友鏈
+
+**友鏈:** [https://linux.do](https://linux.do)
+
+非常感谢 LINUX DO 社区提供的交流平台 / Many thanks to the LINUX DO community for the great discussion platform.
