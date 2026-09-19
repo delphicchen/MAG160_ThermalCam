@@ -521,9 +521,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
             val effSrc = vm.effectiveDistanceSource()
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Chip("Auto focus", distSrc == FusionCalibration.DistanceSource.AUTO,
-                     Modifier.weight(1f),
-                     enabled = vm.focusCalibration !=
-                         CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_UNCALIBRATED) {
+                     Modifier.weight(1f)) {
                     vm.fusionDistanceSource = FusionCalibration.DistanceSource.AUTO
                 }
                 Chip("Manual", distSrc == FusionCalibration.DistanceSource.MANUAL,
@@ -535,12 +533,26 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
                     vm.fusionDistanceSource = FusionCalibration.DistanceSource.INFINITY
                 }
             }
-            if (distSrc == FusionCalibration.DistanceSource.AUTO &&
-                effSrc == FusionCalibration.DistanceSource.MANUAL) {
-                Text("Auto unavailable — using manual (" +
-                     (if (vm.focusCalibration == null) "focus not reported"
-                      else "focus " + focusCalName(vm.focusCalibration)) + ")",
-                     color = Color(0xFFD6A93D), fontSize = 10.sp)
+            if (distSrc == FusionCalibration.DistanceSource.AUTO) {
+                val learned = vm.focusMap
+                when {
+                    effSrc == FusionCalibration.DistanceSource.MANUAL ->
+                        Text("Auto unavailable — using manual (focus not reported)",
+                             color = Color(0xFFD6A93D), fontSize = 10.sp)
+                    vm.focusTrusted() -> {}
+                    learned.usable ->
+                        Text("Auto via focus learned from ${learned.points} alignments",
+                             color = DIM, fontSize = 10.sp)
+                    else ->
+                        Text("Lens focus UNCALIBRATED — reading used as-is; alignments saved " +
+                             "at 2 distances refine it (${learned.points}/2)",
+                             color = DIM, fontSize = 10.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(vm.fusionCalibPrompt, onCheckedChange = { vm.fusionCalibPrompt = it })
+                    Text("Ask to align when focus is outside the saved distances",
+                         color = FG, fontSize = 12.sp)
+                }
             }
             if (effSrc == FusionCalibration.DistanceSource.MANUAL) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -626,6 +638,11 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
 private fun AlignPanel(vm: ViewerViewModel) {
     var saveDlg by remember { mutableStateOf(false) }
     Column {
+        if (vm.calibPromptActive) {
+            Text("Focus ${vm.fusionDistanceLabel} is outside the saved distances — " +
+                 "align on the centre object, then Save…",
+                 color = Color(0xFFD6A93D), fontSize = 11.sp)
+        }
         AlignSlider("ZOOM", vm.fusionZoom, 1f..3f, "×%.2f") { vm.fusionZoom = it }
         AlignSlider("X", vm.fusionDx, -0.3f..0.3f, "%+.3f") { vm.fusionDx = it }
         AlignSlider("Y", vm.fusionDy, -0.3f..0.3f, "%+.3f") { vm.fusionDy = it }
@@ -635,7 +652,7 @@ private fun AlignPanel(vm: ViewerViewModel) {
             OutlinedButton(onClick = { saveDlg = true }, modifier = Modifier.weight(1f)) {
                 Text("Save…")
             }
-            Button(onClick = { vm.fusionAligning = false },
+            Button(onClick = { vm.endAligning() },
                    modifier = Modifier.weight(1f)) { Text("Done") }
         }
     }
@@ -645,7 +662,12 @@ private fun AlignPanel(vm: ViewerViewModel) {
 /** Distance entry for saving the current alignment as a calibration sample. */
 @Composable
 private fun SaveSampleDialog(vm: ViewerViewModel, onClose: () -> Unit) {
-    var text by remember { mutableStateOf("3") }
+    // pre-fill from the lens when it can tell the distance
+    var text by remember {
+        mutableStateOf(vm.suggestedInvZ()?.let { iz ->
+            if (iz <= 1e-4f) "∞" else "%.2f".format(java.util.Locale.ROOT, 1f / iz)
+        } ?: "3")
+    }
     var error by remember { mutableStateOf(false) }
 
     /** Metres (or "∞") → invZ; null = invalid. */
@@ -661,6 +683,11 @@ private fun SaveSampleDialog(vm: ViewerViewModel, onClose: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Distance to the object you just aligned on, in metres (or ∞):",
                      color = DIM, fontSize = 12.sp)
+                vm.focusDiopters?.let { d ->
+                    Text("Lens focus reading %.2f is saved with it".format(d) +
+                         " (pre-filled)",
+                         color = DIM, fontSize = 10.sp)
+                }
                 TextField(value = text, onValueChange = { text = it; error = false },
                           singleLine = true,
                           keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
@@ -729,8 +756,9 @@ private fun FocusLine(vm: ViewerViewModel) {
         d == null || d < 0f ->
             "Focus: " + focusCalName(vm.focusCalibration) + " · not reported"
         else -> "Focus: " + focusCalName(vm.focusCalibration) +
-                " · %.2f D".format(d) + " (" + vm.distanceText(d) + ")" +
-                if (vm.afActive) " · AF on" else ""
+                " · %.2f D".format(d) +
+                (vm.suggestedInvZ()?.let { " (" + vm.distanceText(it) + ")" } ?: "") +
+                (if (vm.afScanning) " · focusing…" else if (vm.afActive) " · centre AF" else "")
     }
     Text(text, color = DIM, fontSize = 10.sp)
 }
@@ -763,6 +791,20 @@ private fun InvZStopLabels() {
 /** Saved distance samples, each with its fit residual in native thermal pixels. */
 @Composable
 private fun CalibrationSection(vm: ViewerViewModel) {
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> uri?.let { vm.exportCalibration(it) } }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { vm.importCalibration(it) } }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { exportLauncher.launch("fusion_calibration.json") },
+                       enabled = vm.calibSamples.isNotEmpty(),
+                       modifier = Modifier.weight(1f)) { Text("Export…", fontSize = 12.sp) }
+        OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/json",
+                                                                 "text/plain", "*/*")) },
+                       modifier = Modifier.weight(1f)) { Text("Import…", fontSize = 12.sp) }
+    }
     val samples = vm.calibSamples
     if (samples.isEmpty()) {
         Text("Tip: align at a known distance, then “Save at distance” under the image.",

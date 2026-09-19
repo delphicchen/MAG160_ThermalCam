@@ -39,6 +39,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** One processed display frame + measurement results. */
 data class FrameResult(
@@ -73,6 +74,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         const val ACTION_USB_PERMISSION = "com.magnity.viewer.USB_PERMISSION"
         /** AUTO 1/Z smoothing factor per thermal frame (~0.3 s time constant). */
         private const val AUTO_INVZ_ALPHA = 0.15f
+        /** 2 Hz ticks out of the calibrated range before the align panel opens (1.5 s). */
+        private const val PROMPT_TICKS = 3
         /** Share of the previous smoothed edge map kept per visible frame — kills
          *  frame-to-frame Sobel flicker at the cost of one frame of trail. */
         private const val EDGE_IIR_KEEP = 0.5f
@@ -172,12 +175,21 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     /** Saved alignments at known distances, as a small JSON string. */
     var fusionCalibJson: String by Persisted(prefs, "fusion_calib", "",
         { k, d -> getString(k, d) ?: d }, { k, v -> putString(k, v) },
-        onSet = { calibFit = FusionCalibration.fit(FusionCalibration.decodeSamples(it)) })
+        onSet = { FusionCalibration.decodeSamples(it).let { ss ->
+            calibFit = FusionCalibration.fit(ss); focusMap = FusionCalibration.FocusMap(ss) } })
     var calibSamples by mutableStateOf(FusionCalibration.decodeSamples(fusionCalibJson))
         private set
     @Volatile private var calibFit = FusionCalibration.fit(calibSamples)
     /** Fit over [calibSamples]; not [FusionCalibration.Fit.usable] until the first sample. */
     val calibFitState: FusionCalibration.Fit get() = calibFit
+    /** Raw lens reading → 1/Z learned from the samples (UNCALIBRATED lenses). */
+    @Volatile var focusMap = FusionCalibration.FocusMap(calibSamples); private set
+    /** Open the align panel by itself when the focus leaves the calibrated range (AUTO). */
+    var fusionCalibPrompt: Boolean by pref("fusion_calib_prompt", true)
+    /** The align panel is open because of that prompt (not the drawer button). */
+    var calibPromptActive by mutableStateOf(false); private set
+    private var calibPromptSnoozed = false
+    private var outOfRangeTicks = 0
     /** Distance currently driving the overlay ("≈3.0 m" / "∞"), updated per frame in fuse(). */
     var fusionDistanceLabel by mutableStateOf("∞"); private set
 
@@ -185,6 +197,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var focusCalibration by mutableStateOf<Int?>(null); private set
     var focusDiopters by mutableStateOf<Float?>(null); private set
     var afActive by mutableStateOf(false); private set
+    var afScanning by mutableStateOf(false); private set
     private val rgbCameraLazy = lazy { RgbCamera(getApplication()) }
     private val rgbCamera by rgbCameraLazy
     private var appVisible = true
@@ -245,6 +258,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     focusCalibration = rgbCamera.focusCalibration
                     focusDiopters = rgbCamera.focusDiopters
                     afActive = rgbCamera.afActive
+                    afScanning = rgbCamera.afScanning
+                    checkCalibRange()
                 }
                 delay(500)
             }
@@ -431,10 +446,19 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         focusCalibration == CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_APPROXIMATE ||
         focusCalibration == CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_CALIBRATED
 
-    private fun autoDistanceReady(): Boolean = focusTrusted() && focusDiopters != null
+    /** AUTO can drive the overlay whenever the lens reports a focus reading. */
+    private fun autoDistanceReady(): Boolean = focusDiopters != null
+
+    /** The lens reading is used as diopters directly: a trusted lens, or an UNCALIBRATED
+     *  one (often close in practice) until [focusMap] has learned from 2+ alignments. */
+    fun focusRawAsDiopters(): Boolean = focusTrusted() || !focusMap.usable
+
+    /** Lens reading → 1/Z: as-is (see [focusRawAsDiopters]), else through [focusMap]. */
+    private fun focusToInvZ(d: Float): Float =
+        if (focusRawAsDiopters()) d.coerceAtLeast(0f) else focusMap.invZAt(d)
 
     /** Distance source actually driving the overlay: AUTO falls back to MANUAL
-     *  while the focus distance is unreported or UNCALIBRATED. */
+     *  while the focus distance is unreported. */
     fun effectiveDistanceSource(): FusionCalibration.DistanceSource =
         if (fusionDistanceSource == FusionCalibration.DistanceSource.AUTO && !autoDistanceReady())
             FusionCalibration.DistanceSource.MANUAL
@@ -451,9 +475,81 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
      *  (within 1 cm⁻¹… tolerance) replaces its previous sample. */
     fun addCalibSample(invZ: Float, zoom: Float, dx: Float, dy: Float) {
         val rest = calibSamples.filter { kotlin.math.abs(it.invZ - invZ) > 1e-4f }
-        calibSamples = (rest + FusionCalibration.CalibSample(invZ, zoom, dx, dy))
+        // record the lens reading too: it teaches AUTO the focus → distance map
+        calibSamples = (rest + FusionCalibration.CalibSample(invZ, zoom, dx, dy, focusDiopters))
             .sortedByDescending { it.invZ }
         fusionCalibJson = FusionCalibration.encodeSamples(calibSamples)
+        calibPromptActive = false
+    }
+
+    /** Distance the Save dialog should suggest from the lens; null = no reading. */
+    fun suggestedInvZ(): Float? = focusDiopters?.let { focusToInvZ(it) }
+
+    /** The align panel's Done. Leaving a prompt without saving snoozes it until the
+     *  focus comes back into the calibrated range. */
+    fun endAligning() {
+        if (calibPromptActive) calibPromptSnoozed = true
+        calibPromptActive = false
+        fusionAligning = false
+    }
+
+    /** ~2 Hz (main thread): open the align panel when AUTO focus sits outside the span
+     *  of the saved samples for [PROMPT_TICKS] ticks — compared in 1/Z while the reading
+     *  is taken as diopters, else raw reading against the samples' recorded readings. */
+    private fun checkCalibRange() {
+        val d = focusDiopters
+        if (!fusionOn || fusionDistanceSource != FusionCalibration.DistanceSource.AUTO ||
+            d == null || afScanning) { outOfRangeTicks = 0; return }
+        val raw = focusRawAsDiopters()
+        val axis = if (raw) calibSamples.map { it.invZ } else calibSamples.mapNotNull { it.focusD }
+        val x = if (raw) d.coerceAtLeast(0f) else d
+        if (FusionCalibration.inRange(x, axis)) {
+            outOfRangeTicks = 0
+            calibPromptSnoozed = false
+            return
+        }
+        if (!fusionCalibPrompt || calibPromptSnoozed || fusionAligning) return
+        if (++outOfRangeTicks < PROMPT_TICKS) return
+        outOfRangeTicks = 0
+        // start the sliders from the fit's guess so only a nudge is needed
+        val f = calibFit
+        if (f.usable) {
+            val iz = if (autoDistanceReady()) focusToInvZ(d) else fusionManualInvZ
+            fusionZoom = f.zoom; fusionDx = f.dxAt(iz); fusionDy = f.dyAt(iz)
+        }
+        calibPromptActive = true
+        fusionAligning = true
+    }
+
+    // ---- calibration file -------------------------------------------------------
+
+    fun exportCalibration(uri: android.net.Uri) {
+        val text = FusionCalibration.encodeFile(FusionCalibration.CalibFile(
+            fusionRotation, fusionZoom, fusionDx, fusionDy, calibSamples))
+        viewModelScope.launch(Dispatchers.IO) {
+            notice = runCatching {
+                getApplication<Application>().contentResolver.openOutputStream(uri, "wt")!!
+                    .use { it.write(text.toByteArray()) }
+                "Calibration exported (${calibSamples.size} samples)"
+            }.getOrElse { "Export failed: ${it.message}" }
+        }
+    }
+
+    fun importCalibration(uri: android.net.Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val f = runCatching {
+                getApplication<Application>().contentResolver.openInputStream(uri)!!
+                    .use { it.readBytes().decodeToString() }
+            }.getOrNull()?.let { FusionCalibration.decodeFile(it) }
+            withContext(Dispatchers.Main) {
+                if (f == null) { notice = "Not a fusion calibration file"; return@withContext }
+                fusionRotation = f.rotation
+                fusionZoom = f.zoom; fusionDx = f.dx; fusionDy = f.dy
+                calibSamples = f.samples.sortedByDescending { it.invZ }
+                fusionCalibJson = FusionCalibration.encodeSamples(calibSamples)
+                notice = "Calibration imported (${f.samples.size} samples)"
+            }
+        }
     }
 
     fun deleteCalibSample(index: Int) {
@@ -476,15 +572,15 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         if (src != lastDistSrc) {           // seed the filter on entry — no jump
             lastDistSrc = src
             if (src == FusionCalibration.DistanceSource.AUTO)
-                autoInvZ = rgbCamera.focusDiopters?.coerceAtLeast(0f) ?: 0f
+                autoInvZ = rgbCamera.focusDiopters?.let { focusToInvZ(it) } ?: 0f
         }
         return when (src) {
             FusionCalibration.DistanceSource.INFINITY -> 0f
             FusionCalibration.DistanceSource.MANUAL -> fusionManualInvZ
             FusionCalibration.DistanceSource.AUTO -> {
-                // diopters are already 1/Z in m⁻¹; 0 = infinity focus
+                // trusted diopters are already 1/Z in m⁻¹ (0 = ∞); else learned map
                 val d = rgbCamera.focusDiopters
-                if (d != null && d >= 0f) autoInvZ += AUTO_INVZ_ALPHA * (d - autoInvZ)
+                if (d != null && d >= 0f) autoInvZ += AUTO_INVZ_ALPHA * (focusToInvZ(d) - autoInvZ)
                 autoInvZ
             }
         }
