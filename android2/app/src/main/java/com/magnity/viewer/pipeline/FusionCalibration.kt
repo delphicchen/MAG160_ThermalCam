@@ -44,9 +44,10 @@ object FusionCalibration {
     }
 
     /**
-     * Least-squares fit over the samples: zoom is the sample mean, dx/dy are
-     * lines against invZ (degrading to a constant for a single distinct
-     * distance). [usable] is false until the first sample exists.
+     * Fit over the samples. [at] interpolates between them (what the overlay uses);
+     * the least-squares lines (zoom = sample mean, dx/dy against invZ, a constant for
+     * a single distance) give the parallax slope outside the samples and the per-sample
+     * residual shown in the drawer. [usable] is false until the first sample exists.
      */
     class Fit(samples: List<CalibSample>) {
         val count = samples.size
@@ -60,6 +61,35 @@ object FusionCalibration {
 
         fun dxAt(invZ: Float) = dx0 + kx * invZ
         fun dyAt(invZ: Float) = dy0 + ky * invZ
+
+        /** Samples by distance (one per invZ), for [at]. */
+        private val pts = samples.groupBy { it.invZ }
+            .map { (iz, g) -> floatArrayOf(iz, g.map { it.zoom }.average().toFloat(),
+                                           g.map { it.dx }.average().toFloat(),
+                                           g.map { it.dy }.average().toFloat()) }
+            .sortedBy { it[0] }
+
+        /**
+         * Registration (zoom, dx, dy) at [invZ]: piecewise linear between neighbouring
+         * samples, so every saved distance is matched exactly. Beyond the nearest/farthest
+         * sample the offsets continue from that sample along the fitted parallax slope
+         * (kx, ky) and zoom holds — no wild extrapolation off one noisy segment.
+         */
+        fun at(invZ: Float): Triple<Float, Float, Float> {
+            val first = pts.first(); val last = pts.last()
+            if (invZ <= first[0])
+                return Triple(first[1], first[2] + kx * (invZ - first[0]),
+                              first[3] + ky * (invZ - first[0]))
+            if (invZ >= last[0])
+                return Triple(last[1], last[2] + kx * (invZ - last[0]),
+                              last[3] + ky * (invZ - last[0]))
+            var i = 0
+            while (invZ > pts[i + 1][0]) i++
+            val a = pts[i]; val b = pts[i + 1]
+            val t = (invZ - a[0]) / (b[0] - a[0])
+            return Triple(a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t,
+                          a[3] + (b[3] - a[3]) * t)
+        }
 
         /**
          * This sample's distance from the fitted offset, in native thermal

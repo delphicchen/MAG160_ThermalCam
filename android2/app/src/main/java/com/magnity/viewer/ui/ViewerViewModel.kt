@@ -515,7 +515,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val f = calibFit
         if (f.usable) {
             val iz = if (autoDistanceReady()) focusToInvZ(d) else fusionManualInvZ
-            fusionZoom = f.zoom; fusionDx = f.dxAt(iz); fusionDy = f.dyAt(iz)
+            val (z, x, y) = f.at(iz)
+            fusionZoom = z; fusionDx = x; fusionDy = y
         }
         calibPromptActive = true
         fusionAligning = true
@@ -594,7 +595,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private fun registration(invZ: Float): Registration {
         if (fusionAligning) return Registration(fusionZoom, fusionDx, fusionDy)
         val f = calibFit
-        return if (f.usable) Registration(f.zoom, f.dxAt(invZ), f.dyAt(invZ))
+        return if (f.usable) f.at(invZ).let { (z, x, y) -> Registration(z, x, y) }
                else Registration(fusionZoom, fusionDx, fusionDy)
     }
 
