@@ -6,11 +6,14 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.MeteringRectangle
 import android.util.Log
 import android.util.Size
 import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -42,7 +45,13 @@ import java.util.concurrent.atomic.AtomicLong
 @OptIn(ExperimentalCamera2Interop::class)
 class RgbCamera(private val context: Context) {
 
-    companion object { private const val TAG = "RgbCamera" }
+    companion object {
+        private const val TAG = "RgbCamera"
+        /** Settled focus readings kept for the median (~0.25 s at 30 fps). */
+        private const val FOCUS_MEDIAN_N = 7
+        /** Side of the centred AF window, as a fraction of the sensor array. */
+        private const val AF_CENTER_FRAC = 0.2f
+    }
 
     /** One luma frame in sensor orientation. `id` increments per frame (cache key). */
     class LumaFrame(val data: ByteArray, val width: Int, val height: Int, val id: Long)
@@ -64,11 +73,31 @@ class RgbCamera(private val context: Context) {
 
     // Focus-distance reporting, read for the fusion distance source. Calibration
     // level is a static lens characteristic (0 UNCALIBRATED / 1 APPROXIMATE /
-    // 2 CALIBRATED); diopters is the latest LENS_FOCUS_DISTANCE (1/m, 0 = ∞).
+    // 2 CALIBRATED); diopters is the median of the last settled LENS_FOCUS_DISTANCE
+    // readings (1/m on a calibrated lens, 0 = ∞) — readings taken while AF is
+    // sweeping the lens are dropped, that sweep is what made the value jump.
     @Volatile var focusCalibration: Int? = null; private set
     @Volatile var minFocusDiopters: Float? = null; private set
     @Volatile var focusDiopters: Float? = null; private set
     @Volatile var afActive = false; private set
+    /** AF is searching right now; [focusDiopters] holds the last settled value. */
+    @Volatile var afScanning = false; private set
+    private val focusRing = FloatArray(FOCUS_MEDIAN_N)
+    private var focusRingN = 0
+    private var focusRingPos = 0
+
+    /** Camera thread: keep settled readings only, publish their median. */
+    private fun onFocusReading(d: Float?, af: Int?) {
+        afActive = af != null && af != CaptureResult.CONTROL_AF_STATE_INACTIVE
+        afScanning = af == CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN ||
+                     af == CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN
+        if (d == null || d < 0f || afScanning) return
+        focusRing[focusRingPos] = d
+        focusRingPos = (focusRingPos + 1) % FOCUS_MEDIAN_N
+        if (focusRingN < FOCUS_MEDIAN_N) focusRingN++
+        val sorted = focusRing.copyOf(focusRingN).also { it.sort() }
+        focusDiopters = sorted[focusRingN / 2]
+    }
 
     /** Bind the analysis stream. Main thread only; CAMERA permission must be granted. */
     fun start(onError: (String) -> Unit = {}) {
@@ -111,9 +140,8 @@ class RgbCamera(private val context: Context) {
                             session: CameraCaptureSession, request: CaptureRequest,
                             result: TotalCaptureResult,
                         ) {
-                            focusDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
-                            val af = result.get(CaptureResult.CONTROL_AF_STATE)
-                            afActive = af != null && af != CaptureResult.CONTROL_AF_STATE_INACTIVE
+                            onFocusReading(result.get(CaptureResult.LENS_FOCUS_DISTANCE),
+                                           result.get(CaptureResult.CONTROL_AF_STATE))
                         }
                     })
                 val analysis = builder.build()
@@ -159,6 +187,23 @@ class RgbCamera(private val context: Context) {
                         CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION)
                     minFocusDiopters = info.getCameraCharacteristic(
                         CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+                    // Focus on the centre only: the thermal overlay is judged by what's in
+                    // the middle, and a whole-frame AF keeps re-picking foreground/background.
+                    val maxAf = info.getCameraCharacteristic(
+                        CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+                    val arr = info.getCameraCharacteristic(
+                        CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                    if (maxAf > 0 && arr != null) {
+                        val rw = (arr.width() * AF_CENTER_FRAC).toInt()
+                        val rh = (arr.height() * AF_CENTER_FRAC).toInt()
+                        val region = MeteringRectangle(arr.centerX() - rw / 2,
+                            arr.centerY() - rh / 2, rw, rh, MeteringRectangle.METERING_WEIGHT_MAX)
+                        Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(
+                            CaptureRequestOptions.Builder()
+                                .setCaptureRequestOption(CaptureRequest.CONTROL_AF_REGIONS,
+                                                         arrayOf(region))
+                                .build())
+                    }
                 }.onFailure { Log.w(TAG, "focus characteristics unavailable", it) }
             } catch (e: Exception) {
                 Log.e(TAG, "camera start failed", e)
@@ -178,6 +223,9 @@ class RgbCamera(private val context: Context) {
         latestFrame = null
         focusDiopters = null
         afActive = false
+        afScanning = false
+        focusRingN = 0
+        focusRingPos = 0
         focusCalibration = null
         minFocusDiopters = null
     }

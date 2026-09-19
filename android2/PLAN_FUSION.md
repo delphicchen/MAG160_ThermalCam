@@ -128,3 +128,26 @@ P2 → P3（先用手動 H∞：比例/平移/旋轉滑桿，等同舊版）→ 
     避免 AF 拉鋸抖動。
   - 未做：P1/P4 點選校正、P5 自動微調；Auto 物距在 Xiaomi 14T Pro 的對焦校正等級
     與回報品質仍需實機確認（plan 內的 adb 查法）。
+
+### P6　對焦體驗（2026-09-19 計畫）
+問題：選單 Focus 數值一直跳；Auto focus 選項按不了；校正只能存在 App 內。
+- **中央對焦 + 穩定讀值**（`RgbCamera`）：綁定後以 `Camera2CameraControl` 設
+  `CONTROL_AF_REGIONS` = 畫面中央 20% 方框（`CONTROL_MAX_REGIONS_AF` > 0 才設）；
+  AF 狀態為 PASSIVE/ACTIVE_SCAN（正在搜尋）時丟棄 `LENS_FOCUS_DISTANCE`，
+  其餘讀值取最近 7 筆中位數再輸出。選單顯示搜尋中（`focusing…`）。
+- **Auto 按不了的原因**：按鈕只在鏡頭回報 APPROXIMATE/CALIBRATED 時啟用；
+  鏡頭若回報 UNCALIBRATED（讀值單位不是真實 1/m），按鈕一律停用 —— 與「有沒有做全距離校正」無關。
+  改法：每筆校正樣本同時記下存檔當下的鏡頭讀值 `focusD`；UNCALIBRATED 鏡頭在
+  ≥2 筆不同 `focusD` 的樣本後，用樣本做「鏡頭讀值 → 1/Z」分段線性映射（兩端線性外插）。
+  Auto 按鈕只要有對焦讀值就可選；尚未學到映射時直接把讀值當屈光度用
+  （實機 UNCALIBRATED 但讀值相當準），學到後改用映射。
+- **超出校正範圍自動提示**：物距來源為 Auto 且開啟「自動提示」時，若鏡頭讀值
+  （可信鏡頭用 1/Z；否則用 `focusD`）落在已存樣本範圍 ±0.1 之外並持續 1.5 s，
+  自動在影像下方開啟 ZOOM/X/Y 對齊面板（以目前擬合值為起點），Save… 預填對焦推得的距離。
+  按 Done 不存 → 暫停提示直到讀值回到範圍內。
+- **校正匯出／匯入**：選單 Export… / Import…（SAF，JSON 檔）：
+  `{"version":1,"rotation":…,"zoom":…,"dx":…,"dy":…,"samples":[…]}`；
+  匯入會覆蓋目前樣本與旋轉／手動對齊值。
+- 2026-09-19　P6 完成（未實機測試）：以上四項照計畫實作；樣本 JSON 多一個可選欄位
+  `focusD`（舊資料相容）。選單 Focus 行顯示 `focusing…`／`centre AF`，未信任鏡頭只在
+  學到映射後才顯示換算距離。匯出預設檔名 `fusion_calibration.json`。
