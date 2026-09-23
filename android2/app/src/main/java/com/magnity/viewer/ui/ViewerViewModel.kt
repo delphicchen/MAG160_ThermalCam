@@ -13,6 +13,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.location.LocationRequest
+import android.provider.OpenableColumns
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -24,6 +25,7 @@ import androidx.lifecycle.viewModelScope
 import com.magnity.viewer.camera.RgbCamera
 import com.magnity.viewer.media.FrameComposer
 import com.magnity.viewer.media.MediaSaver
+import com.magnity.viewer.media.ThermalStream
 import com.magnity.viewer.media.VideoRecorder
 import com.magnity.viewer.pipeline.Anime4kGpu
 import com.magnity.viewer.pipeline.Fusion
@@ -54,9 +56,15 @@ data class FrameResult(
     val scaleLoC: Float,          // display range in °C (colour bar labels)
     val scaleHiC: Float,
     val emissivity: Float,        // ε in effect for this frame (stamped into captures)
+    /** Oriented native grid of absolute °C, before any denoising — what SPOT reads and
+     *  what the .mgt temperature file stores. Read-only: it is the pipeline's buffer. */
+    val temps: FloatArray,
     /** Where the thermal grid sits inside [bitmap], normalized; null = it fills it
      *  (everything except the wide-search fusion mode). Markers and taps map through it. */
     val inset: android.graphics.RectF? = null,
+    /** The visible camera's AF window in normalized [bitmap] coordinates — the patch the
+     *  AUTO object distance is measured on. Null = fusion off or the crosshair is off. */
+    val afBox: android.graphics.RectF? = null,
 )
 
 /**
@@ -184,8 +192,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     val calibFitState: FusionCalibration.Fit get() = calibFit
     /** Raw lens reading → 1/Z learned from the samples (UNCALIBRATED lenses). */
     @Volatile var focusMap = FusionCalibration.FocusMap(calibSamples); private set
-    /** Open the align panel by itself when the focus leaves the calibrated range (AUTO). */
+    /** Offer to re-align when the focus leaves the calibrated range (AUTO). */
     var fusionCalibPrompt: Boolean by pref("fusion_calib_prompt", true)
+    /** Draw the visible camera's AF window over the fused image. */
+    var fusionCrosshair: Boolean by pref("fusion_crosshair", true)
+    /** Snap/Rec also write the per-pixel temperatures as a .mgt file. */
+    var saveThermalData: Boolean by pref("save_thermal_data", false)
     /** The align panel is open because of that prompt (not the drawer button). */
     var calibPromptActive by mutableStateOf(false); private set
     private var calibPromptSnoozed = false
@@ -198,6 +210,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var focusDiopters by mutableStateOf<Float?>(null); private set
     var afActive by mutableStateOf(false); private set
     var afScanning by mutableStateOf(false); private set
+    /** The centred AF window is in force (else the HAL meters the whole frame). */
+    var afCentreRegion by mutableStateOf(false); private set
     private val rgbCameraLazy = lazy { RgbCamera(getApplication()) }
     private val rgbCamera by rgbCameraLazy
     private var appVisible = true
@@ -214,6 +228,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var notice by mutableStateOf<String?>(null)
     /** Transcript of the last [runSdkSmokeTest]; null = never run. */
     var sdkLog by mutableStateOf<String?>(null); private set
+    /** Open temperature capture (.mgt) being reviewed; null = live view. */
+    var playback by mutableStateOf<ThermalPlayback?>(null); private set
 
     private var loop: Job? = null
 
@@ -259,6 +275,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     focusDiopters = rgbCamera.focusDiopters
                     afActive = rgbCamera.afActive
                     afScanning = rgbCamera.afScanning
+                    afCentreRegion = rgbCamera.afCentreRegion
                     checkCalibRange()
                 }
                 delay(500)
@@ -493,33 +510,44 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         fusionAligning = false
     }
 
-    /** ~2 Hz (main thread): open the align panel when AUTO focus sits outside the span
-     *  of the saved samples for [PROMPT_TICKS] ticks — compared in 1/Z while the reading
-     *  is taken as diopters, else raw reading against the samples' recorded readings. */
+    /** The prompt's Align button: seed the sliders from the fit's guess at the current
+     *  distance — only a nudge should be needed — and open the panel. */
+    fun startPromptedAlign() {
+        val f = calibFit
+        if (f.usable) {
+            val d = focusDiopters
+            val iz = if (d != null && autoDistanceReady()) focusToInvZ(d) else fusionManualInvZ
+            val (z, x, y) = f.at(iz)
+            fusionZoom = z; fusionDx = x; fusionDy = y
+        }
+        fusionAligning = true
+    }
+
+    /** The prompt's dismiss: stay as we are until the focus is back in range. */
+    fun dismissCalibPrompt() {
+        calibPromptSnoozed = true
+        calibPromptActive = false
+    }
+
+    /** ~2 Hz (main thread): raise the "align?" offer when the AUTO object distance sits
+     *  more than [FusionCalibration.RANGE_TOL_M] outside the saved distances for
+     *  [PROMPT_TICKS] ticks. The panel is NOT opened — the offer is a button over the
+     *  image, so a passing focus change can't interrupt what you are looking at. */
     private fun checkCalibRange() {
         val d = focusDiopters
         if (!fusionOn || fusionDistanceSource != FusionCalibration.DistanceSource.AUTO ||
             d == null || afScanning) { outOfRangeTicks = 0; return }
-        val raw = focusRawAsDiopters()
-        val axis = if (raw) calibSamples.map { it.invZ } else calibSamples.mapNotNull { it.focusD }
-        val x = if (raw) d.coerceAtLeast(0f) else d
-        if (FusionCalibration.inRange(x, axis)) {
+        // compare in 1/Z: on an untrusted lens the reading goes through the learned map
+        if (FusionCalibration.inRange(focusToInvZ(d), calibSamples.map { it.invZ })) {
             outOfRangeTicks = 0
             calibPromptSnoozed = false
+            calibPromptActive = false
             return
         }
         if (!fusionCalibPrompt || calibPromptSnoozed || fusionAligning) return
         if (++outOfRangeTicks < PROMPT_TICKS) return
         outOfRangeTicks = 0
-        // start the sliders from the fit's guess so only a nudge is needed
-        val f = calibFit
-        if (f.usable) {
-            val iz = if (autoDistanceReady()) focusToInvZ(d) else fusionManualInvZ
-            val (z, x, y) = f.at(iz)
-            fusionZoom = z; fusionDx = x; fusionDy = y
-        }
         calibPromptActive = true
-        fusionAligning = true
     }
 
     // ---- calibration file -------------------------------------------------------
@@ -599,6 +627,24 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                else Registration(fusionZoom, fusionDx, fusionDy)
     }
 
+    /** [fuse] publishes the AF window for the frame it just built (processing thread). */
+    private var afBoxOut: android.graphics.RectF? = null
+
+    /**
+     * The visible camera's AF window in normalized coordinates of the composed frame.
+     * Overlay modes map display → visible with n_vis = (n_disp − 0.5)/zoom + 0.5 + d, so
+     * the lens centre comes back at 0.5 − d·zoom and the window's side scales with zoom;
+     * wide search IS the visible frame, so the window sits dead centre at its true size.
+     */
+    private fun afBox(reg: Registration, wide: Boolean): android.graphics.RectF? {
+        if (!fusionCrosshair) return null
+        val frac = RgbCamera.AF_CENTER_FRAC
+        val cx = if (wide) 0.5f else 0.5f - reg.dx * reg.zoom
+        val cy = if (wide) 0.5f else 0.5f - reg.dy * reg.zoom
+        val half = if (wide) frac / 2f else frac * reg.zoom / 2f
+        return android.graphics.RectF(cx - half, cy - half, cx + half, cy + half)
+    }
+
     private var edgeCache: FloatArray? = null
     private var edgeSmooth: FloatArray? = null
     private var edgeCacheId = -1L
@@ -611,9 +657,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun fuse(bmp: android.graphics.Bitmap, gate: FloatArray?, gw: Int, gh: Int)
             : Pair<android.graphics.Bitmap, android.graphics.RectF?>? {
+        afBoxOut = null
         val fr = rgbCamera.latest() ?: return null
         val invZ = currentInvZ()
         val reg = registration(invZ)
+        afBoxOut = afBox(reg, fusionMode == Fusion.Mode.SEARCH)
         fusionDistanceLabel = if (invZ <= 1e-4f) "∞" else "≈" + distanceText(invZ)
         val w = bmp.width; val h = bmp.height
         val px = IntArray(w * h)
@@ -655,7 +703,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 ?.let { lm -> runCatching { lm.removeUpdates(locationListener) } }
         }
         loop?.cancel()
-        synchronized(recLock) { recorder?.also { recorder = null } }?.stop()
+        synchronized(recLock) {
+            recorder?.also { recorder = null }?.stop()
+            thermalWriter?.also { thermalWriter = null }?.close()
+        }
+        playback?.close(); playback = null
         anime4k?.close()
         ncnn?.close()
         runCatching { sdk.close() }
@@ -720,7 +772,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val w = sdk.width; val h = sdk.height
         val degC = FloatArray(tempMilliC.size) { MagDeviceWrapper.degC(tempMilliC[it]) }
 
-        var oriented = orient(degC, w, h)      // also publishes lastCounts
+        val raw = orient(degC, w, h)          // absolute °C, what SPOT and .mgt read
+        var oriented = raw
         val ow: Int; val oh: Int
         if (rotation % 180 == 0) { ow = w; oh = h } else { ow = h; oh = w }
 
@@ -753,6 +806,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
         var bitmap = render(oriented, ow, oh, slo, shi)
         var inset: android.graphics.RectF? = null
+        var afWindow: android.graphics.RectF? = null
         if (fusionOn) {
             // EDGES: gate the overlay by the thermal gradient so visible structure
             // only fills flat thermal areas (fusion is display-only; the readouts
@@ -760,6 +814,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             val gate = if (fusionMode == Fusion.Mode.EDGES)
                 thermalGate(oriented, ow, oh, shi - slo) else null
             fuse(bitmap, gate, ow, oh)?.let { (b, r) -> bitmap = b; inset = r }
+            afWindow = afBoxOut
         }
 
         return FrameResult(
@@ -769,7 +824,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             fpa = sdk.sensorTemp()?.toLong(),
             scaleLoC = slo, scaleHiC = shi,
             emissivity = emissivity,
+            temps = raw,
             inset = inset,
+            afBox = afWindow,
         )
     }
 
@@ -867,6 +924,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     private val recLock = Any()
     private var recorder: VideoRecorder? = null
+    private var thermalWriter: ThermalStream.Writer? = null
 
     private fun composite(fr: FrameResult) = FrameComposer.compose(
         fr, Palettes.lut(paletteName), showMaxRoi, showMinRoi, spot, spotCelsius())
@@ -878,12 +936,23 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             val loc = captureLocation()
             notice = try {
                 MediaSaver.savePng(ctx, composite(fr), loc)
-                    ?.let { (_, tagged) -> "Snapshot saved to Pictures/MagViewer" + geoSuffix(loc, tagged) }
+                    ?.let { (_, tagged) ->
+                        "Snapshot saved to Pictures/MagViewer" + geoSuffix(loc, tagged) +
+                            thermalSuffix(fr)
+                    }
                     ?: "Snapshot failed"
             } catch (e: Throwable) {
                 Log.e(TAG, "screenshot failed", e); "Snapshot failed: ${e.message}"
             }
         }
+    }
+
+    /** Companion .mgt for a snapshot, when the option is on: the field behind the PNG. */
+    private fun thermalSuffix(fr: FrameResult): String {
+        if (!saveThermalData) return ""
+        val name = ThermalStream.writeSingle(getApplication(), fr.temps, fr.w, fr.h,
+                                             fr.emissivity)
+        return if (name != null) " + $name" else " (temperature file failed)"
     }
 
     fun toggleRecording() {
@@ -894,7 +963,15 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             val (w, h) = FrameComposer.outSize(fr)
             try {
                 val loc = captureLocation()
-                synchronized(recLock) { recorder = VideoRecorder(ctx, w, h, loc) }
+                synchronized(recLock) {
+                    recorder = VideoRecorder(ctx, w, h, loc)
+                    // a failed temperature file must not cost the video
+                    thermalWriter = if (saveThermalData)
+                        runCatching { ThermalStream.Writer(ctx, fr.w, fr.h, emissivity) }
+                            .onFailure { Log.e(TAG, "thermal stream start failed", it) }
+                            .getOrNull()
+                    else null
+                }
                 if (geotag && loc == null) notice = "Recording without geo-tag — no location fix yet"
                 recordStartMs = System.currentTimeMillis()
                 recording = true
@@ -913,13 +990,20 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopRecording() {
-        val r = synchronized(recLock) { recorder.also { recorder = null } } ?: return
+        val (r, t) = synchronized(recLock) {
+            val pair = recorder to thermalWriter
+            recorder = null; thermalWriter = null
+            pair
+        }
+        if (r == null) { t?.close(); return }
         recording = false
         viewModelScope.launch(Dispatchers.IO) {
             val uri = r.stop()
+            val temps = t?.let { w -> if (w.close() != null) w.displayName else null }
             notice = if (uri != null)
                          "Video saved to Movies/MagViewer (${r.codecName}, ${r.frames} frames" +
-                             (if (r.geoTagged) ", geo-tagged)" else ")")
+                             (if (r.geoTagged) ", geo-tagged)" else ")") +
+                             (temps?.let { " + $it" } ?: "")
                      else "Recording failed (no usable frames)"
         }
     }
@@ -932,6 +1016,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             if (w != r.width || h != r.height) return     // rotated mid-recording: skip
             try {
                 r.addFrame(composite(fr))
+                thermalWriter?.takeIf { it.width == fr.w && it.height == fr.h }
+                    ?.addFrame(fr.temps)
                 return
             } catch (e: Throwable) {
                 Log.e(TAG, "video frame failed", e)
@@ -941,16 +1027,44 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         stopRecording()          // encoder broke — finalise what we have
     }
 
+    // ---- saved temperature captures --------------------------------------------
+
+    /** Open a .mgt capture for review; the live stream keeps running underneath. */
+    fun openPlayback(uri: android.net.Uri) {
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val name = runCatching {
+                ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME),
+                                          null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+            }.getOrNull() ?: uri.lastPathSegment ?: "capture"
+            val opened = runCatching { ThermalStream.Reader(ctx, uri) }
+            withContext(Dispatchers.Main) {
+                opened.onSuccess { r ->
+                    playback?.close()
+                    playback = ThermalPlayback(r, name)
+                }.onFailure {
+                    Log.e(TAG, "playback open failed", it)
+                    notice = "Cannot read temperature file: ${it.message}"
+                }
+            }
+        }
+    }
+
+    fun closePlayback() {
+        playback?.close()
+        playback = null
+    }
+
     // ---- measurement ----------------------------------------------------------
 
     fun spotCelsius(): Float? {
         val fr = lastFrame ?: return null
         val (x, y) = spot ?: return null
         if (x < 0 || y < 0 || x >= fr.w || y >= fr.h) return null
-        return lastCounts?.get(y * fr.w + x)
+        return fr.temps.getOrNull(y * fr.w + x)
     }
-
-    private var lastCounts: FloatArray? = null
 
     private var gateBuf: FloatArray? = null
 
@@ -992,7 +1106,6 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             if (rotation % 180 != 0) { cw = h; ch = w }
         }
         if (mirror) dst = ImageOps.flipHorizontal(dst, cw, ch)
-        lastCounts = dst
         return dst
     }
 

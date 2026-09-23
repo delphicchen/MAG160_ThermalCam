@@ -40,7 +40,8 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 | ✨ **Anime4K GPU upscaling** | Sharp, clean display with a real-time CNN shader. |
 | 📸 **Snapshots** | One tap saves a PNG. |
 | 🎬 **Video recording** | Hardware **HEVC/H.265** encoding with automatic H.264 fallback. |
-| 🔀 **Visible-light fusion (beta)** | Overlay the phone camera's edges on the thermal image (MSX-style), blend, or search in the wide visible view — with alignment calibrated at several distances, auto distance from centre-weighted lens focus, and calibration export/import. |
+| 🌡️ **Temperature captures** | Snapshots and recordings can also save a `.mgt` file holding every pixel's °C — reopen it in the app and read any position, in any frame. |
+| 🔀 **Visible-light fusion (beta)** | Overlay the phone camera's edges on the thermal image (MSX-style), blend, or search in the wide visible view — with alignment calibrated at several distances, auto distance from centre-weighted lens focus (with a crosshair showing the patch it measures), and calibration export/import. |
 | 📍 **Optional geo-tag** | Stamp precise GPS location into snapshots and videos — off until you turn it on. |
 | 💾 **Remembers your setup** | Palette, range, rotation, upscaler, emissivity and more survive restarts. |
 | 🚫 **No watermark** | Your images are yours. |

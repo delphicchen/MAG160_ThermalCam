@@ -28,9 +28,10 @@ object FusionCalibration {
     /** Manual-slider stops, spaced evenly in 1/Z: 1.5 / 2 / 3 / 5 / 10 m and ∞. */
     val DISTANCE_STOPS_M = floatArrayOf(1.5f, 2f, 3f, 5f, 10f, Float.POSITIVE_INFINITY)
 
-    /** A reading this far outside the samples' span counts as uncalibrated (axis units:
-     *  1/m for a trusted lens, raw lens units otherwise; 0.1 ≈ ∞ vs 10 m). */
-    const val RANGE_TOL = 0.1f
+    /** How far outside the saved distances the object may sit before the alignment
+     *  counts as stale. In METRES: the same slack means the same physical parallax
+     *  error at every distance, where a fixed step in 1/Z did not. */
+    const val RANGE_TOL_M = 0.5f
 
     /**
      * One saved alignment: the zoom/offset the user dialled in at distance 1/invZ.
@@ -127,10 +128,20 @@ object FusionCalibration {
         }
     }
 
-    /** True when [x] lies inside the span of [axis] (± [RANGE_TOL]); empty = never. */
-    fun inRange(x: Float, axis: List<Float>): Boolean {
+    /** Metres for an inverse distance; at or below the noise floor = ∞. */
+    fun distanceM(invZ: Float): Float =
+        if (invZ > 1e-4f) 1f / invZ else Float.POSITIVE_INFINITY
+
+    /**
+     * True when the object at [invZ] is within [RANGE_TOL_M] of the span the samples
+     * cover ([axis] = their inverse distances); no samples = never. Compared in metres,
+     * and ∞ ± tolerance stays ∞, so only ∞ itself matches an ∞-only calibration.
+     */
+    fun inRange(invZ: Float, axis: List<Float>): Boolean {
         if (axis.isEmpty()) return false
-        return x >= axis.min() - RANGE_TOL && x <= axis.max() + RANGE_TOL
+        val z = distanceM(invZ)
+        val ds = axis.map { distanceM(it) }
+        return z >= ds.min() - RANGE_TOL_M && z <= ds.max() + RANGE_TOL_M
     }
 
     /** Least-squares y = a + b·x; a single distinct x (or one point) → constant. */

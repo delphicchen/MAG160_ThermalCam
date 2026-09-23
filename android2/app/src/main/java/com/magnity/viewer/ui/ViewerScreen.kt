@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.StrokeCap
@@ -47,16 +48,22 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-private val DIM = Color(0xFF8B949E)
-private val FG = Color(0xFFE6EDF3)
-private val ACCENT = Color(0xFF58A6FF)
-private val HOT = Color(0xFFF85149)
-private val COLD = Color(0xFF3FB950)
+internal val DIM = Color(0xFF8B949E)
+internal val FG = Color(0xFFE6EDF3)
+internal val ACCENT = Color(0xFF58A6FF)
+internal val HOT = Color(0xFFF85149)
+internal val COLD = Color(0xFF3FB950)
+/** AF window / attention colour. */
+internal val WARN = Color(0xFFD6A93D)
 
 @Composable
 fun ViewerScreen(vm: ViewerViewModel = viewModel()) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    vm.playback?.let { pb ->
+        PlaybackPane(vm, pb)
+        return
+    }
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -64,7 +71,7 @@ fun ViewerScreen(vm: ViewerViewModel = viewModel()) {
                 DrawerControls(vm, onAlign = {
                     vm.fusionAligning = true
                     scope.launch { drawerState.close() }
-                })
+                }, onCloseDrawer = { scope.launch { drawerState.close() } })
             }
         },
     ) {
@@ -114,6 +121,10 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             Spacer(Modifier.weight(1f))
             if (vm.fusionOn) Text(vm.fusionDistanceLabel, color = DIM, fontSize = 12.sp)
             Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp)
+        }
+
+        if (vm.fusionOn && vm.calibPromptActive && !vm.fusionAligning) {
+            CalibPromptBar(vm)
         }
 
         if (vm.fusionOn && vm.fusionAligning) {
@@ -250,6 +261,21 @@ private fun ThermalImage(
             drawLine(Color.White, c - Offset(18f, 0f), c + Offset(18f, 0f), 3f)
             drawLine(Color.White, c - Offset(0f, 18f), c + Offset(0f, 18f), 3f)
         }
+        // visible-camera AF window: what the Auto object distance is measured on
+        fr.afBox?.let { b ->
+            val l = b.left * dispW; val t = b.top * dispH
+            val rr = b.right * dispW; val bb = b.bottom * dispH
+            val c = Offset((l + rr) / 2f, (t + bb) / 2f)
+            if (vm.afCentreRegion) {
+                drawRect(WARN.copy(alpha = 0.7f), Offset(l, t), Size(rr - l, bb - t),
+                         style = Stroke(2f))
+            }
+            // gapped crosshair — the centre pixel stays readable
+            drawLine(WARN, c - Offset(20f, 0f), c - Offset(6f, 0f), 3f)
+            drawLine(WARN, c + Offset(6f, 0f), c + Offset(20f, 0f), 3f)
+            drawLine(WARN, c - Offset(0f, 20f), c - Offset(0f, 6f), 3f)
+            drawLine(WARN, c + Offset(0f, 6f), c + Offset(0f, 20f), 3f)
+        }
     }
 }
 
@@ -341,7 +367,7 @@ private fun RangeBar(
 }
 
 @Composable
-private fun ColorBar(palette: String, lo: Float, hi: Float, modifier: Modifier) {
+internal fun ColorBar(palette: String, lo: Float, hi: Float, modifier: Modifier) {
     val lut = remember(palette) {
         android.graphics.Bitmap.createBitmap(Palettes.lut(palette), 256, 1,
             android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
@@ -365,7 +391,7 @@ private fun ColorBar(palette: String, lo: Float, hi: Float, modifier: Modifier) 
 
 /** A readout that doubles as its marker's on/off switch — dimmed when the marker is off. */
 @Composable
-private fun Readout(label: String, value: Float?, color: Color, on: Boolean,
+internal fun Readout(label: String, value: Float?, color: Color, on: Boolean,
                     onClick: () -> Unit) {
     val c = if (on) color else color.copy(alpha = 0.35f)
     Column(Modifier.clickable(onClick = onClick)) {
@@ -375,7 +401,8 @@ private fun Readout(label: String, value: Float?, color: Color, on: Boolean,
 }
 
 @Composable
-private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
+private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
+                           onCloseDrawer: () -> Unit) {
     Column(
         Modifier.fillMaxHeight().verticalScroll(rememberScrollState()).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -473,6 +500,26 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
 
         HorizontalDivider(color = Color(0xFF30363D))
 
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(vm.saveThermalData, onCheckedChange = { vm.saveThermalData = it })
+            Column {
+                Text("Save temperature data with captures", color = FG)
+                Text(("Snap and Rec also write Download/MagViewer/*.mgt — every pixel's " +
+                      "°C, readable again below (about %.0f kB per frame)")
+                         .format(vm.lastFrame?.let { it.w * it.h * 2 / 1024f } ?: 38f),
+                     color = DIM, fontSize = 10.sp)
+            }
+        }
+        val openCapture = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri -> uri?.let { vm.openPlayback(it) } }
+        OutlinedButton(onClick = { openCapture.launch(arrayOf("*/*")); onCloseDrawer() },
+                       modifier = Modifier.fillMaxWidth()) {
+            Text("Open temperature capture…")
+        }
+
+        HorizontalDivider(color = Color(0xFF30363D))
+
         val cameraPermission = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
@@ -514,6 +561,16 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
                 }
             }
 
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(vm.fusionCrosshair, onCheckedChange = { vm.fusionCrosshair = it })
+                Column {
+                    Text("Show visible-camera crosshair", color = FG, fontSize = 13.sp)
+                    Text("marks the centre of the phone camera — the patch its focus, " +
+                         "and with it the Auto object distance, is measured on",
+                         color = DIM, fontSize = 10.sp)
+                }
+            }
+
             FocusLine(vm)
 
             Text("Object distance", color = DIM, fontSize = 11.sp)
@@ -550,8 +607,14 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(vm.fusionCalibPrompt, onCheckedChange = { vm.fusionCalibPrompt = it })
-                    Text("Ask to align when focus is outside the saved distances",
-                         color = FG, fontSize = 12.sp)
+                    Column {
+                        Text("Offer an Align button when the object is outside the " +
+                             "saved distances", color = FG, fontSize = 12.sp)
+                        // one literal: .format() binds to the string it follows
+                        Text(("more than %.1f m past the nearest/farthest saved " +
+                              "distance, for 1.5 s").format(FusionCalibration.RANGE_TOL_M),
+                             color = DIM, fontSize = 10.sp)
+                    }
                 }
             }
             if (effSrc == FusionCalibration.DistanceSource.MANUAL) {
@@ -630,6 +693,25 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit) {
              "Tap MIN / MAX / SPOT under the image to hide a marker.\n" +
              "Red ring = MAX, green ring = MIN.",
              color = DIM, fontSize = 10.sp)
+    }
+}
+
+/**
+ * The out-of-range offer: a line and an Align button, not a panel that takes the screen
+ * over by itself — a passing focus change must not interrupt what you are looking at.
+ */
+@Composable
+private fun CalibPromptBar(vm: ViewerViewModel) {
+    Row(verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Focus ${vm.fusionDistanceLabel} is outside the saved distances",
+             color = WARN, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        OutlinedButton(onClick = { vm.startPromptedAlign() },
+                       contentPadding = PaddingValues(horizontal = 12.dp)) {
+            Text("Align", fontSize = 12.sp)
+        }
+        TextButton(onClick = { vm.dismissCalibPrompt() },
+                   contentPadding = PaddingValues(horizontal = 6.dp)) { Text("✕") }
     }
 }
 

@@ -49,8 +49,10 @@ class RgbCamera(private val context: Context) {
         private const val TAG = "RgbCamera"
         /** Settled focus readings kept for the median (~0.25 s at 30 fps). */
         private const val FOCUS_MEDIAN_N = 7
-        /** Side of the centred AF window, as a fraction of the sensor array. */
-        private const val AF_CENTER_FRAC = 0.2f
+        /** Side of the centred AF window, as a fraction of the sensor array.
+         *  The fusion overlay draws this box so you can see what the AF — and with it
+         *  the AUTO object distance — is measuring. */
+        const val AF_CENTER_FRAC = 0.2f
     }
 
     /** One luma frame in sensor orientation. `id` increments per frame (cache key). */
@@ -82,6 +84,8 @@ class RgbCamera(private val context: Context) {
     @Volatile var afActive = false; private set
     /** AF is searching right now; [focusDiopters] holds the last settled value. */
     @Volatile var afScanning = false; private set
+    /** The centred AF window was accepted by the HAL (else AF weights the whole frame). */
+    @Volatile var afCentreRegion = false; private set
     private val focusRing = FloatArray(FOCUS_MEDIAN_N)
     private var focusRingN = 0
     private var focusRingPos = 0
@@ -203,6 +207,7 @@ class RgbCamera(private val context: Context) {
                                 .setCaptureRequestOption(CaptureRequest.CONTROL_AF_REGIONS,
                                                          arrayOf(region))
                                 .build())
+                        afCentreRegion = true
                     }
                 }.onFailure { Log.w(TAG, "focus characteristics unavailable", it) }
             } catch (e: Exception) {
@@ -224,6 +229,7 @@ class RgbCamera(private val context: Context) {
         focusDiopters = null
         afActive = false
         afScanning = false
+        afCentreRegion = false
         focusRingN = 0
         focusRingPos = 0
         focusCalibration = null
