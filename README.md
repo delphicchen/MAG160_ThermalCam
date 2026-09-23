@@ -76,6 +76,37 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
   [`android2/REVERSE_ENGINEERING.md`](android2/REVERSE_ENGINEERING.md).
 - **`android/`** — an earlier Android port that runs the fully open, SDK-free pipeline.
 
+## 🗒️ Changelog
+
+Full notes and the APK for each version are in
+[Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
+
+### 2.3 — 2026-09-24
+- **Temperature captures** — snapshots and recordings can also write a `.mgt` file holding
+  every pixel's °C; *Open temperature capture…* replays it: scrub the frames, tap any
+  position to read it ([format](android2/docs/THERMAL_CAPTURE.md)).
+- **Fusion crosshair** over the visible camera's AF window — the patch the Auto object
+  distance is measured on.
+- Leaving the calibrated distances now **offers an Align button** instead of opening the
+  alignment panel by itself, and the range test allows ±0.5 m instead of a fixed step in 1/Z.
+- Alignment is **interpolated between the saved distances**; centre-weighted AF, focus-driven
+  auto distance, calibration export/import, and a thermal-aware gate for the edge overlay.
+
+### 2.2 — 2026-09-18
+- **Visible-light fusion (beta)** — MSX edges, Blend and Wide search, with the alignment
+  calibrated at several distances and object distance from auto focus / manual / ∞.
+- Bilateral denoise 4.7× faster; spatial denoise switches off while Thermal SR is on.
+
+### 2.1 — 2026-09-17
+- **4× AI super-resolution** — a thermal-tuned Real-ESRGAN model bundled in the APK, run on
+  the GPU with ncnn + Vulkan.
+- Adjustable emissivity, optional geo-tag, and settings that survive restarts.
+
+### 2.0 — 2026-09-16
+- First release: live 15 fps absolute temperature, MIN / MAX / SPOT, colour bar with auto or
+  manual range, snapshots and HEVC recording, Anime4K GPU upscaling, 8 palettes, rotation /
+  mirror, temporal + spatial denoise and on-demand FFC.
+
 ## 📜 Licence
 
 **Free for noncommercial use** — personal, research, educational and hobby use. Commercial use

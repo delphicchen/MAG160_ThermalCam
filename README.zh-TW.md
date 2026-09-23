@@ -73,6 +73,34 @@ Magnity **MAG-Mx / MAG-Cx** USB 熱像儀（VID `0x833C`）硬體很好，但原
   [`android2/REVERSE_ENGINEERING.md`](android2/REVERSE_ENGINEERING.md)。
 - **`android/`**——較早期的 Android 移植版，使用完全開源、不依賴 SDK 的處理流程。
 
+## 🗒️ 版本紀錄
+
+完整說明與各版本 APK 都在
+[Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases)。
+
+### 2.3 — 2026-09-24
+- **溫度碼流** —— 拍照與錄影可另存 `.mgt` 檔，記下每個像素的 °C；用「Open temperature
+  capture…」開回來：拖時間軸選幀、點畫面任一點讀出溫度（[格式說明](android2/docs/THERMAL_CAPTURE.md)）。
+- **融合十字** 標出可見光相機的 AF 視窗 —— 也就是 Auto 物距實際量的那一塊。
+- 焦點離開已校正距離時，改成**顯示一顆 Align 按鈕**，不再自己跳出對齊面板；範圍判定
+  也從 1/Z 的固定級距改成 **±0.5 公尺**。
+- 對齊值會在**已存的各個距離之間內插**；中央加權對焦、對焦距離自動帶入物距、校正檔
+  匯出／匯入，以及輪廓疊圖的熱梯度遮罩。
+
+### 2.2 — 2026-09-18
+- **可見光融合（beta）** —— MSX 輪廓、混合、大視野搜尋；可在多個距離校正對齊，物距可用
+  自動對焦／手動／∞。
+- 雙邊濾波加速 4.7 倍；開啟 Thermal SR 時自動關閉空間降噪。
+
+### 2.1 — 2026-09-17
+- **4× AI 超解析** —— 針對熱影像微調的 Real-ESRGAN 模型內建於 APK，以 ncnn + Vulkan 在
+  GPU 上執行。
+- 發射率可調、可選 geo-tag，設定重開 App 不會消失。
+
+### 2.0 — 2026-09-16
+- 首個版本：15 fps 即時絕對溫度、MIN / MAX / SPOT、可自動或手動調整範圍的色條、拍照與
+  HEVC 錄影、Anime4K GPU 放大、8 種色盤、旋轉／鏡像、時域＋空間降噪與手動 FFC。
+
 ## 📜 授權
 
 **非商業用途免費**——個人、研究、教育與業餘用途皆可。商業用途需另行取得書面授權，詳見
