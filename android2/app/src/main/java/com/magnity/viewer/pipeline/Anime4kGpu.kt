@@ -1,7 +1,6 @@
 package com.magnity.viewer.pipeline
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -25,8 +24,8 @@ import kotlin.math.roundToInt
  *
  * Input is the scalar field BEFORE colouring (normalised to the display range, fed as
  * grey RGB), so edges are rebuilt on temperature data; the palette LUT is applied in a
- * last GPU pass and the result read back into a Bitmap. That keeps screenshots, video
- * and ROI overlays on the existing CPU-side path.
+ * last GPU pass and the result read back as ARGB pixels. That keeps fusion, screenshots,
+ * video and ROI overlays on the existing CPU-side path.
  *
  * All GL work runs on one private thread — an EGL context is bound to a thread, while the
  * caller's coroutine may hop between pool threads.
@@ -60,6 +59,8 @@ class Anime4kGpu(context: Context) : AutoCloseable {
     private val targets = HashMap<String, Tex>()
     private var inBuf: FloatBuffer? = null
     private var outBuf: ByteBuffer? = null
+    /** Readback as ARGB ints, reused across frames (see [ArgbImage]). */
+    private var outPx = IntArray(0)
 
     companion object {
         const val SHADER = "anime4k/Anime4K_Upscale_CNN_x2_M.glsl"
@@ -79,7 +80,9 @@ uniform vec2 u_out;
 out vec4 fragColor;
 void main() {
     float t = clamp(texture(u_src, gl_FragCoord.xy / u_out).r, 0.0, 1.0);
-    fragColor = vec4(texture(u_lut, vec2((t * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0);
+    // written B,G,R,A: read back as little-endian ints that is exactly ARGB, so the
+    // pixels go straight into an IntArray with no per-pixel repacking
+    fragColor = vec4(texture(u_lut, vec2((t * 255.0 + 0.5) / 256.0, 0.5)).bgr, 1.0);
 }"""
 
         /** Split an mpv user shader into passes (header lines start with `//!`). */
@@ -255,9 +258,10 @@ void main() {
     /**
      * @param field scalar display field, row 0 = top
      * @param stages number of ×2 CNN stages (1 → 2×, 2 → 4×)
+     * @return palette-mapped pixels in this object's own buffer, valid until the next call
      */
     fun render(field: FloatArray, w: Int, h: Int, lo: Float, hi: Float,
-               stages: Int, lut: IntArray): Bitmap = onGl {
+               stages: Int, lut: IntArray): ArgbImage = onGl {
         // input: normalised grey in RGB (the CNN's first layer reads rgb)
         val inp = input?.takeIf { it.w == w && it.h == h } ?: run {
             input?.let { deleteTex(it) }
@@ -347,9 +351,10 @@ void main() {
         // FBO row 0 is texture row 0 = image top, so no vertical flip is needed
         GLES30.glReadPixels(0, 0, out.w, out.h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, ob)
         ob.rewind()
-        Bitmap.createBitmap(out.w, out.h, Bitmap.Config.ARGB_8888).apply {
-            copyPixelsFromBuffer(ob)
-        }
+        // BGRA bytes (see PALETTE_FRAG) in native order = ARGB ints: one bulk copy
+        if (outPx.size != out.w * out.h) outPx = IntArray(out.w * out.h)
+        ob.asIntBuffer().get(outPx)
+        ArgbImage(outPx, out.w, out.h)
     }
 
     override fun close() {

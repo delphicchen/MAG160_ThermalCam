@@ -28,6 +28,7 @@ import com.magnity.viewer.media.MediaSaver
 import com.magnity.viewer.media.ThermalStream
 import com.magnity.viewer.media.VideoRecorder
 import com.magnity.viewer.pipeline.Anime4kGpu
+import com.magnity.viewer.pipeline.ArgbImage
 import com.magnity.viewer.pipeline.Fusion
 import com.magnity.viewer.pipeline.FusionCalibration
 import com.magnity.viewer.pipeline.ImageOps
@@ -90,6 +91,16 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         /** Thermal gradient, as a fraction of the display range per pixel, at which
          *  the EDGES overlay is fully suppressed (double-edge suppression knee). */
         private const val GATE_GRAD_REL = 0.03f
+        /** Sensor pixels added around the sampled patch when computing EDGES, so a small
+         *  registration drift stays inside what already has history. */
+        private const val EDGE_ROI_MARGIN = 8
+        /** Per-frame processing stages timed for the status line, in order. */
+        private val STAGES = arrayOf("in", "dn", "rng", "up", "fuse", "bmp", "rec")
+        private const val ST_IN = 0; private const val ST_DN = 1; private const val ST_RNG = 2
+        private const val ST_UP = 3; private const val ST_FUSE = 4; private const val ST_BMP = 5
+        private const val ST_REC = 6
+        /** Smoothing of the stage timings (≈ the last 10 frames). */
+        private const val STAGE_EMA = 0.1f
     }
 
     enum class Upscaler { BICUBIC, ANIME4K, NCNN }
@@ -445,8 +456,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             rgbCamera.start { msg -> fusionOn = false; notice = "Visible camera failed: $msg" }
         } else {
             rgbCamera.stop()
-            edgeCache = null
             edgeSmooth = null
+            edgeRoi = null
         }
     }
 
@@ -645,55 +656,72 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         return android.graphics.RectF(cx - half, cy - half, cx + half, cy + half)
     }
 
-    private var edgeCache: FloatArray? = null
+    /** Temporally smoothed EDGES map in sensor pixels — what compose() samples. */
     private var edgeSmooth: FloatArray? = null
+    /** Visible frame and sensor rect [edgeSmooth] was last brought up to date for. */
     private var edgeCacheId = -1L
+    private var edgeRoi: IntArray? = null
+    /** Wide-search output, reused per frame (the Bitmap copies it). */
+    private var wideBuf = IntArray(0)
 
     /**
-     * Blend the visible camera into the display bitmap (processing thread). Overlay modes
-     * keep the frame size; wide search returns the whole visible frame with the thermal
-     * image inset, plus that inset's rect. Null = no visible frame yet, draw thermal only.
-     * [gate] is the thermal-gradient gating field for EDGES (see [thermalGate]).
+     * Blend the visible camera into the display pixels (processing thread). Overlay modes
+     * draw into [img] in place; wide search returns the whole visible frame with the
+     * thermal image inset, plus that inset's rect. Null = no visible frame yet, draw
+     * thermal only. [gate] is the thermal-gradient gating field for EDGES
+     * (see [thermalGate]).
      */
-    private fun fuse(bmp: android.graphics.Bitmap, gate: FloatArray?, gw: Int, gh: Int)
-            : Pair<android.graphics.Bitmap, android.graphics.RectF?>? {
+    private fun fuse(img: ArgbImage, gate: FloatArray?, gw: Int, gh: Int)
+            : Pair<ArgbImage, android.graphics.RectF?>? {
         afBoxOut = null
         val fr = rgbCamera.latest() ?: return null
         val invZ = currentInvZ()
         val reg = registration(invZ)
         afBoxOut = afBox(reg, fusionMode == Fusion.Mode.SEARCH)
         fusionDistanceLabel = if (invZ <= 1e-4f) "∞" else "≈" + distanceText(invZ)
-        val w = bmp.width; val h = bmp.height
-        val px = IntArray(w * h)
-        bmp.getPixels(px, 0, w, 0, 0, w, h)
+        val w = img.w; val h = img.h
         if (fusionMode == Fusion.Mode.SEARCH) {
-            val r = Fusion.composeWide(px, w, h, fr.data, fr.width, fr.height, fusionStrength,
-                                       reg.zoom, reg.dx, reg.dy, fusionRotation)
-            return android.graphics.Bitmap.createBitmap(r.pixels, r.width, r.height,
-                       android.graphics.Bitmap.Config.ARGB_8888) to
+            val n = fr.width * fr.height
+            if (wideBuf.size != n) wideBuf = IntArray(n)
+            val r = Fusion.composeWide(img.px, w, h, fr.data, fr.width, fr.height,
+                                       fusionStrength, reg.zoom, reg.dx, reg.dy,
+                                       fusionRotation, wideBuf)
+            return ArgbImage(r.pixels, r.width, r.height) to
                 android.graphics.RectF(r.rectL, r.rectT, r.rectL + r.rectW, r.rectT + r.rectH)
         }
-        val edge = if (fusionMode == Fusion.Mode.EDGES) {
-            if (edgeCacheId != fr.id || edgeCache?.size != fr.data.size) {
-                // one Sobel pass per visible frame, not per thermal frame
-                edgeCache = Fusion.edgeMap(fr.data, fr.width, fr.height,
-                    edgeCache?.takeIf { it.size == fr.data.size } ?: FloatArray(fr.data.size))
-                edgeCacheId = fr.id
-                // temporal IIR on the magnitude: Sobel flickers frame-to-frame on
-                // noisy luma; the smoothed map is what compose() samples
-                val src = edgeCache!!
-                val sm = edgeSmooth?.takeIf { it.size == src.size }
-                    ?: FloatArray(src.size).also { edgeSmooth = it }
-                val keep = EDGE_IIR_KEEP
-                for (i in src.indices) sm[i] = keep * sm[i] + (1f - keep) * src[i]
-            }
-            edgeSmooth
-        } else null
-        Fusion.compose(px, w, h, fr.data, fr.width, fr.height, edge, gate, gw, gh,
+        val edge = if (fusionMode == Fusion.Mode.EDGES) edgesFor(fr, reg, w, h) else null
+        Fusion.compose(img.px, w, h, fr.data, fr.width, fr.height, edge, gate, gw, gh,
                        fusionMode, fusionStrength,
                        reg.zoom, reg.dx, reg.dy, fusionRotation)
-        return android.graphics.Bitmap.createBitmap(px, w, h,
-                   android.graphics.Bitmap.Config.ARGB_8888) to null
+        return img to null
+    }
+
+    /**
+     * The smoothed EDGES map, brought up to date for visible frame [fr] over the patch
+     * this registration samples (plus a margin). Sobel runs once per visible frame, not
+     * per thermal frame, and only again for the same frame if the patch moved outside
+     * what was computed. Temporal IIR on the magnitude: Sobel flickers frame-to-frame on
+     * noisy luma, the smoothed map is what compose() samples.
+     */
+    private fun edgesFor(fr: RgbCamera.LumaFrame, reg: Registration, dispW: Int, dispH: Int)
+            : FloatArray {
+        val sm = edgeSmooth?.takeIf { it.size == fr.data.size }
+            ?: FloatArray(fr.data.size).also { edgeSmooth = it; edgeRoi = null }
+        val want = Fusion.sampledRect(dispW, dispH, fr.width, fr.height,
+                                      reg.zoom, reg.dx, reg.dy, fusionRotation) ?: return sm
+        val have = edgeRoi
+        val covered = have != null && have[0] <= want[0] && have[1] <= want[1] &&
+                      have[2] >= want[2] && have[3] >= want[3]
+        if (edgeCacheId != fr.id || !covered) {
+            val m = EDGE_ROI_MARGIN
+            val roi = intArrayOf((want[0] - m).coerceAtLeast(0), (want[1] - m).coerceAtLeast(0),
+                                 (want[2] + m).coerceAtMost(fr.width),
+                                 (want[3] + m).coerceAtMost(fr.height))
+            Fusion.smoothEdges(fr.data, fr.width, fr.height, roi, have, sm, EDGE_IIR_KEEP)
+            edgeRoi = roi
+            edgeCacheId = fr.id
+        }
+        return sm
     }
 
     override fun onCleared() {
@@ -750,10 +778,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     val t0 = System.nanoTime()
                     val res = process(temp)
                     lastFrame = res
+                    val tRec = System.nanoTime()
                     feedRecorder(res)
+                    lap(ST_REC, tRec)
                     tickFps()
-                    status = "${sdk.width}×${sdk.height} · frames=$fc" +
-                        " · ${(System.nanoTime() - t0) / 1_000_000} ms"
+                    status = frameStatus(fc, t0)
                 } catch (e: Throwable) {
                     Log.e(TAG, "display error", e)
                     status = "display: ${e::class.java.simpleName}: ${e.message}"
@@ -769,6 +798,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
      * on this path the reading is the point.
      */
     private fun process(tempMilliC: IntArray): FrameResult {
+        var t = System.nanoTime()
         val w = sdk.width; val h = sdk.height
         val degC = FloatArray(tempMilliC.size) { MagDeviceWrapper.degC(tempMilliC[it]) }
 
@@ -784,6 +814,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             if (v < mn) { mn = v; mnI = i }
             if (v > mx) { mx = v; mxI = i }
         }
+        t = lap(ST_IN, t)
 
         oriented = temporal(oriented)
         if (spatialDenoise && !thermalSrActive) {
@@ -791,6 +822,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             // and would flatten the whole scene.
             oriented = ImageOps.bilateral(oriented, ow, oh, 5, 0.5f, 5f)
         }
+        t = lap(ST_DN, t)
 
         val slo: Float; val shi: Float
         if (autoScale) {
@@ -804,7 +836,10 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             slo = scaleLo; shi = scaleHi
         }
 
-        var bitmap = render(oriented, ow, oh, slo, shi)
+        t = lap(ST_RNG, t)
+
+        var img = render(oriented, ow, oh, slo, shi)
+        t = lap(ST_UP, t)
         var inset: android.graphics.RectF? = null
         var afWindow: android.graphics.RectF? = null
         if (fusionOn) {
@@ -813,9 +848,14 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             // came from the raw field above)
             val gate = if (fusionMode == Fusion.Mode.EDGES)
                 thermalGate(oriented, ow, oh, shi - slo) else null
-            fuse(bitmap, gate, ow, oh)?.let { (b, r) -> bitmap = b; inset = r }
+            fuse(img, gate, ow, oh)?.let { (i, r) -> img = i; inset = r }
             afWindow = afBoxOut
         }
+        t = lap(ST_FUSE, t)
+        // the one copy of the frame: every stage above worked on reused pixel buffers
+        val bitmap = android.graphics.Bitmap.createBitmap(img.px, img.w, img.h,
+                                                          android.graphics.Bitmap.Config.ARGB_8888)
+        lap(ST_BMP, t)
 
         return FrameResult(
             bitmap = bitmap, w = ow, h = oh,
@@ -831,12 +871,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Upscale the (still scalar) field, then palette-map into a Bitmap — all on the
-     * processing thread, so the UI only draws. Interpolating before colouring keeps
-     * edges clean instead of blending palette colours.
+     * Upscale the (still scalar) field, then palette-map into display pixels — all on
+     * the processing thread, so the UI only draws. Interpolating before colouring keeps
+     * edges clean instead of blending palette colours. The pixels live in a reused
+     * buffer (the upscaler's, or [pixBuf]); [process] turns them into the frame's Bitmap.
      */
-    private fun render(field: FloatArray, w: Int, h: Int, lo: Float, hi: Float)
-            : android.graphics.Bitmap {
+    private fun render(field: FloatArray, w: Int, h: Int, lo: Float, hi: Float): ArgbImage {
         val k = upscale.coerceIn(1, 4)
         if (k > 1 && upscaler == Upscaler.NCNN) {
             try {
@@ -872,16 +912,19 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         }
         val src = if (k > 1) ImageOps.resizeBicubic(field, w, h, w * k, h * k) else field
         val pal = Palettes.lut(paletteName)
-        val img = IntArray(src.size)
+        if (pixBuf.size != src.size) pixBuf = IntArray(src.size)
+        val img = pixBuf
         val inv = 255f / (hi - lo)
         for (i in src.indices) {
             var t = (src[i] - lo) * inv
             if (t < 0f) t = 0f else if (t > 255f) t = 255f
             img[i] = pal[(t + 0.5f).toInt()]
         }
-        return android.graphics.Bitmap.createBitmap(img, w * k, h * k,
-            android.graphics.Bitmap.Config.ARGB_8888)
+        return ArgbImage(img, w * k, h * k)
     }
+
+    /** Bicubic-path display pixels, reused per frame. */
+    private var pixBuf = IntArray(0)
 
     private var anime4k: Anime4kGpu? = null
     private var ncnn: NcnnUpscaler? = null
@@ -903,6 +946,27 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         if (!temporalDenoise) { temporalFilter.reset(); return field }
         temporalFilter.strength = temporalStrength
         return temporalFilter.apply(field, rotation * 2 + (if (mirror) 1 else 0))
+    }
+
+    // ---- per-stage timing (processing thread) -----------------------------------
+
+    private val stageMs = FloatArray(STAGES.size)
+    private var totalMs = 0f
+
+    /** Fold the time since [since] into [stage]'s smoothed ms; returns now for the next lap. */
+    private fun lap(stage: Int, since: Long): Long {
+        val now = System.nanoTime()
+        stageMs[stage] += STAGE_EMA * ((now - since) / 1e6f - stageMs[stage])
+        return now
+    }
+
+    /** Status line: size, frame count, smoothed total, then the per-stage split in ms
+     *  (in: convert+orient+stats · dn: denoise · rng: display range · up: upscale+palette
+     *  · fuse: visible fusion · bmp: the frame's Bitmap · rec: video/.mgt while recording). */
+    private fun frameStatus(fc: Long, t0: Long): String {
+        totalMs += STAGE_EMA * ((System.nanoTime() - t0) / 1e6f - totalMs)
+        val split = STAGES.indices.joinToString(" · ") { "${STAGES[it]} %.1f".format(stageMs[it]) }
+        return "${sdk.width}×${sdk.height} · frames=$fc · " + "%.1f ms\n".format(totalMs) + split
     }
 
     private var fpsWindowStart = 0L

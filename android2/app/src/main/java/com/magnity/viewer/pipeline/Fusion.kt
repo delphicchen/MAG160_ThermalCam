@@ -34,38 +34,107 @@ object Fusion {
     private const val EDGE_T1 = 280f
 
     /**
-     * Soft edge map (0..1) from a luma frame via Sobel |gx|+|gy| with a soft threshold.
-     * Border pixels are left 0.
+     * Soft Sobel edges (|gx|+|gy|, soft-thresholded to 0..1) of [luma] inside [roi]
+     * (x0, y0, x1, y1 in sensor pixels, ends exclusive), folded straight into the temporal
+     * average: sm = keep·sm + (1−keep)·edge. Only the patch [compose] samples is worth
+     * computing — at zoom 1.6 that is under 40 % of the frame. A pixel outside [prev] (the
+     * rect the previous call covered) has no history in [sm], so it starts from this
+     * frame's edge instead of a stale value. The frame border, which has no full 3×3
+     * neighbourhood, is 0. Rows run in parallel; [sm] outside [roi] is left untouched.
      */
-    fun edgeMap(luma: ByteArray, w: Int, h: Int, out: FloatArray = FloatArray(w * h)): FloatArray {
-        java.util.Arrays.fill(out, 0f)
-        for (y in 1 until h - 1) {
+    fun smoothEdges(luma: ByteArray, w: Int, h: Int, roi: IntArray, prev: IntArray?,
+                    sm: FloatArray, keep: Float) {
+        val px0 = prev?.get(0) ?: 0; val py0 = prev?.get(1) ?: 0
+        val px1 = prev?.get(2) ?: 0; val py1 = prev?.get(3) ?: 0
+        val x0 = roi[0]; val x1 = roi[2]
+        java.util.stream.IntStream.range(roi[1], roi[3]).parallel().forEach { y ->
             val rm = (y - 1) * w
             val r0 = y * w
             val rp = (y + 1) * w
-            for (x in 1 until w - 1) {
-                val a = luma[rm + x - 1].toInt() and 0xFF; val b = luma[rm + x].toInt() and 0xFF
-                val c = luma[rm + x + 1].toInt() and 0xFF
-                val d = luma[r0 + x - 1].toInt() and 0xFF
-                val f = luma[r0 + x + 1].toInt() and 0xFF
-                val g = luma[rp + x - 1].toInt() and 0xFF; val hh = luma[rp + x].toInt() and 0xFF
-                val i = luma[rp + x + 1].toInt() and 0xFF
-                val gx = (c + 2 * f + i) - (a + 2 * d + g)
-                val gy = (g + 2 * hh + i) - (a + 2 * b + c)
-                val mag = (if (gx < 0) -gx else gx) + (if (gy < 0) -gy else gy)
-                var e = (mag - EDGE_T0) / (EDGE_T1 - EDGE_T0)
-                if (e < 0f) e = 0f else if (e > 1f) e = 1f
-                out[r0 + x] = e
+            val inner = y > 0 && y < h - 1
+            val histRow = y >= py0 && y < py1
+            for (x in x0 until x1) {
+                var e = 0f
+                if (inner && x > 0 && x < w - 1) {
+                    val a = luma[rm + x - 1].toInt() and 0xFF; val b = luma[rm + x].toInt() and 0xFF
+                    val c = luma[rm + x + 1].toInt() and 0xFF
+                    val d = luma[r0 + x - 1].toInt() and 0xFF
+                    val f = luma[r0 + x + 1].toInt() and 0xFF
+                    val g = luma[rp + x - 1].toInt() and 0xFF; val hh = luma[rp + x].toInt() and 0xFF
+                    val i = luma[rp + x + 1].toInt() and 0xFF
+                    val gx = (c + 2 * f + i) - (a + 2 * d + g)
+                    val gy = (g + 2 * hh + i) - (a + 2 * b + c)
+                    val mag = (if (gx < 0) -gx else gx) + (if (gy < 0) -gy else gy)
+                    e = (mag - EDGE_T0) / (EDGE_T1 - EDGE_T0)
+                    if (e < 0f) e = 0f else if (e > 1f) e = 1f
+                }
+                val i = r0 + x
+                sm[i] = if (histRow && x >= px0 && x < px1) keep * sm[i] + (1f - keep) * e else e
             }
         }
-        return out
+    }
+
+    // ---- sampling tables ----------------------------------------------------------
+    //
+    // compose() maps display → upright visible independently per axis, and for every
+    // mounting rotation the raw sensor index splits into a row part plus a column part.
+    // So one pass over the display width and one over its height build everything the
+    // per-pixel loop needs: idx = rowOff[y] + colOff[x] — two table reads per pixel
+    // instead of float maths, a rotation branch and bounds checks.
+
+    /** Upright visible index each display position samples along one axis, −1 where it
+     *  falls outside the frame. Same arithmetic (and truncation) as the per-pixel form. */
+    private fun axisTable(n: Int, invZoom: Float, d: Float, un: Int): IntArray =
+        IntArray(n) { i ->
+            val u = ((((i + 0.5f) / n - 0.5f) * invZoom + 0.5f + d) * un).toInt()
+            if (u < 0 || u >= un) -1 else u
+        }
+
+    /** Row part of the raw sensor index of upright (ux, uy); see [colPart]. */
+    private fun rowPart(uy: Int, rotation: Int, lw: Int, lh: Int) = when (rotation) {
+        90 -> uy
+        180 -> (lh - 1 - uy) * lw
+        270 -> lw - 1 - uy
+        else -> uy * lw
+    }
+
+    /** Column part: rowPart(uy) + colPart(ux) is the raw index for every rotation. */
+    private fun colPart(ux: Int, rotation: Int, lw: Int, lh: Int) = when (rotation) {
+        90 -> (lh - 1 - ux) * lw
+        180 -> lw - 1 - ux
+        270 -> ux * lw
+        else -> ux
+    }
+
+    /**
+     * Sensor rect (x0, y0, x1, y1; ends exclusive) holding every luma pixel [compose]
+     * reads for this registration — what [smoothEdges] has to cover. Null when the
+     * overlay lands entirely outside the visible frame.
+     */
+    fun sampledRect(dispW: Int, dispH: Int, lw: Int, lh: Int,
+                    zoom: Float, dx: Float, dy: Float, rotation: Int): IntArray? {
+        val uw = if (rotation == 90 || rotation == 270) lh else lw
+        val uh = if (rotation == 90 || rotation == 270) lw else lh
+        val invZoom = 1f / zoom.coerceAtLeast(0.05f)
+        val xs = axisTable(dispW, invZoom, dx, uw).filter { it >= 0 }
+        val ys = axisTable(dispH, invZoom, dy, uh).filter { it >= 0 }
+        if (xs.isEmpty() || ys.isEmpty()) return null
+        val ux0 = xs.min(); val ux1 = xs.max()
+        val uy0 = ys.min(); val uy1 = ys.max()
+        return when (rotation) {                     // upright rect → sensor rect
+            90 -> intArrayOf(uy0, lh - 1 - ux1, uy1 + 1, lh - ux0)
+            180 -> intArrayOf(lw - 1 - ux1, lh - 1 - uy1, lw - ux0, lh - uy0)
+            270 -> intArrayOf(lw - 1 - uy1, ux0, lw - uy0, ux1 + 1)
+            else -> intArrayOf(ux0, uy0, ux1 + 1, uy1 + 1)
+        }
     }
 
     /**
      * Compose the fusion overlay into [pixels] (ARGB, dispW x dispH) in place.
      *
      * @param luma      sensor-orientation luma frame (lw x lh)
-     * @param edge      edge map from [edgeMap] (required for EDGES mode, same dims as luma)
+     * @param edge      edge map from [smoothEdges] (required for EDGES mode, same dims as
+     *                  luma; only the [sampledRect] patch is read)
      * @param gate      EDGES: thermal-gradient gating field (gw x gh, 1 = flat thermal,
      *                  overlay shows fully; →0 where the thermal gradient already
      *                  carries structure — suppresses double edges). Null = no gating.
@@ -87,26 +156,27 @@ object Fusion {
         val uh = if (rotation == 90 || rotation == 270) lw else lh
         val invZoom = 1f / zoom.coerceAtLeast(0.05f)
         val s = strength.coerceIn(0f, 1f)
+        val em = if (mode == Mode.EDGES) edge ?: return else null
 
-        for (y in 0 until dispH) {
-            val ny = ((y + 0.5f) / dispH - 0.5f) * invZoom + 0.5f + dy
-            val uy = (ny * uh).toInt()
-            if (uy < 0 || uy >= uh) continue
+        // upright (ux,uy) → raw sensor index for the fixed mounting rotation, per axis
+        val colOff = axisTable(dispW, invZoom, dx, uw)
+            .let { t -> IntArray(dispW) { if (t[it] < 0) -1 else colPart(t[it], rotation, lw, lh) } }
+        val rowOff = axisTable(dispH, invZoom, dy, uh)
+            .let { t -> IntArray(dispH) { if (t[it] < 0) -1 else rowPart(t[it], rotation, lw, lh) } }
+        // gate column per display column (identity when display == thermal grid)
+        val gCol = if (gate != null) IntArray(dispW) { it * gw / dispW } else null
+
+        // rows are independent → spread over cores (640×480 at the 4× display)
+        java.util.stream.IntStream.range(0, dispH).parallel().forEach { y ->
+            val ro = rowOff[y]
+            if (ro < 0) return@forEach
             val rowBase = y * dispW
-            // gate row for this display row (identity when display == thermal grid)
+            // gate row for this display row
             val gRow = if (gate != null) (y * gh / dispH) * gw else 0
             for (x in 0 until dispW) {
-                val nx = ((x + 0.5f) / dispW - 0.5f) * invZoom + 0.5f + dx
-                val ux = (nx * uw).toInt()
-                if (ux < 0 || ux >= uw) continue
-
-                // upright (ux,uy) -> raw sensor index for the fixed mounting rotation
-                val idx = when (rotation) {
-                    90 -> (lh - 1 - ux) * lw + uy
-                    180 -> (lh - 1 - uy) * lw + (lw - 1 - ux)
-                    270 -> ux * lw + (lw - 1 - uy)
-                    else -> uy * lw + ux
-                }
+                val co = colOff[x]
+                if (co < 0) continue
+                val idx = ro + co
 
                 val i = rowBase + x
                 val c = pixels[i]
@@ -117,8 +187,8 @@ object Fusion {
                     // thermal-aware gating: the overlay fills in where the thermal
                     // field is flat; where the thermal gradient already shows
                     // structure the visible edge is suppressed (no double edges)
-                    val gv = if (gate != null) gate[gRow + x * gw / dispW] else 1f
-                    val e = (edge ?: return)[idx] * s * gv
+                    val gv = if (gate != null && gCol != null) gate[gRow + gCol[x]] else 1f
+                    val e = em!![idx] * s * gv
                     if (e > 0.004f) {
                         // adaptive contrast colour: pull toward the OPPOSITE extreme
                         // of the local thermal luminance — visible on both bright and
@@ -156,12 +226,14 @@ object Fusion {
      *
      * @param thermal   palette-mapped thermal display pixels (tw x th)
      * @param strength  thermal opacity inside the footprint (0..1)
+     * @param reuse     buffer to compose into when it is the right size (reused per frame)
      * @return the composed frame + the footprint rect (normalized) for marker mapping
      */
     fun composeWide(
         thermal: IntArray, tw: Int, th: Int,
         luma: ByteArray, lw: Int, lh: Int,
         strength: Float, zoom: Float, dx: Float, dy: Float, rotation: Int,
+        reuse: IntArray? = null,
     ): WideResult {
         val uw = if (rotation == 90 || rotation == 270) lh else lw
         val uh = if (rotation == 90 || rotation == 270) lw else lh
@@ -182,49 +254,46 @@ object Fusion {
         val x1 = kotlin.math.ceil((rectL + rectW) * uw.toDouble()).toInt()
         val y1 = kotlin.math.ceil((rectT + rectH) * uh.toDouble()).toInt()
 
-        val out = IntArray(uw * uh)
-
-        // 1) grayscale visible base — every pixel the phone camera captured
-        for (y in 0 until uh) {
-            val row = y * uw
-            for (x in 0 until uw) {
-                val idx = when (rotation) {
-                    90 -> (lh - 1 - x) * lw + y
-                    180 -> (lh - 1 - y) * lw + (lw - 1 - x)
-                    270 -> x * lw + (lw - 1 - y)
-                    else -> y * lw + x
-                }
-                val v = luma[idx].toInt() and 0xFF
-                out[row + x] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
-            }
-        }
-
-        // 2) thermal inset, inverse-mapped into its footprint
+        val out = reuse?.takeIf { it.size == uw * uh } ?: IntArray(uw * uh)
         val ys = y0.coerceAtLeast(0)
         val ye = y1.coerceAtMost(uh)
         val xs = x0.coerceAtLeast(0)
         val xe = x1.coerceAtMost(uw)
-        for (y in ys until ye) {
-            val ty = (((y + 0.5f) / uh - 0.5f - dy) * z + 0.5f) * th
-            val tyi = ty.toInt()
-            if (tyi < 0 || tyi >= th) continue
-            val row = y * uw
-            val trow = tyi * tw
-            for (x in xs until xe) {
-                val tx = (((x + 0.5f) / uw - 0.5f - dx) * z + 0.5f) * tw
-                val txi = tx.toInt()
-                if (txi < 0 || txi >= tw) continue
-                val c = thermal[trow + txi]
-                val i = row + x
-                val g = out[i] and 0xFF
-                val r2 = ((1f - s) * g + s * ((c shr 16) and 0xFF)).toInt()
-                val g2 = ((1f - s) * g + s * ((c shr 8) and 0xFF)).toInt()
-                val b2 = ((1f - s) * g + s * (c and 0xFF)).toInt()
-                out[i] = (0xFF shl 24) or (r2 shl 16) or (g2 shl 8) or b2
+
+        // per-column tables: sensor-index column part, and the thermal column the
+        // footprint maps there (−1 outside it) — so the per-pixel loop only reads tables
+        val colOff = IntArray(uw) { colPart(it, rotation, lw, lh) }
+        val tCol = IntArray(uw) { x ->
+            if (x < xs || x >= xe) -1 else {
+                val txi = ((((x + 0.5f) / uw - 0.5f - dx) * z + 0.5f) * tw).toInt()
+                if (txi < 0 || txi >= tw) -1 else txi
             }
         }
 
-        // 3) thin outline so the inset is findable at a glance
+        // grayscale visible base — every pixel the phone camera captured — with the
+        // thermal inset blended in where its footprint lies; rows spread over cores
+        java.util.stream.IntStream.range(0, uh).parallel().forEach { y ->
+            val row = y * uw
+            val ro = rowPart(y, rotation, lw, lh)
+            val tyi = if (y < ys || y >= ye) -1
+                      else ((((y + 0.5f) / uh - 0.5f - dy) * z + 0.5f) * th).toInt()
+            val trow = if (tyi in 0 until th) tyi * tw else -1
+            for (x in 0 until uw) {
+                val g = luma[ro + colOff[x]].toInt() and 0xFF
+                val txi = if (trow >= 0) tCol[x] else -1
+                out[row + x] = if (txi < 0) {
+                    (0xFF shl 24) or (g shl 16) or (g shl 8) or g
+                } else {
+                    val c = thermal[trow + txi]
+                    val r2 = ((1f - s) * g + s * ((c shr 16) and 0xFF)).toInt()
+                    val g2 = ((1f - s) * g + s * ((c shr 8) and 0xFF)).toInt()
+                    val b2 = ((1f - s) * g + s * (c and 0xFF)).toInt()
+                    (0xFF shl 24) or (r2 shl 16) or (g2 shl 8) or b2
+                }
+            }
+        }
+
+        // thin outline so the inset is findable at a glance
         val frame = 0xFFE0E0E0.toInt()
         if (ys < ye && xs < xe) {
             for (x in xs until xe) {

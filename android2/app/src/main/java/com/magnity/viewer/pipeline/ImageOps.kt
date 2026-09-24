@@ -7,6 +7,13 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
+ * Palette-mapped display pixels (ARGB, row-major w×h) on their way from the upscaler
+ * through fusion to the one Bitmap each frame is built from. [px] may be a buffer the
+ * producer reuses — valid until its next call, so turn it into a Bitmap before then.
+ */
+class ArgbImage(val px: IntArray, val w: Int, val h: Int)
+
+/**
  * Float-image primitives used by the enhancement pipeline — replacements for the
  * OpenCV calls the Linux app makes (medianBlur, GaussianBlur, bilateralFilter,
  * INTER_CUBIC resize). Images are row-major FloatArray of size w*h.

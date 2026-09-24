@@ -209,7 +209,8 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                 Text(
                     notice ?: (vm.status + (fr?.let { " · FPA ${it.fpa}" } ?: "")),
                     color = if (notice != null) Color(0xFFD6A93D) else DIM,
-                    fontSize = 10.sp, maxLines = 2,
+                    // status carries the per-stage timing split on its own line(s)
+                    fontSize = 10.sp, maxLines = 4,
                 )
             }
         }

@@ -1,7 +1,6 @@
 package com.magnity.viewer.pipeline
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.util.Log
 import java.io.File
 
@@ -96,13 +95,14 @@ class NcnnUpscaler private constructor() : AutoCloseable {
         lut: IntArray, out: IntArray,
     ): Boolean
 
-    /** Scalar field in, palette-mapped 4× Bitmap out. Throws if inference fails. */
-    fun render(field: FloatArray, w: Int, h: Int, lo: Float, hi: Float, lut: IntArray): Bitmap {
+    /** Scalar field in, palette-mapped 4× pixels out — this object's own buffer, valid
+     *  until the next call (see [ArgbImage]). Throws if inference fails. */
+    fun render(field: FloatArray, w: Int, h: Int, lo: Float, hi: Float, lut: IntArray): ArgbImage {
         val ow = w * 4
         val oh = h * 4
         if (out.size != ow * oh) out = IntArray(ow * oh)
         check(nativeRun(handle, field, w, h, lo, hi, lut, out)) { "ncnn inference failed" }
-        return Bitmap.createBitmap(out, ow, oh, Bitmap.Config.ARGB_8888)
+        return ArgbImage(out, ow, oh)
     }
 
     override fun close() {
