@@ -21,10 +21,17 @@ OUT="$(dirname "$BASE")"
 PARAM="$OUT/${NAME}_fp16.param"
 BIN="$OUT/${NAME}_fp16.bin"
 
+# export_onnx.py records the input shape (1- or 3-channel models); older exports lack it
+if [ -f "${BASE}_inputshape.txt" ]; then
+  SHAPE="$(tr -d '[:space:]' < "${BASE}_inputshape.txt")"
+else
+  SHAPE="[1,3,$H,$W]"
+fi
+
 if command -v pnnx >/dev/null 2>&1 && [ -f "$BASE.pt" ]; then
-  echo "== pnnx route =="
+  echo "== pnnx route ($SHAPE) =="
   # inputshape drives shape inference; pnnx emits <base>.ncnn.param / .ncnn.bin
-  pnnx "$BASE.pt" inputshape="[1,3,$H,$W]" device=cpu fp16=1
+  pnnx "$BASE.pt" inputshape="$SHAPE" device=cpu fp16=1
   mv -f "$BASE.ncnn.bin" "$BIN"
   # pnnx names the blobs in0 / out0; the app and verify_ncnn.py look up data / output
   # (the names the ONNX route carries), so rename them as whole tokens.

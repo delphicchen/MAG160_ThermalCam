@@ -11,6 +11,12 @@ These two model classes subclass the stock ones and inject FPN into `self.lq` af
 standard degradation has run, so everything else (kernels, resize, noise, JPEG, the
 USM-sharpened GT) behaves exactly as upstream.
 
+Single channel: with `num_in_ch: 1` in network_g the data path still runs in RGB — the
+crops are grey replicated into three channels, and upstream's DiffJPEG needs three — and
+the tensors are cut to their first channel at the model boundary. Channel 0 rather than
+the mean, so noise keeps its per-pixel strength (averaging colour noise would shrink it
+by √3). The VGG perceptual loss needs RGB, so it gets the grey repeated back to three.
+
 Register by adding to the yml:
 
     model_type: ThermalRealESRNetModel      # stage 1, L1 only
@@ -22,6 +28,7 @@ registry decorators below are what make those names resolvable.
 
 import numpy as np
 import torch
+from torch import nn
 
 from basicsr.utils.registry import MODEL_REGISTRY
 from realesrgan.models.realesrgan_model import RealESRGANModel
@@ -86,13 +93,38 @@ def _low_contrast(lq: torch.Tensor, opt: dict) -> torch.Tensor:
     return ((lq - mean) * k + mean).clamp(0, 1)
 
 
+class _GreyPerceptual(nn.Module):
+    """Feeds 1-channel images to an RGB perceptual loss as R=G=B."""
+
+    def __init__(self, inner: nn.Module):
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, x, gt):
+        return self.inner(x.repeat(1, 3, 1, 1), gt.repeat(1, 3, 1, 1))
+
+
 class _ThermalMixin:
+    def _single_channel(self) -> bool:
+        return self.opt['network_g'].get('num_in_ch', 3) == 1
+
+    def init_training_settings(self):
+        super().init_training_settings()
+        if self._single_channel() and getattr(self, 'cri_perceptual', None) is not None:
+            self.cri_perceptual = _GreyPerceptual(self.cri_perceptual)
+
     @torch.no_grad()
     def feed_data(self, data):
         super().feed_data(data)
         if self.is_train:
             self.lq = _low_contrast(self.lq, self.opt)
             self.lq = _add_fpn(self.lq, self.opt)
+        if self._single_channel():
+            # after upstream's degradation and pair queue, which both run in RGB
+            for name in ('lq', 'gt', 'gt_usm'):
+                t = getattr(self, name, None)
+                if t is not None and t.shape[1] == 3:
+                    setattr(self, name, t[:, :1].contiguous())
 
 
 @MODEL_REGISTRY.register()

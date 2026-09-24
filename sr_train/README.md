@@ -16,8 +16,8 @@ init will not transfer.** Run `python scripts/count_params.py`:
 | model | params | GMAC @160×120 |
 |---|---|---|
 | SRVGGNetCompact 64/32 (`realesr-general-x4v3`, as published) | 1.21 M | ~45 |
-| SRVGGNetCompact 64/16 (this recipe) | 0.62 M | ~22 |
-| SRVGGNetCompact 64/8 | 0.31 M | ~11 |
+| SRVGGNetCompact 64/16 (first release, 3-channel) | 0.62 M | ~22 |
+| SRVGGNetCompact 64/8 (**this recipe**, 1-channel) | 0.31 M | ~11 |
 | RRDBNet 32/12 | ~2.5 M | ~130 |
 | RRDBNet 16/6 | ~0.35 M | ~18 |
 | RRDBNet 64/23 (`RealESRGAN_x4plus`) | 16.7 M | ~830 |
@@ -32,10 +32,23 @@ scratch.
 So the main recipe uses **SRVGGNetCompact**, which is what "compact Real-ESRGAN" actually
 refers to: it is 6× cheaper than the RRDBNet route and it is what
 `Real-ESRGAN-ncnn-vulkan` already ships, so the conversion path is proven. Note the
-published `realesr-general-x4v3` is **num_conv=32** (1.21 M, ~45 GMAC); this recipe halves
-it to 16 for the frame budget, and `scripts/truncate_pretrained.py` remaps the weights
-onto the shorter network — including the output conv, which a plain load would leave
-random. Run it once before stage 1 (the Colab notebook does this for you). `options/alt_rrdb_compact_x4_gan.yml` is the
+published `realesr-general-x4v3` is **num_conv=32** (1.21 M, ~45 GMAC). The first release
+ran 64/16, which measured 75–92 ms per frame on the phone (Vulkan) — short of 15 fps — so
+this recipe runs **64/8 with one input and one output channel**: the thermal field is grey,
+and the RGB model only ever saw it replicated into R=G=B with the app averaging the three
+outputs. `scripts/truncate_pretrained.py` remaps the weights onto the shorter network —
+including the output conv, which a plain load would leave random — and folds RGB into one
+channel so the grey net starts as exactly the mean of the RGB one's outputs;
+`scripts/netd_single_channel.py` does the same for the discriminator's input conv. Run both
+once before stage 1 (the Colab notebook does this for you). The training data path itself
+stays RGB (upstream's DiffJPEG needs three channels); `thermal_arch/thermal_degradation.py`
+cuts the tensors to one channel at the model boundary and feeds the VGG loss R=G=B.
+
+Until 2026-09-24 `truncate_pretrained.py` put the output conv at index `2·num_conv` instead
+of `2·num_conv + 2`: the last body pair was dropped and the output conv, landing on a slot
+of the wrong shape, was skipped by the non-strict load — so the first release trained its
+output layer from a random start. The ymls now load strictly, which makes that kind of
+mismatch an error instead of a warning. `options/alt_rrdb_compact_x4_gan.yml` is the
 RRDBNet version as originally specified, with its caveats written at the top — use it if
 you want to compare.
 
@@ -126,9 +139,15 @@ Hugging Face mirrors do not — each was verified public and ungated:
 | source | images | size | note |
 |---|---|---|---|
 | `jsonhash/FLIR_aligned` | ~5.1k thermal @ **640×512** | 1.4 GB zip | FLIR ADAS aligned pairs; take only `align/JPEGImages/*_PreviewData.jpeg` |
-| `LibreYOLO/flir-camera-objects` | 13.6k @ 640×640 | ~1 GB | the same FLIR ADAS data via Roboflow, stretched to square |
-| `Kiuyha/hit-uav-thermal-human-detection` | 4.9k @ 640×640 | ~300 MB | drone thermal, different viewpoints |
-| your MAG160Core captures | **validation only** | — | 160×120 is the LR side; no 4× ground truth exists for it |
+| `vision-cidis/CIDIS-dataset` (GitHub) | 700 train + 200 val @ **640×448** | ~0.8 GB | PBVS TISR 2024/25 benchmark, grey, milder AGC than FLIR's previews. No licence file; its README asks for a citation (Rivadeneira, Velesaca, Sappa, *Cross-Spectral Image Registration: a Comparative Study and a New Benchmark Dataset*, 2024). val is kept out of training |
+| `LibreYOLO/flir-camera-objects` | 13.6k @ 640×640 | ~1 GB | the same FLIR ADAS data via Roboflow, **stretched** to square — not used by default |
+| `Kiuyha/hit-uav-thermal-human-detection` | 4.9k @ 640×640 | ~300 MB | drone thermal, also a Roboflow export (`.rf.`), stretched — not used by default |
+| your MAG160Core captures | **validation only** | — | 160×120 is the LR side; no 4× ground truth exists for it. `scripts/mgt_to_png.py` turns the app's `.mgt` temperature captures into validation PNGs |
+
+All of these are 8-bit and already tone-mapped by the camera (FLIR's previews heavily:
+plateau AGC plus detail enhancement), while the app feeds the network a *linear* 1–99 %
+stretch of temperature. 16-bit radiometric sources (FLIR ADAS direct, registration) would
+match that better — the next data upgrade.
 
 ```sh
 python - <<'PY'
@@ -143,6 +162,7 @@ worth adding if you have them — more variety is the single biggest lever on th
 ```
 datasets/thermal_raw/{flir_adas_v2,kaist,pbvs_tisr}/…    # any depth
 datasets/val_mag160/*.png                                 # 20 held-out real frames
+                                                          #   (scripts/mgt_to_png.py *.mgt)
 ```
 
 ```sh

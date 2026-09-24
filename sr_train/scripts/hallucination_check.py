@@ -42,7 +42,7 @@ from scipy.ndimage import maximum_filter
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from export_onnx import build  # noqa: E402  (sibling script, not a package)
+from export_onnx import load_generator  # noqa: E402  (sibling script, not a package)
 
 
 def load_lr(p: pathlib.Path) -> np.ndarray:
@@ -116,9 +116,8 @@ def main() -> int:
     ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     args = ap.parse_args()
 
-    net = build(args.arch).to(args.device).eval()
-    sd = torch.load(args.ckpt, map_location='cpu')
-    net.load_state_dict(sd.get(args.key, sd.get('params', sd)), strict=True)
+    net, in_ch = load_generator(args.ckpt, args.arch, args.key)   # 1- or 3-channel
+    net = net.to(args.device)
 
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -131,7 +130,7 @@ def main() -> int:
     rows = []
     for f in files:
         lr = load_lr(f)
-        x = torch.from_numpy(np.repeat(lr[None], 3, 0)[None]).float().to(args.device)
+        x = torch.from_numpy(np.repeat(lr[None], in_ch, 0)[None]).float().to(args.device)
         with torch.no_grad():
             y = net(x)[0].clamp(0, 1).mean(0).cpu().numpy()   # back to one channel
         r = analyse(lr, y, args.delta, args.nbhd)

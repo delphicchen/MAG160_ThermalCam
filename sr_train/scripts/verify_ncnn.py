@@ -50,8 +50,8 @@ def main() -> int:
     args = ap.parse_args()
 
     ref = torch.load(args.ref, map_location='cpu')
-    x = ref['input'][0].numpy()          # 3xHxW, 0..1
-    y_torch = ref['output'][0].numpy()   # 3x4Hx4W
+    x = ref['input'][0].numpy()          # CxHxW, 0..1 (C = 1 or 3)
+    y_torch = ref['output'][0].numpy()   # Cx4Hx4W
 
     net = ncnn.Net()
     net.opt.use_vulkan_compute = args.vulkan

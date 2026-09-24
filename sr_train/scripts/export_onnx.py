@@ -6,12 +6,18 @@ Export a trained generator to TorchScript (for pnnx) and ONNX (for onnx2ncnn).
         --ckpt experiments/thermal_srvgg_x4_gan/models/net_g_100000.pth \
         --arch srvgg --out export/thermal_x4_160x120
 
-Writes export/thermal_x4.pt (traced, 1x3x120x160) and export/thermal_x4.onnx.
+Writes export/thermal_x4.pt (traced, 1xCx120x160), export/thermal_x4.onnx, the reference
+pair export/thermal_x4_ref.pt, and export/thermal_x4_inputshape.txt for convert_ncnn.sh.
+
+The SRVGGNetCompact shape (num_conv, 1- or 3-channel) is read from the checkpoint, so the
+same command exports the first release's 3-channel 64/16 and the 1-channel 64/8.
 
 Fixed input size on purpose: our frame is always 160x120 (or 120x160 rotated — export
 both with --size if you upscale after rotation), and a fixed shape gives ncnn the best
 chance of a clean, fully static graph. No custom ops are used: SRVGGNetCompact is
-conv + prelu + pixelshuffle + a bilinear/nearest skip, all natively supported.
+conv + prelu + pixelshuffle + a bilinear/nearest skip, all natively supported. The
+exported graph ends in clamp(0, 1): the app clamps anyway, and a bounded output keeps an
+INT8 quantisation's range fixed.
 """
 
 import argparse
@@ -22,18 +28,51 @@ import torch
 from basicsr.archs.rrdbnet_arch import RRDBNet
 from realesrgan.archs.srvgg_arch import SRVGGNetCompact
 
+UPSCALE = 4
 
-def build(arch: str):
+
+def srvgg_shape(sd: dict) -> dict:
+    """SRVGGNetCompact constructor args from its weights: body.0 is the first conv
+    (num_feat x in_ch), body.2n+2 the output conv (out_ch·16 filters)."""
+    last = max(int(k.split('.')[1]) for k in sd if k.startswith('body.'))
+    w0 = sd['body.0.weight']
+    return dict(num_in_ch=w0.shape[1], num_feat=w0.shape[0], num_conv=(last - 2) // 2,
+                num_out_ch=sd[f'body.{last}.weight'].shape[0] // (UPSCALE * UPSCALE))
+
+
+def build(arch: str, sd: dict | None = None):
     if arch == 'srvgg':
-        return SRVGGNetCompact(num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=16,
-                               upscale=4, act_type='prelu')
+        shape = srvgg_shape(sd) if sd is not None else \
+            dict(num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=16)
+        return SRVGGNetCompact(**shape, upscale=UPSCALE, act_type='prelu')
     if arch == 'rrdb':
         return RRDBNet(num_in_ch=3, num_out_ch=3, scale=4, num_feat=32, num_block=12,
                        num_grow_ch=16)
     raise SystemExit(f'unknown arch {arch}')
 
 
-def thermal_like(h: int, w: int, seed: int = 0) -> torch.Tensor:
+def load_generator(ckpt: str, arch: str, key: str = 'params_ema'):
+    """(net in eval mode, its input channel count) from a BasicSR checkpoint."""
+    raw = torch.load(ckpt, map_location='cpu')
+    sd = raw.get(key, raw.get('params', raw))
+    net = build(arch, sd)
+    net.load_state_dict(sd, strict=True)
+    in_ch = sd['body.0.weight'].shape[1] if arch == 'srvgg' else 3
+    return net.eval(), in_ch
+
+
+class Clamped(torch.nn.Module):
+    """The generator with its output bounded to the display range."""
+
+    def __init__(self, net: torch.nn.Module):
+        super().__init__()
+        self.net = net
+
+    def forward(self, x):
+        return self.net(x).clamp(0, 1)
+
+
+def thermal_like(h: int, w: int, seed: int = 0, ch: int = 3) -> torch.Tensor:
     """A plausible display frame for tracing and the ncnn reference: gradient, warm
     objects with hard edges, soft hot spots, NETD-level noise, then the viewer's 1-99 %
     stretch. Uniform noise is a poor reference — it drives the trained net to outputs
@@ -52,7 +91,7 @@ def thermal_like(h: int, w: int, seed: int = 0) -> torch.Tensor:
     f += 0.05 * torch.randn(f.shape, generator=g)
     lo, hi = torch.quantile(f.flatten(), torch.tensor([0.01, 0.99]))
     f = ((f - lo) / (hi - lo)).clamp(0, 1)
-    return f.expand(1, 3, h, w).contiguous()
+    return f.expand(1, ch, h, w).contiguous()
 
 
 def main() -> None:
@@ -65,14 +104,14 @@ def main() -> None:
     args = ap.parse_args()
 
     w, h = (int(v) for v in args.size.lower().split('x'))
-    net = build(args.arch)
-    sd = torch.load(args.ckpt, map_location='cpu')
-    net.load_state_dict(sd.get(args.key, sd.get('params', sd)), strict=True)
-    net.eval()
+    gen, in_ch = load_generator(args.ckpt, args.arch, args.key)
+    net = Clamped(gen).eval()
 
     out = pathlib.Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    x = thermal_like(h, w)
+    x = thermal_like(h, w, ch=in_ch)
+    # convert_ncnn.sh reads this, so pnnx gets the right channel count
+    pathlib.Path(f'{out}_inputshape.txt').write_text(f'[1,{in_ch},{h},{w}]\n')
 
     with torch.no_grad():
         traced = torch.jit.trace(net, x)

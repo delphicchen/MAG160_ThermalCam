@@ -82,18 +82,21 @@ datasets:
     dataset_enlarge_ratio: 1
     prefetch_mode: ~
 
+# 1-channel in/out: the thermal field is grey (the data path stays RGB for DiffJPEG; the
+# model classes cut to one channel at the boundary). 64/8: half the body of the first
+# release's 64/16, which ran at 75-92 ms on the phone — too slow for 15 fps.
 network_g:
   type: SRVGGNetCompact
-  num_in_ch: 3
-  num_out_ch: 3
+  num_in_ch: 1
+  num_out_ch: 1
   num_feat: 64
-  num_conv: 16
+  num_conv: 8
   upscale: 4
   act_type: prelu
 
 network_d:
   type: UNetDiscriminatorSN
-  num_in_ch: 3
+  num_in_ch: 1
   num_feat: 64
   skip_connection: true
 
@@ -102,11 +105,11 @@ path:
   pretrain_network_g: experiments/thermal_srvgg_x4_net/models/net_g_10000.pth
   param_key_g: params_ema
   strict_load_g: true
-  # no public discriminator matches this generator; start it from the x4plus one and let
-  # it adapt (strict_load off), or from scratch by removing these two lines
-  pretrain_network_d: experiments/pretrained_models/RealESRGAN_x4plus_netD.pth
+  # the x4plus discriminator with its RGB input conv folded to one channel
+  # (scripts/netd_single_channel.py) — same architecture otherwise, so load strictly
+  pretrain_network_d: experiments/pretrained_models/RealESRGAN_x4plus_netD-grey.pth
   param_key_d: params
-  strict_load_d: false
+  strict_load_d: true
   resume_state: ~
 
 train:

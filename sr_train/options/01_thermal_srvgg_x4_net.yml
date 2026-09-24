@@ -102,21 +102,26 @@ datasets:
 # BasicSR needs paired data for metrics, so we score nothing here and instead dump
 # comparison grids with scripts/hallucination_check.py at each checkpoint.
 
+# 1-channel in/out: the thermal field is grey (the data path stays RGB for DiffJPEG; the
+# model classes cut to one channel at the boundary). 64/8: half the body of the first
+# release's 64/16, which ran at 75-92 ms on the phone — too slow for 15 fps.
 network_g:
   type: SRVGGNetCompact
-  num_in_ch: 3
-  num_out_ch: 3
+  num_in_ch: 1
+  num_out_ch: 1
   num_feat: 64
-  num_conv: 16
+  num_conv: 8
   upscale: 4
   act_type: prelu
 
 path:
-  # Remapped by scripts/truncate_pretrained.py: the published model is num_conv=32, this
-  # recipe runs 16, and a plain load would leave the output conv randomly initialised.
-  pretrain_network_g: experiments/pretrained_models/realesr-general-x4v3-conv16.pth
+  # Remapped by scripts/truncate_pretrained.py: the published model is 3-channel 64/32;
+  # the script keeps the first 8 body convs, moves the real output conv onto ours and
+  # folds RGB into one channel. Every key then matches, so load strictly — a mismatch
+  # must fail here, not be skipped with a warning.
+  pretrain_network_g: experiments/pretrained_models/realesr-general-x4v3-conv8-grey.pth
   param_key_g: params
-  strict_load_g: false
+  strict_load_g: true
   resume_state: ~
 
 train:

@@ -22,3 +22,17 @@
 - Use: Vulkan inference backend for the thermal super-resolution upscaler
   (`pipeline/NcnnUpscaler.kt`, `cpp/ncnn_upscaler.cpp`). Statically linked into
   `libmagviewer_ncnn.so`; only the arm64-v8a slice is kept.
+
+## Thermal super-resolution model — weights and training data
+- Initialised from Real-ESRGAN's `realesr-general-x4v3` generator and
+  `RealESRGAN_x4plus_netD` discriminator (https://github.com/xinntao/Real-ESRGAN,
+  BSD 3-Clause, Copyright (c) 2021 Xintao Wang), remapped by `sr_train/scripts/`.
+- Trained on (see `sr_train/README.md`, "Data"):
+  - FLIR ADAS thermal previews, via the `jsonhash/FLIR_aligned` Hugging Face mirror —
+    Teledyne FLIR's dataset terms apply.
+  - CIDIS thermal train split (https://github.com/vision-cidis/CIDIS-dataset). The
+    repository carries no licence file; its README asks that the dataset be cited as:
+    Rafael E. Rivadeneira, Henry O. Velesaca, Angel D. Sappa, "Cross-Spectral Image
+    Registration: a Comparative Study and a New Benchmark Dataset", International
+    Conference on Innovations in Computational Intelligence and Computer Vision, 2024.
+    (Used from the model trained on 2026-09-24 onwards.)
