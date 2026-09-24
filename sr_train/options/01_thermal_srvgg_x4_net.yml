@@ -51,9 +51,12 @@ gt_usm: false
 # ---- thermal FPN (our addition) ------------------------------------------------------
 # Defaults are what scripts/estimate_fpn_stats.py measured on a MAG160Core; re-measure
 # for your own unit and paste the numbers here.
+# Rows as strong as columns (and the gain pattern on a random axis, in the code): one
+# model serves every mounting — the app rotates 0/90/180/270 before upscaling, so the
+# sensor's columns can arrive as rows.
 fpn_prob: 0.9
 fpn_col_sigma: [0.0, 0.010]
-fpn_row_sigma: [0.0, 0.004]
+fpn_row_sigma: [0.0, 0.010]
 fpn_map_sigma: [0.0, 0.006]
 fpn_gain_sigma: [0.0, 0.004]
 contrast_range: [0.45, 1.0]

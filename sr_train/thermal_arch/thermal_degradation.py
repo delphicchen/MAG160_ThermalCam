@@ -38,8 +38,10 @@ def _add_fpn(lq: torch.Tensor, opt: dict) -> torch.Tensor:
     n, c, h, w = lq.shape
     dev = lq.device
 
+    # rows as strong as columns: one model serves every mounting — the app rotates the
+    # field 0/90/180/270 before upscaling, so the sensor's columns can arrive as rows
     col_rng = opt.get('fpn_col_sigma', [0.0, 0.010])
-    row_rng = opt.get('fpn_row_sigma', [0.0, 0.004])
+    row_rng = opt.get('fpn_row_sigma', [0.0, 0.010])
     map_rng = opt.get('fpn_map_sigma', [0.0, 0.006])
     gain_rng = opt.get('fpn_gain_sigma', [0.0, 0.004])
     prob = opt.get('fpn_prob', 0.9)
@@ -50,14 +52,19 @@ def _add_fpn(lq: torch.Tensor, opt: dict) -> torch.Tensor:
     out = lq
     hit = (torch.rand(n, 1, 1, 1, device=dev) < prob).float()
 
-    # per-column offset: the dominant artefact (column amplifiers / seam between dies)
+    # per-column / per-row offset: the dominant artefact (column amplifiers, seam between
+    # dies) — along whichever image axis the mounting puts the sensor's columns
     out = out + hit * _u(col_rng) * torch.randn(n, 1, 1, w, device=dev)
-    # per-row offset: weaker, from row select timing
     out = out + hit * _u(row_rng) * torch.randn(n, 1, h, 1, device=dev)
     # static 2-D residual left by an imperfect flat-field
     out = out + hit * _u(map_rng) * torch.randn(n, 1, h, w, device=dev)
-    # multiplicative (gain) FPN — scales with signal, unlike the offsets above
-    out = out * (1.0 + hit * _u(gain_rng) * torch.randn(n, 1, 1, w, device=dev))
+    # multiplicative (gain) FPN — scales with signal, unlike the offsets above. It is a
+    # per-column pattern on the sensor, so its image axis is drawn per image (see above)
+    g_col = torch.randn(n, 1, 1, w, device=dev).expand(n, 1, h, w)
+    g_row = torch.randn(n, 1, h, 1, device=dev).expand(n, 1, h, w)
+    along_cols = (torch.rand(n, 1, 1, 1, device=dev) < 0.5).float()
+    gain = along_cols * g_col + (1.0 - along_cols) * g_row
+    out = out * (1.0 + hit * _u(gain_rng) * gain)
 
     return out.clamp(0, 1)
 

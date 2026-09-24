@@ -168,7 +168,7 @@ rotating teaches orientations the camera will not see.
 | `gray_noise_prob` → **0.6** | the sensor is single-channel, so its noise is identical across the replicated R/G/B |
 | `resize` stages | kept — the SDK's own scaling and our rotation do resample the frame |
 | `jpeg_range` | kept but mild (50–95); the live path has no JPEG, this is only robustness |
-| **+ FPN** (`fpn_*`) | new. Per-column, per-row, 2-D and gain fixed-pattern noise. Without it the network sharpens residual NUC stripes into hard vertical lines — the single most visible artefact on this sensor |
+| **+ FPN** (`fpn_*`) | new. Per-column, per-row, 2-D and gain fixed-pattern noise. Without it the network sharpens residual NUC stripes into hard vertical lines — the single most visible artefact on this sensor. Rows are as strong as columns and the gain pattern takes a random axis: one model serves every mounting, and the app rotates 0/90/180/270 before upscaling, so the sensor's columns can arrive as rows |
 | **+ low contrast** (`contrast_range`) | new. Indoors the whole frame can sit within 3 °C; training only on full-contrast crops teaches the network to trust edges far stronger than it will ever see |
 
 Set the FPN amplitudes from your own sensor rather than the defaults:
