@@ -17,6 +17,10 @@ import java.io.File
  * One model per orientation, because the exported graph has a static input size — the
  * portrait default is 120×160, the unrotated frame is 160×120.
  *
+ * Both model generations run: the first release is 3-channel (the grey field replicated
+ * into R=G=B, the outputs averaged), the v2 recipe 1-channel. Which one is read from the
+ * `.param` when the model loads ([ncnnParamInputChannels]).
+ *
  * Like [Anime4kGpu], inference runs on whatever thread calls [render]; ncnn has no
  * per-thread context of its own, and the processing loop is the only caller.
  */
@@ -24,6 +28,8 @@ class NcnnUpscaler private constructor() : AutoCloseable {
 
     private var handle = 0L
     var vulkan = false; private set
+    /** 1 or 3 — how many copies of the grey field the network takes. */
+    var inChannels = 3; private set
     private var out = IntArray(0)
 
     companion object {
@@ -79,6 +85,12 @@ class NcnnUpscaler private constructor() : AutoCloseable {
                 Log.e(TAG, "ncnn model failed to load")
                 return null
             }
+            val param = runCatching {
+                if (fromFiles) p.readText()
+                else ctx.assets.open(assetNames(w, h).first).use { it.readBytes().decodeToString() }
+            }.getOrDefault("")
+            u.inChannels = ncnnParamInputChannels(param)
+            Log.i(TAG, "ncnn model ${w}x$h: ${u.inChannels}-channel input")
             return u
         }
     }
@@ -92,7 +104,7 @@ class NcnnUpscaler private constructor() : AutoCloseable {
     private external fun nativeGpuAvailable(): Boolean
     private external fun nativeRun(
         handle: Long, field: FloatArray, w: Int, h: Int, lo: Float, hi: Float,
-        lut: IntArray, out: IntArray,
+        lut: IntArray, inChannels: Int, out: IntArray,
     ): Boolean
 
     /** Scalar field in, palette-mapped 4× pixels out — this object's own buffer, valid
@@ -101,11 +113,32 @@ class NcnnUpscaler private constructor() : AutoCloseable {
         val ow = w * 4
         val oh = h * 4
         if (out.size != ow * oh) out = IntArray(ow * oh)
-        check(nativeRun(handle, field, w, h, lo, hi, lut, out)) { "ncnn inference failed" }
+        check(nativeRun(handle, field, w, h, lo, hi, lut, inChannels, out)) {
+            "ncnn inference failed"
+        }
         return ArgbImage(out, ow, oh)
     }
 
     override fun close() {
         if (handle != 0L) nativeRelease(handle)
     }
+}
+
+/**
+ * Input channel count of an ncnn model, from its `.param` text: the first Convolution's
+ * weight count (`6=`) over its output channels (`0=`) and kernel area (`1=` × `11=`). For
+ * SRVGGNetCompact that is 1728 / (64·3·3) = 3 for the first release and 576 → 1 for the
+ * v2 recipe. Anything unreadable counts as 3, the original contract.
+ */
+internal fun ncnnParamInputChannels(param: String): Int {
+    val line = param.lineSequence().firstOrNull { it.startsWith("Convolution") } ?: return 3
+    val kv = line.split(Regex("\\s+"))
+        .mapNotNull { t -> t.split('=').takeIf { it.size == 2 }?.let { it[0] to it[1] } }
+        .toMap()
+    val outCh = kv["0"]?.toIntOrNull()?.takeIf { it > 0 } ?: return 3
+    val kw = kv["1"]?.toIntOrNull()?.takeIf { it > 0 } ?: 1
+    val kh = kv["11"]?.toIntOrNull()?.takeIf { it > 0 } ?: kw
+    val weights = kv["6"]?.toIntOrNull() ?: return 3
+    val c = weights / (outCh * kw * kh)
+    return if (c == 1 || c == 3) c else 3
 }

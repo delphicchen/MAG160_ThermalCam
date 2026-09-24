@@ -4,9 +4,11 @@
 // colouring), out comes palette-mapped ARGB at 4x. Doing the normalisation, the network
 // and the palette lookup in one call keeps the per-frame JNI traffic to two arrays.
 //
-// The model is SRVGGNetCompact x4 (see sr_train/): 3-channel in/out, values in 0..1. The
-// frame is grey, so the field is replicated across RGB on the way in and the channels are
-// averaged on the way out.
+// The model is SRVGGNetCompact x4 (see sr_train/), values in 0..1. The first release is
+// 3-channel: the grey field is replicated across RGB on the way in and the channels are
+// averaged on the way out. The v2 recipe is 1-channel and takes the field as-is. The
+// Kotlin side reads which from the .param and passes it in; the output side simply
+// averages however many channels come back.
 
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
@@ -117,12 +119,13 @@ Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeGpuAvailable(JNIEnv*, jobjec
  * field  w*h scalars (°C)
  * lo/hi  display range; the network sees (v - lo) / (hi - lo) clamped to 0..1
  * lut    256 ARGB entries
+ * inCh   1 or 3: copies of the field the network takes (read from the .param)
  * out    (w*4)*(h*4) ARGB, caller-allocated
  */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeRun(
         JNIEnv* env, jobject, jlong handle, jfloatArray jfield, jint w, jint h,
-        jfloat lo, jfloat hi, jintArray jlut, jintArray jout) {
+        jfloat lo, jfloat hi, jintArray jlut, jint inCh, jintArray jout) {
     auto* s = reinterpret_cast<Session*>(handle);
     if (s == nullptr) return JNI_FALSE;
 
@@ -134,15 +137,16 @@ Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeRun(
 
     jfloat* field = env->GetFloatArrayElements(jfield, nullptr);
 
-    ncnn::Mat in(w, h, 3);
+    const int ic = inCh == 1 ? 1 : 3;
+    ncnn::Mat in(w, h, ic);
     const float inv = 1.0f / std::max(hi - lo, 1e-6f);
     float* c0 = in.channel(0);
-    float* c1 = in.channel(1);
-    float* c2 = in.channel(2);
     for (int i = 0; i < w * h; i++) {
         float t = (field[i] - lo) * inv;
-        t = t < 0.f ? 0.f : (t > 1.f ? 1.f : t);
-        c0[i] = c1[i] = c2[i] = t;
+        c0[i] = t < 0.f ? 0.f : (t > 1.f ? 1.f : t);
+    }
+    for (int c = 1; c < ic; c++) {        // first-release models: R = G = B
+        std::copy(c0, c0 + w * h, static_cast<float*>(in.channel(c)));
     }
     env->ReleaseFloatArrayElements(jfield, field, JNI_ABORT);
 
@@ -166,11 +170,13 @@ Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeRun(
 
     jint* lut = env->GetIntArrayElements(jlut, nullptr);
     std::vector<jint> argb((size_t)ow * oh);
+    // back to one channel: 1-channel models as-is, RGB ones averaged
+    const int oc = out.c;
     const float* o0 = out.channel(0);
-    const float* o1 = out.channel(1);
-    const float* o2 = out.channel(2);
+    const float* o1 = oc >= 3 ? static_cast<const float*>(out.channel(1)) : nullptr;
+    const float* o2 = oc >= 3 ? static_cast<const float*>(out.channel(2)) : nullptr;
     for (int i = 0; i < ow * oh; i++) {
-        float v = (o0[i] + o1[i] + o2[i]) * (1.0f / 3.0f);
+        float v = o1 ? (o0[i] + o1[i] + o2[i]) * (1.0f / 3.0f) : o0[i];
         v = v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
         argb[i] = lut[(int)(v * 255.0f + 0.5f)];
     }
