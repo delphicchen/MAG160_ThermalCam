@@ -34,7 +34,7 @@ class NcnnUpscaler private constructor() : AutoCloseable {
     var vulkan = false; private set
     /** 1 or 3 — how many copies of the grey field the network takes. */
     var inChannels = 3; private set
-    /** Loaded from the external files dir (a pushed test model) rather than the APK. */
+    /** Loaded from the external files dir (an imported or pushed model), not the APK. */
     var fromFiles = false; private set
     private val timings = FloatArray(3)
     private var out = IntArray(0)

@@ -946,7 +946,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val t = u.lastTimings()
         for (i in 0..2) srMs[i] += STAGE_EMA * (t[i] - srMs[i])
         srLabel = "SR ${if (u.vulkan) "Vulkan" else "CPU"} · ${u.inChannels}-ch " +
-            (if (u.fromFiles) "pushed" else "bundled")
+            (if (u.fromFiles) "imported" else "built-in")
         srFrame = true
     }
 
