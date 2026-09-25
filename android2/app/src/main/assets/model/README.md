@@ -12,6 +12,8 @@ Colab export produces — and **Use built-in** removes it again. `adb push` into
 `Android/data/com.magnity.viewer/files/model/` still works too. The app reads from the
 `.param` whether a model is 1-channel (the v2 recipe) or 3-channel (this first release).
 
-Bundled now (2026-09-17): SRVGGNetCompact 64/16, Colab run `thermal_srvgg_x4_gan`
-net_g_40000 (stage 1: 8k L1 iterations, stage 2: 40k perceptual + GAN), converted with
-pnnx fp16. ncnn vs PyTorch on a thermal-like frame: max 0.49 / mean 0.05 of an 8-bit level.
+Bundled now (2026-09-25): SRVGGNetCompact 64/10, 1-channel (°C sensor view), Colab
+recipe v4 `thermal_srvgg_x4_net` net_g_80000 — single stage, L1 + FFT spectrum + gradient
+loss, log-uniform sensor noise, no GAN — converted with pnnx fp16. On the 38 held-out real
+MAG160 frames it invents ~5.0 hot spots per frame (v3 40k: 5.9) with a worst excess of 52
+levels (v3: 129).
