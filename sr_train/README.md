@@ -17,7 +17,8 @@ init will not transfer.** Run `python scripts/count_params.py`:
 |---|---|---|
 | SRVGGNetCompact 64/32 (`realesr-general-x4v3`, as published) | 1.21 M | ~45 |
 | SRVGGNetCompact 64/16 (first release, 3-channel) | 0.62 M | ~22 |
-| SRVGGNetCompact 64/8 (**this recipe**, 1-channel) | 0.31 M | ~11 |
+| SRVGGNetCompact 64/10 (**this recipe**, 1-channel) | 0.38 M | ~14 |
+| SRVGGNetCompact 64/8 (v2, 1-channel) | 0.31 M | ~11 |
 | RRDBNet 32/12 | ~2.5 M | ~130 |
 | RRDBNet 16/6 | ~0.35 M | ~18 |
 | RRDBNet 64/23 (`RealESRGAN_x4plus`) | 16.7 M | ~830 |
@@ -34,7 +35,9 @@ refers to: it is 6× cheaper than the RRDBNet route and it is what
 `Real-ESRGAN-ncnn-vulkan` already ships, so the conversion path is proven. Note the
 published `realesr-general-x4v3` is **num_conv=32** (1.21 M, ~45 GMAC). The first release
 ran 64/16, which measured 75–92 ms per frame on the phone (Vulkan) — short of 15 fps — so
-this recipe runs **64/8 with one input and one output channel**: the thermal field is grey,
+this recipe runs **64/10 with one input and one output channel** (on the phone's GPU ncnn
+time follows the body: 64/16 RGB 55 ms, 64/8 grey 30 ms, so 10 convs ≈ 37 ms keeps 15 fps
+while recording): the thermal field is grey,
 and the RGB model only ever saw it replicated into R=G=B with the app averaging the three
 outputs. `scripts/truncate_pretrained.py` remaps the weights onto the shorter network —
 including the output conv, which a plain load would leave random — and folds RGB into one
@@ -64,10 +67,10 @@ everything below, which ends at a verified `.param`/`.bin`.
 ```
 sr_train/
 ├── options/
-│   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 only, 10k iter
-│   ├── 02_thermal_srvgg_x4_gan.yml      stage 2, + VGG + GAN, 100k iter
+│   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 + FFT (faithful candidate)
+│   ├── 02_thermal_srvgg_x4_gan.yml      stage 2, + VGG + light GAN (sharper candidate)
 │   └── alt_rrdb_compact_x4_gan.yml      RRDBNet 32/12 variant
-├── thermal_arch/thermal_degradation.py  FPN + low-contrast on top of Real-ESRGAN's pipeline
+├── thermal_arch/thermal_degradation.py  °C sensor view + L1FFTLoss on top of Real-ESRGAN
 └── scripts/
     ├── prepare_thermal_dataset.py       public datasets → 480×480 HR crops + meta_info
     ├── estimate_fpn_stats.py            measure your sensor's FPN → yml amplitudes
@@ -188,30 +191,35 @@ rotating teaches orientations the camera will not see.
 | `gray_noise_prob` → **0.6** | the sensor is single-channel, so its noise is identical across the replicated R/G/B |
 | `resize` stages | kept — the SDK's own scaling and our rotation do resample the frame |
 | `jpeg_range` | kept but mild (50–95); the live path has no JPEG, this is only robustness |
-| **+ FPN** (`fpn_*`) | new. Per-column, per-row, 2-D and gain fixed-pattern noise. Without it the network sharpens residual NUC stripes into hard vertical lines — the single most visible artefact on this sensor. Rows are as strong as columns and the gain pattern takes a random axis: one model serves every mounting, and the app rotates 0/90/180/270 before upscaling, so the sensor's columns can arrive as rows |
-| **+ low contrast** (`contrast_range`) | new. Indoors the whole frame can sit within 3 °C; training only on full-contrast crops teaches the network to trust edges far stronger than it will ever see |
+| **+ sensor view** (`sensor_*`) | new, v3 — replaces `fpn_*` and `contrast_range`. Each crop becomes a scene of random span (0.5–40 °C, log-uniform); pixel noise, column and row stripes (equally strong — the app rotates before upscaling), a 2-D residual and gain FPN are added at a size drawn **in °C**; then input and targets get the app's 1–99 % stretch of that noisy frame. A flat scene thus shows the network what the app shows it: noise at a large share of full scale, and a flat target. The v1/v2 recipe added FPN as ≤1 % of full scale (a low-span MAG160 frame shows 2–5 %) and squeezed the input's contrast but not the target's, which taught contrast stretching (gain 1.05–1.10). Earlier FPN note: Per-column, per-row, 2-D and gain fixed-pattern noise. Without it the network sharpens residual NUC stripes into hard vertical lines — the single most visible artefact on this sensor. Rows are as strong as columns and the gain pattern takes a random axis: one model serves every mounting, and the app rotates 0/90/180/270 before upscaling, so the sensor's columns can arrive as rows |
+| ~~low contrast~~ (`contrast_range`) | removed in v3 — see the sensor view |
 
-Set the FPN amplitudes from your own sensor rather than the defaults:
+The `sensor_*` defaults are generic ranges that already cover 38 real MAG160 frames (span
+0.7–33 °C, pixel noise ≈0.1–0.2 °C, stripes up to ≈0.1 °C) with margin. To check whether a
+noisier unit needs wider ones:
 
 ```sh
-# capture ~300 frames of a static wall with no FFC in between, saved as (N,H,W) .npy
+# ~300 frames of a still, uniform scene with no FFC in between, as an (N,H,W) .npy of °C
 python scripts/estimate_fpn_stats.py captures/wall_300.npy
 ```
 
 ## Training
 
 ```sh
-# stage 1 — L1 only, ~10k iter: let the net meet the thermal degradation first
+# stage 1 — L1 + FFT: the faithful candidate
 python realesrgan/train.py -opt options/01_thermal_srvgg_x4_net.yml --auto_resume
 
-# stage 2 — + perceptual + GAN, from stage 1's EMA weights
+# stage 2 — + perceptual + light GAN, from stage 1's EMA weights: the sharper candidate
 python realesrgan/train.py -opt options/02_thermal_srvgg_x4_gan.yml --auto_resume
 ```
 
-Schedule: stage 1 lr 2e-4, halved at 6k, stop at 10k. Stage 2 lr 1e-4 for G and D,
-halved at 50k and 80k, stop at 100k. GAN weight is 5e-2 and perceptual 0.5 — both lower
-than stock Real-ESRGAN, because a thermal frame has no texture to invent and the GAN term
-is exactly what produces plausible-but-absent detail.
+v3 schedule (the Colab notebook sets it): stage 1 **40k** iterations — the first releases
+stopped at 8–10k, a warm-up that never learned to sharpen — and stage 2 **20k**. The pixel
+loss is `L1FFTLoss` (L1 + 0.5 × L1 on the orthonormal spectrum), which holds edges without
+a GAN's license to invent them. Stage 2 adds perceptual 0.3 and GAN 1e-2 (v2: 0.5 / 5e-2,
+stock Real-ESRGAN 1.0 / 1e-1): a thermal frame has no texture to invent, and v2's heavier
+GAN drew streaks and corners on real low-span frames. Both stages' last checkpoints are
+exported, so the two candidates can be compared in the app.
 
 Validation is visual and adversarial-free: every 5k checkpoint, run
 

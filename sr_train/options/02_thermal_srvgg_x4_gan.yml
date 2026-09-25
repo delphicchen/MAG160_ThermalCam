@@ -35,15 +35,19 @@ l1_gt_usm: false
 percep_gt_usm: false
 gan_gt_usm: false
 
-fpn_prob: 0.9
-# Rows as strong as columns (and the gain pattern on a random axis, in the code): one
-# model serves every mounting — the app rotates 0/90/180/270 before upscaling, so the
-# sensor's columns can arrive as rows.
-fpn_col_sigma: [0.0, 0.010]
-fpn_row_sigma: [0.0, 0.010]
-fpn_map_sigma: [0.0, 0.006]
-fpn_gain_sigma: [0.0, 0.004]
-contrast_range: [0.45, 1.0]
+# ---- sensor view (thermal_arch/thermal_degradation.py) ------------------------------
+# Each crop is a scene of random temperature span; the sensor adds noise of a size in °C;
+# the display range is the 1-99 % of that noisy frame, applied to input and target alike
+# — what the app does. Generic microbolometer ranges, not one unit's measurement: they
+# cover 38 real MAG160 frames (span 0.7-33 °C, pixel noise ~0.1-0.2 °C, stripes up to
+# ~0.1 °C) with margin. Stripes run along both axes equally (the app rotates before
+# upscaling). scripts/estimate_fpn_stats.py says whether a noisier unit needs wider ones.
+sensor_prob: 0.9
+sensor_span_c: [0.5, 40.0]      # log-uniform
+sensor_noise_c: [0.03, 0.20]
+sensor_stripe_c: [0.0, 0.10]
+sensor_map_c: [0.0, 0.05]
+sensor_gain: [0.0, 0.004]       # relative
 
 datasets:
   train:
@@ -83,14 +87,15 @@ datasets:
     prefetch_mode: ~
 
 # 1-channel in/out: the thermal field is grey (the data path stays RGB for DiffJPEG; the
-# model classes cut to one channel at the boundary). 64/8: half the body of the first
-# release's 64/16, which ran at 75-92 ms on the phone — too slow for 15 fps.
+# model classes cut to one channel at the boundary). 64/10: on the phone's GPU ncnn time
+# scales with the body (64/16 RGB 55 ms, 64/8 grey 30 ms), so 10 convs (~37 ms) keep
+# 15 fps with recording and give the net a quarter more capacity than 64/8.
 network_g:
   type: SRVGGNetCompact
   num_in_ch: 1
   num_out_ch: 1
   num_feat: 64
-  num_conv: 8
+  num_conv: 10
   upscale: 4
   act_type: prelu
 
@@ -135,10 +140,12 @@ train:
 
   # Loss weights are deliberately conservative versus stock Real-ESRGAN: a thermal frame
   # has no texture to invent, and a strong GAN term is exactly what produces plausible
-  # detail that is not in the data. perceptual 0.5 (stock 1.0), gan 5e-2 (stock 1e-1).
+  # detail that is not in the data. perceptual 0.3 (stock 1.0), gan 1e-2 (stock 1e-1) —
+  # v2's 0.5 / 5e-2 drew streaks and corners on real low-span frames.
   pixel_opt:
-    type: L1Loss
+    type: L1FFTLoss
     loss_weight: 1.0
+    fft_weight: 0.5     # orthonormal FFT: ~30 % of the loss on over-smoothed output
     reduction: mean
   perceptual_opt:
     type: PerceptualLoss
@@ -150,7 +157,7 @@ train:
       'conv5_4': 1
     vgg_type: vgg19
     use_input_norm: true
-    perceptual_weight: !!float 0.5
+    perceptual_weight: !!float 0.3
     style_weight: 0
     range_norm: false
     criterion: l1
@@ -159,7 +166,7 @@ train:
     gan_type: vanilla
     real_label_val: 1.0
     fake_label_val: 0.0
-    loss_weight: !!float 5e-2
+    loss_weight: !!float 1e-2
 
   net_d_iters: 1
   net_d_init_iters: 0

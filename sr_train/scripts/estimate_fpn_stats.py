@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Measure this camera's fixed-pattern noise, so the degradation amplitudes in the yml are
-the sensor's real numbers instead of a guess.
+Check one camera's noise against the degradation's `sensor_*` ranges (°C).
 
-Capture a few hundred frames of a *static*, roughly uniform scene (a wall, a palm held
-still) without triggering an FFC, save them as a single (N, H, W) .npy of raw counts or
-°C, then:
+The defaults are generic microbolometer ranges that already cover the MAG160 frames they
+were checked against; run this only to see whether *your* unit is noisier. Capture a few
+hundred frames of a *static*, roughly uniform scene (a wall, a palm held still) without
+an FFC — e.g. a MagViewer recording with "Save temperature data" on, whose .mgt holds
+°C — save them as one (N, H, W) .npy of °C, then:
 
     python scripts/estimate_fpn_stats.py captures/wall_300.npy
 
-It prints the three sigmas to paste into the yml, plus the temporal noise for context.
 The temporal mean cancels shot noise and leaves the fixed pattern; the column and row
-means of that residual are the structured part, and what is left is the 2-D residual.
+means of that residual are the stripes, what is left is the 2-D residual.
 """
 
 import argparse
@@ -33,19 +33,15 @@ def main() -> int:
         print(f'expected (N, H, W), got {f.shape}', file=sys.stderr)
         return 1
 
-    stats = fpn_from_frames(f)
-    scale = float(np.percentile(f, 99) - np.percentile(f, 1))
-    temporal = float(f.std(axis=0).mean())
-
-    print(f'{f.shape[0]} frames of {f.shape[2]}x{f.shape[1]}')
-    print(f'full-scale span (p1..p99) : {scale:.3f}')
-    print(f'temporal noise per pixel   : {temporal:.4f}  ({temporal / scale * 100:.2f}% FS)')
-    print()
-    print('paste into the yml (upper bound = 1.5x the measured sigma, so training covers')
-    print('a worse NUC than yours):')
-    for k in ('fpn_col_sigma', 'fpn_row_sigma', 'fpn_map_sigma'):
-        v = stats[k]
-        print(f'  {k}: [0.0, {v * 1.5:.4f}]        # measured {v:.4f} FS')
+    s = fpn_from_frames(f)
+    print(f'{f.shape[0]} frames of {f.shape[2]}x{f.shape[1]}  (units of the input, °C for .mgt)')
+    rows = (('sensor_noise_c', s['noise'], 0.20),
+            ('sensor_stripe_c', max(s['stripe_col'], s['stripe_row']), 0.10),
+            ('sensor_map_c', s['map'], 0.05))
+    for key, v, default_hi in rows:
+        verdict = 'covered' if v * 1.5 <= default_hi else f'WIDEN: {key}: [0.0, {v * 1.5:.3f}]'
+        print(f'  {key:16s} measured {v:.4f}   default upper {default_hi:.2f}   -> {verdict}')
+    print(f'  (stripes: columns {s["stripe_col"]:.4f}, rows {s["stripe_row"]:.4f})')
     return 0
 
 
