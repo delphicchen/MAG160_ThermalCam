@@ -16,7 +16,11 @@ stripes, a 2-D residual and a gain pattern of a size drawn in °C, and the displ
 is the 1–99 % of that noisy frame — applied to the input *and* the targets, as the app
 applies it to the prediction. The defaults are generic microbolometer ranges, not one
 unit's measurement; they cover what 38 real MAG160 frames showed (span 0.7–33 °C, pixel
-noise ≈0.1–0.2 °C, stripes up to ≈0.1 °C) with margin.
+noise ≈0.1–0.2 °C, stripes up to ≈0.1 °C) with margin. Pixel noise is drawn
+log-uniformly (v4): the app's temporal denoise runs before the upscaler and cuts still
+scenes' noise to ~0.3x, so most real inputs sit at the quiet end — a uniform draw
+trained mostly on noisier frames than the network meets, and it over-smoothed
+(watercolour plateaus on fur).
 
 This replaces the first releases' `_low_contrast`, which squeezed the input's contrast
 but not the target's and so taught the network to *stretch* contrast (gain 1.05–1.10 on
@@ -29,8 +33,9 @@ the tensors are cut to their first channel at the model boundary. Channel 0 rath
 the mean, so noise keeps its per-pixel strength (averaging colour noise would shrink it
 by √3). The VGG perceptual loss needs RGB, so it gets the grey repeated back to three.
 
-`L1FFTLoss` adds an L1 on the image spectrum to the pixel L1: it holds high frequencies —
-edges — that a plain L1 averages away, without the GAN's license to invent texture.
+`L1FFTLoss` adds an L1 on the image spectrum, and optionally on Sobel gradients, to the
+pixel L1: they hold edges that a plain L1 averages away, without a GAN's license to
+invent texture.
 
 Register by adding to the yml:
 
@@ -68,13 +73,17 @@ def _sensor_view(lq: torch.Tensor, gts: list, opt: dict):
     def _u(rng):
         return torch.empty(n, 1, 1, 1, device=dev).uniform_(float(rng[0]), float(rng[1]))
 
-    span_lo, span_hi = opt.get('sensor_span_c', [0.5, 40.0])
-    span = torch.exp(_u([math.log(span_lo), math.log(span_hi)]))        # °C, log-uniform
+    def _logu(rng):
+        return torch.exp(_u([math.log(rng[0]), math.log(rng[1])]))
+
+    span = _logu(opt.get('sensor_span_c', [0.5, 40.0]))                 # °C, log-uniform
     hit = (torch.rand(n, 1, 1, 1, device=dev) < opt.get('sensor_prob', 0.9)).float()
     to_display = hit / span                                              # °C -> [0, 1]
 
     stripe = opt.get('sensor_stripe_c', [0.0, 0.10])
-    noise_c = (_u(opt.get('sensor_noise_c', [0.03, 0.20])) * torch.randn(n, 1, h, w, device=dev)
+    noise_rng = opt.get('sensor_noise_c', [0.02, 0.20])
+    noise_sigma = _logu(noise_rng) if opt.get('sensor_noise_log', True) else _u(noise_rng)
+    noise_c = (noise_sigma * torch.randn(n, 1, h, w, device=dev)
                # stripes along both axes, equally strong: one model serves every mounting
                # and the app rotates before upscaling, so sensor columns can arrive as rows
                + _u(stripe) * torch.randn(n, 1, 1, w, device=dev)
@@ -103,27 +112,43 @@ def _sensor_view(lq: torch.Tensor, gts: list, opt: dict):
     return stretch(out), [stretch(t) for t in gts]
 
 
+def _sobel(x: torch.Tensor) -> torch.Tensor:
+    """Per-channel Sobel x/y (normalised by 8), replicate-padded: (n, 2c, h, w)."""
+    k = torch.tensor([[1., 0., -1.], [2., 0., -2.], [1., 0., -1.]], device=x.device) / 8
+    c = x.shape[1]
+    w = torch.stack([k, k.t()])[:, None].repeat(c, 1, 1, 1)             # (2c, 1, 3, 3)
+    return F.conv2d(F.pad(x.float(), (1, 1, 1, 1), mode='replicate'), w, groups=c)
+
+
 @LOSS_REGISTRY.register()
 class L1FFTLoss(nn.Module):
-    """Pixel L1 plus `fft_weight` x an L1 between the orthonormal 2-D spectra (real and
-    imaginary parts). The spectral term keeps edges that a plain L1 averages away.
+    """Pixel L1 + `fft_weight` x an L1 between the orthonormal 2-D spectra (real and
+    imaginary parts) + `grad_weight` x an L1 between Sobel gradients. The spectral and
+    gradient terms keep edges that a plain L1 averages away.
 
-    With the orthonormal transform the spectral L1 of an over-smoothed prediction is about
-    0.6x its pixel L1 (measured on CIDIS crops), so 0.5 makes it ~30 % of the loss: enough
-    to pull edges back, while the pixel term still leads. (Recipes quoting 0.1 use an
-    unnormalised FFT, whose values are larger by the square root of the pixel count.)"""
+    On an over-smoothed prediction (CIDIS crops, bicubic down/up x4) the spectral L1 is
+    ~0.6x and the gradient L1 ~0.5x the pixel L1, so fft 1.0 + grad 0.5 splits the loss
+    about 55 % pixel / 32 % spectral / 13 % gradient: the pixel term still leads. (Recipes
+    quoting fft 0.1 use an unnormalised FFT, larger by the square root of the pixel
+    count.) v3 ran fft 0.5 alone."""
 
-    def __init__(self, loss_weight=1.0, fft_weight=0.5, reduction='mean'):
+    def __init__(self, loss_weight=1.0, fft_weight=1.0, grad_weight=0.0, reduction='mean'):
         super().__init__()
         self.loss_weight = loss_weight
         self.fft_weight = fft_weight
+        self.grad_weight = grad_weight
         self.reduction = reduction
 
     def forward(self, pred, target, weight=None, **kwargs):
-        l1 = F.l1_loss(pred, target, reduction=self.reduction)
-        fp = torch.view_as_real(torch.fft.rfft2(pred.float(), norm='ortho'))
-        ft = torch.view_as_real(torch.fft.rfft2(target.float(), norm='ortho'))
-        return self.loss_weight * (l1 + self.fft_weight * F.l1_loss(fp, ft, reduction=self.reduction))
+        loss = F.l1_loss(pred, target, reduction=self.reduction)
+        if self.fft_weight:
+            fp = torch.view_as_real(torch.fft.rfft2(pred.float(), norm='ortho'))
+            ft = torch.view_as_real(torch.fft.rfft2(target.float(), norm='ortho'))
+            loss = loss + self.fft_weight * F.l1_loss(fp, ft, reduction=self.reduction)
+        if self.grad_weight:
+            loss = loss + self.grad_weight * F.l1_loss(_sobel(pred), _sobel(target),
+                                                       reduction=self.reduction)
+        return self.loss_weight * loss
 
 
 class _GreyPerceptual(nn.Module):

@@ -44,7 +44,9 @@ gan_gt_usm: false
 # upscaling). scripts/estimate_fpn_stats.py says whether a noisier unit needs wider ones.
 sensor_prob: 0.9
 sensor_span_c: [0.5, 40.0]      # log-uniform
-sensor_noise_c: [0.03, 0.20]
+sensor_noise_c: [0.02, 0.20]
+sensor_noise_log: true         # log-uniform: the app's temporal denoise (on by default)
+                               # leaves most real inputs at the quiet end
 sensor_stripe_c: [0.0, 0.10]
 sensor_map_c: [0.0, 0.05]
 sensor_gain: [0.0, 0.004]       # relative
@@ -145,7 +147,8 @@ train:
   pixel_opt:
     type: L1FFTLoss
     loss_weight: 1.0
-    fft_weight: 0.5     # orthonormal FFT: ~30 % of the loss on over-smoothed output
+    fft_weight: 1.0     # orthonormal spectrum L1 ~32 % of the loss on over-smoothed output
+    grad_weight: 0.5    # Sobel-gradient L1 ~13 %; the pixel L1 still leads (~55 %)
     reduction: mean
   perceptual_opt:
     type: PerceptualLoss

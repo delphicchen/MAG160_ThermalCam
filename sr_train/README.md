@@ -67,10 +67,10 @@ everything below, which ends at a verified `.param`/`.bin`.
 ```
 sr_train/
 ├── options/
-│   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 + FFT (faithful candidate)
-│   ├── 02_thermal_srvgg_x4_gan.yml      stage 2, + VGG + light GAN (sharper candidate)
+│   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 + spectrum + gradient — the model
+│   ├── 02_thermal_srvgg_x4_gan.yml      stage 2, + VGG + light GAN (optional, off)
 │   └── alt_rrdb_compact_x4_gan.yml      RRDBNet 32/12 variant
-├── thermal_arch/thermal_degradation.py  °C sensor view + L1FFTLoss on top of Real-ESRGAN
+├── thermal_arch/thermal_degradation.py  °C sensor view + L1FFTLoss (spectrum, gradient)
 └── scripts/
     ├── prepare_thermal_dataset.py       public datasets → 480×480 HR crops + meta_info
     ├── estimate_fpn_stats.py            measure your sensor's FPN → yml amplitudes
@@ -206,14 +206,23 @@ python scripts/estimate_fpn_stats.py captures/wall_300.npy
 ## Training
 
 ```sh
-# stage 1 — L1 + FFT: the faithful candidate
+# stage 1 — L1 + spectrum + gradient: the model
 python realesrgan/train.py -opt options/01_thermal_srvgg_x4_net.yml --auto_resume
 
-# stage 2 — + perceptual + light GAN, from stage 1's EMA weights: the sharper candidate
+# stage 2 (optional, off in the notebook) — + perceptual + light GAN, from stage 1's EMA
 python realesrgan/train.py -opt options/02_thermal_srvgg_x4_gan.yml --auto_resume
 ```
 
-v3 schedule (the Colab notebook sets it): stage 1 **40k** iterations — the first releases
+**v4** (current): stage 1 only, **80k** iterations, loss L1 + 1.0 × spectrum L1 + 0.5 ×
+Sobel-gradient L1 (about 55 / 32 / 13 % on an over-smoothed prediction), and pixel noise
+drawn **log-uniformly** from 0.02–0.20 °C — the app's temporal denoise runs before the
+upscaler, so most real inputs are quiet, and v3's uniform draw over-smoothed (watercolour
+plateaus on fur). v3's light-GAN stage 2 sharpened edges but invented 9× the peaks of its
+stage 1 on real frames (54 vs 6 per frame), so it is off; the budget it took goes to
+stage 1. The notebook archives an experiment left by another recipe (`RECIPE`) instead of
+letting `--auto_resume` continue it.
+
+v3 schedule (superseded by v4 above): stage 1 **40k** iterations — the first releases
 stopped at 8–10k, a warm-up that never learned to sharpen — and stage 2 **20k**. The pixel
 loss is `L1FFTLoss` (L1 + 0.5 × L1 on the orthonormal spectrum), which holds edges without
 a GAN's license to invent them. Stage 2 adds perceptual 0.3 and GAN 1e-2 (v2: 0.5 / 5e-2,
