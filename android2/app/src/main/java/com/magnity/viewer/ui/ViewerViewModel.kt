@@ -248,6 +248,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         // permission may have been revoked in system settings since the last run
         if (geotag && !hasLocationPermission()) geotag = false else updateLocationUpdates()
         if (fusionOn && !hasCameraPermission()) fusionOn = false else updateFusionCamera()
+        refreshSrModelInfo()
 
         // Poll-based auto-connect — USB attach broadcasts are unreliable on newer
         // Androids; scanning UsbManager every 2 s always works.
@@ -877,6 +878,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
      * buffer (the upscaler's, or [pixBuf]); [process] turns them into the frame's Bitmap.
      */
     private fun render(field: FloatArray, w: Int, h: Int, lo: Float, hi: Float): ArgbImage {
+        if (ncnnReload) {                  // a model was imported/removed: reopen it
+            ncnnReload = false
+            runCatching { ncnn?.close() }
+            ncnn = null; ncnnSize = 0 to 0
+        }
         val k = upscale.coerceIn(1, 4)
         if (k > 1 && upscaler == Upscaler.NCNN) {
             try {
@@ -956,6 +962,46 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Where to adb-push the .param/.bin — shown in the drawer. */
     fun ncnnModelDir(): String = NcnnUpscaler.modelDir(getApplication()).absolutePath
+
+    /** Sizes of the imported Thermal SR model ("120x160", …); empty = the APK's own. */
+    var srImportedSizes by mutableStateOf<List<String>>(emptyList()); private set
+    /** Set from any thread; the processing loop drops its model before the next frame, so
+     *  an import takes effect without closing a net that is mid-inference. */
+    @Volatile private var ncnnReload = false
+
+    fun refreshSrModelInfo() {
+        viewModelScope.launch(Dispatchers.IO) {
+            srImportedSizes = NcnnUpscaler.importedSizes(getApplication())
+        }
+    }
+
+    /** Install a model package (zip of thermal_<w>x<h>_fp16.param/.bin) picked in the drawer. */
+    fun importSrModel(uri: android.net.Uri) {
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            notice = try {
+                val sizes = ctx.contentResolver.openInputStream(uri)
+                    ?.use { NcnnUpscaler.importPackage(ctx, it) }
+                    ?: error("cannot open the file")
+                ncnnReload = true
+                srImportedSizes = sizes
+                "SR model imported (${sizes.joinToString()}) — select Thermal SR to use it"
+            } catch (e: Throwable) {
+                Log.e(TAG, "SR model import failed", e)
+                "SR model import failed: ${e.message}"
+            }
+        }
+    }
+
+    /** Back to the model built into the APK. */
+    fun removeSrModel() {
+        viewModelScope.launch(Dispatchers.IO) {
+            NcnnUpscaler.removeImported(getApplication())
+            ncnnReload = true
+            srImportedSizes = emptyList()
+            notice = "Using the built-in SR model"
+        }
+    }
     private val temporalFilter = TemporalDenoise()
 
     /** Motion-adaptive temporal IIR on the display field (history resets on orientation

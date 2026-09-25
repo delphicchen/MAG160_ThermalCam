@@ -3,13 +3,17 @@ package com.magnity.viewer.pipeline
 import android.content.Context
 import android.util.Log
 import java.io.File
+import java.io.InputStream
+import java.util.zip.ZipInputStream
 
 /**
  * Thermal super-resolution through ncnn + Vulkan (fp16).
  *
- * The model is trained by `sr_train/`. It is loaded from the APK's assets when one was
- * built in (`assets/model/`), otherwise from the app's external files dir — which is how
- * you try a new model without rebuilding:
+ * The model is trained by `sr_train/`. A model in the app's external files dir wins over
+ * the one built into the APK (`assets/model/`), which is how you try a new model without
+ * rebuilding: the drawer's "Load SR model" imports a package ([importPackage] — the zip
+ * of `thermal_<w>x<h>_fp16.param/.bin` that sr_train's Colab export produces), or push
+ * the files by hand:
  *
  *   adb push thermal_120x160_fp16.param /sdcard/Android/data/com.magnity.viewer/files/model/
  *   adb push thermal_120x160_fp16.bin   /sdcard/Android/data/com.magnity.viewer/files/model/
@@ -43,6 +47,18 @@ class NcnnUpscaler private constructor() : AutoCloseable {
         }
 
         fun modelDir(ctx: Context): File = File(ctx.getExternalFilesDir(null), "model")
+
+        /** Input sizes ("120x160", …) with a complete model in the files dir. */
+        fun importedSizes(ctx: Context): List<String> = SrModelFiles.importedSizes(modelDir(ctx))
+
+        /** Install a model package into [modelDir]; see [SrModelFiles.install]. */
+        fun importPackage(ctx: Context, input: InputStream): List<String> =
+            SrModelFiles.install(modelDir(ctx), input)
+
+        /** Drop the imported model; the APK's own takes over again. */
+        fun removeImported(ctx: Context) {
+            modelDir(ctx).deleteRecursively()
+        }
 
         /** `<files>/model/thermal_<w>x<h>_fp16.{param,bin}` for this input size. */
         fun modelFiles(ctx: Context, w: Int, h: Int): Pair<File, File> {
@@ -152,4 +168,74 @@ internal fun ncnnParamInputChannels(param: String): Int {
     val weights = kv["6"]?.toIntOrNull() ?: return 3
     val c = weights / (outCh * kw * kh)
     return if (c == 1 || c == 3) c else 3
+}
+
+/**
+ * Model files in the app's external dir: which sizes are complete, and installing a model
+ * package. Kept apart from [NcnnUpscaler] so it carries no native library.
+ */
+object SrModelFiles {
+    private val MODEL_FILE = Regex("""thermal_(\d+)x(\d+)_fp16\.(param|bin)""")
+    private const val PACKAGE_MAX_BYTES = 64L shl 20
+    /** First line of every ncnn .param. */
+    private const val NCNN_PARAM_MAGIC = "7767517"
+
+    /** Input sizes ("120x160", …) with a complete model in [dir]. */
+    fun importedSizes(dir: File): List<String> {
+        val names = dir.list()?.toSet() ?: return emptyList()
+        return names.mapNotNull { MODEL_FILE.matchEntire(it) }
+            .map { "${it.groupValues[1]}x${it.groupValues[2]}" }.distinct()
+            .filter { "thermal_${it}_fp16.param" in names && "thermal_${it}_fp16.bin" in names }
+            .sorted()
+    }
+
+    /**
+     * Install a model package — a zip of `thermal_<w>x<h>_fp16.param/.bin` pairs — into
+     * [dir] (staged next to it), replacing whatever was imported before. Folders inside
+     * the zip are ignored (entries are matched by file name only, so nothing lands
+     * outside [dir]), and nothing is replaced unless every size in the package has both
+     * files and a real ncnn .param. Returns the sizes installed; throws with a readable
+     * message. Blocking I/O — call off the main thread.
+     */
+    fun install(dir: File, input: InputStream): List<String> {
+        val staging = File(dir.parentFile, "model.import").apply { deleteRecursively(); mkdirs() }
+        try {
+            var total = 0L
+            val buf = ByteArray(1 shl 16)
+            ZipInputStream(input.buffered()).use { zip ->
+                while (true) {
+                    val e = zip.nextEntry ?: break
+                    val name = e.name.substringAfterLast('/').substringAfterLast('\\')
+                    if (e.isDirectory || !MODEL_FILE.matches(name)) continue
+                    File(staging, name).outputStream().use { out ->
+                        while (true) {
+                            val n = zip.read(buf)
+                            if (n < 0) break
+                            total += n
+                            require(total <= PACKAGE_MAX_BYTES) { "package is larger than 64 MB" }
+                            out.write(buf, 0, n)
+                        }
+                    }
+                }
+            }
+            val files = staging.list()?.toSet().orEmpty()
+            val sizes = files.mapNotNull { MODEL_FILE.matchEntire(it) }
+                .map { "${it.groupValues[1]}x${it.groupValues[2]}" }.distinct().sorted()
+            require(sizes.isNotEmpty()) { "no thermal_<w>x<h>_fp16.param/.bin in the package" }
+            for (sz in sizes) {
+                val p = File(staging, "thermal_${sz}_fp16.param")
+                require(p.isFile && File(staging, "thermal_${sz}_fp16.bin").isFile) {
+                    "thermal_$sz: the .param and the .bin must both be in the package"
+                }
+                require(p.bufferedReader().use { it.readLine()?.trim() } == NCNN_PARAM_MAGIC) {
+                    "thermal_${sz}_fp16.param is not an ncnn model"
+                }
+            }
+            dir.deleteRecursively()
+            check(staging.renameTo(dir)) { "could not install into $dir" }
+            return sizes
+        } finally {
+            staging.deleteRecursively()          // no-op after a successful rename
+        }
+    }
 }

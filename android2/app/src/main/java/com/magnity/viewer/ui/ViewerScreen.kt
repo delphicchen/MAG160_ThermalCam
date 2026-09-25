@@ -423,10 +423,31 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
                      Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.BICUBIC }
             }
             if (!vm.ncnnModelInstalled()) {
-                Text("Thermal SR needs a trained model — push the .param/.bin into\n" +
-                     vm.ncnnModelDir(),
+                Text("Thermal SR needs a trained model — load a package below, or push the " +
+                     ".param/.bin into\n" + vm.ncnnModelDir(),
                      color = DIM, fontSize = 9.sp)
             }
+            // a model package = the zip of thermal_<w>x<h>_fp16.param/.bin from sr_train's
+            // Colab export; it overrides the built-in model until removed
+            val importModel = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument()
+            ) { uri -> uri?.let { vm.importSrModel(it) } }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(onClick = { importModel.launch(arrayOf("*/*")) },
+                               modifier = Modifier.weight(1f),
+                               contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text("Load SR model (.zip)…", fontSize = 12.sp)
+                }
+                if (vm.srImportedSizes.isNotEmpty()) {
+                    OutlinedButton(onClick = { vm.removeSrModel() },
+                                   contentPadding = PaddingValues(horizontal = 8.dp)) {
+                        Text("Use built-in", fontSize = 12.sp)
+                    }
+                }
+            }
+            Text(if (vm.srImportedSizes.isEmpty()) "Thermal SR model: built-in"
+                 else "Thermal SR model: imported (${vm.srImportedSizes.joinToString()})",
+                 color = DIM, fontSize = 9.sp)
         }
 
         Column {
