@@ -103,7 +103,17 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                 val dispWdp = with(density) { dispW.toDp() }
                 val dispHdp = with(density) { dispH.toDp() }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    ThermalImage(vm, fr, dispW, dispH, Modifier.size(dispWdp, dispHdp))
+                    Box(Modifier.size(dispWdp, dispHdp)) {
+                        ThermalImage(vm, fr, dispW, dispH, Modifier.fillMaxSize())
+                        // on-screen timing: over the image, so it never shrinks it
+                        if (vm.debugOsd && vm.debugInfo.isNotEmpty()) {
+                            Text(vm.debugInfo, color = Color.White, fontSize = 10.sp,
+                                 fontFamily = FontFamily.Monospace, lineHeight = 12.sp,
+                                 modifier = Modifier.align(Alignment.TopStart).padding(4.dp)
+                                     .background(Color(0x99000000))
+                                     .padding(horizontal = 4.dp, vertical = 2.dp))
+                        }
+                    }
                     Spacer(Modifier.height(6.dp))
                     ColorBar(vm.paletteName, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
                 }
@@ -192,6 +202,13 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                     }
                 }
             }
+            // timing overlay on the image — highlighted while it is on
+            OutlinedButton(onClick = { vm.debugOsd = !vm.debugOsd },
+                           contentPadding = PaddingValues(horizontal = 8.dp),
+                           colors = ButtonDefaults.outlinedButtonColors(
+                               containerColor = if (vm.debugOsd) Color(0xFF1F3A5F) else Color.Transparent)) {
+                Text("Debug", fontSize = 12.sp, color = if (vm.debugOsd) ACCENT else FG)
+            }
             if (vm.recording) {
                 var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
                 LaunchedEffect(Unit) {
@@ -209,9 +226,7 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                 Text(
                     notice ?: (vm.status + (fr?.let { " · FPA ${it.fpa}" } ?: "")),
                     color = if (notice != null) Color(0xFFD6A93D) else DIM,
-                    // status carries the per-stage timing split (and the Thermal SR
-                    // breakdown when it is running) on lines of their own
-                    fontSize = 10.sp, maxLines = 6,
+                    fontSize = 10.sp, maxLines = 2,
                 )
             }
         }

@@ -11,4 +11,8 @@ set(ncnn_DIR ${NCNN_DIR}/lib/cmake/ncnn)
 find_package(ncnn REQUIRED)
 
 add_library(magviewer_ncnn SHARED ncnn_upscaler.cpp)
+# Optimise even in the debug variant: AGP's Debug build type passes no -O at all, so
+# clang built the per-frame input/palette loops at -O0 (post-processing measured 12 ms
+# on the phone). Target options land after the build-type flags, so this wins.
+target_compile_options(magviewer_ncnn PRIVATE -O2)
 target_link_libraries(magviewer_ncnn ncnn android log)

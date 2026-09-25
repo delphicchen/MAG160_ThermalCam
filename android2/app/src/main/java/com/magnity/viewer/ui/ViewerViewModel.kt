@@ -209,6 +209,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var fusionCrosshair: Boolean by pref("fusion_crosshair", true)
     /** Snap/Rec also write the per-pixel temperatures as a .mgt file. */
     var saveThermalData: Boolean by pref("save_thermal_data", false)
+    /** Timing overlay on the thermal image (the main screen's Debug button). */
+    var debugOsd: Boolean by pref("debug_osd", false)
     /** The align panel is open because of that prompt (not the drawer button). */
     var calibPromptActive by mutableStateOf(false); private set
     private var calibPromptSnoozed = false
@@ -237,6 +239,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var recordStartMs by mutableStateOf(0L); private set
     /** transient user message (screenshot saved, …); the UI clears it */
     var notice by mutableStateOf<String?>(null)
+    /** Per-stage timing text for the debug overlay; only built while [debugOsd] is on. */
+    var debugInfo by mutableStateOf(""); private set
     /** Transcript of the last [runSdkSmokeTest]; null = never run. */
     var sdkLog by mutableStateOf<String?>(null); private set
     /** Open temperature capture (.mgt) being reviewed; null = live view. */
@@ -784,6 +788,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     lap(ST_REC, tRec)
                     tickFps()
                     status = frameStatus(fc, t0)
+                    if (debugOsd) debugInfo = debugText()
                 } catch (e: Throwable) {
                     Log.e(TAG, "display error", e)
                     status = "display: ${e::class.java.simpleName}: ${e.message}"
@@ -1024,17 +1029,29 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         return now
     }
 
-    /** Status line: size, frame count, smoothed total, then the per-stage split in ms
-     *  (in: convert+orient+stats · dn: denoise · rng: display range · up: upscale+palette
-     *  · fuse: visible fusion · bmp: the frame's Bitmap · rec: video/.mgt while recording). */
+    /** Status line: size, frame count and the smoothed per-frame total. */
     private fun frameStatus(fc: Long, t0: Long): String {
         totalMs += STAGE_EMA * ((System.nanoTime() - t0) / 1e6f - totalMs)
-        val split = STAGES.indices.joinToString(" · ") { "${STAGES[it]} %.1f".format(stageMs[it]) }
-        // the up stage broken down when Thermal SR produced this frame
-        val sr = if (srFrame) "\n$srLabel · net %.1f · pre %.1f · post %.1f"
-                     .format(srMs[1], srMs[0], srMs[2]) else ""
+        return "${sdk.width}×${sdk.height} · frames=$fc · " + "%.1f ms".format(totalMs)
+    }
+
+    /** Debug overlay: the per-stage split in ms (in: convert+orient+stats · dn: denoise ·
+     *  rng: display range · up: upscale+palette · fuse: visible fusion · bmp: the frame's
+     *  Bitmap · rec: video/.mgt while recording), plus the Thermal SR breakdown when it
+     *  produced this frame. */
+    private fun debugText(): String {
+        val sb = StringBuilder()
+        sb.append("%.1f fps · %.1f ms/frame\n".format(fps, totalMs))
+        STAGES.indices.forEach { i ->
+            sb.append("%s %.1f".format(STAGES[i], stageMs[i]))
+            sb.append(if (i == 3) "\n" else if (i < STAGES.size - 1) " · " else "")
+        }
+        if (srFrame) {
+            sb.append("\n").append(srLabel)
+                .append("\nnet %.1f · pre %.1f · post %.1f ms".format(srMs[1], srMs[0], srMs[2]))
+        }
         srFrame = false
-        return "${sdk.width}×${sdk.height} · frames=$fc · " + "%.1f ms\n".format(totalMs) + split + sr
+        return sb.toString()
     }
 
     private var fpsWindowStart = 0L

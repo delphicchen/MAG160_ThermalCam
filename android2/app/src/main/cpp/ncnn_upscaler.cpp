@@ -31,6 +31,7 @@ struct Session {
     bool vulkan = false;
     // last nativeRun split, ms: input fill, network (input + extract), palette + copy-out
     float prepMs = 0.f, netMs = 0.f, postMs = 0.f;
+    std::vector<jint> argb;      // output staging, kept across frames (1.2 MB at 640x480)
 };
 
 }  // namespace
@@ -179,7 +180,8 @@ Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeRun(
     }
 
     jint* lut = env->GetIntArrayElements(jlut, nullptr);
-    std::vector<jint> argb((size_t)ow * oh);
+    std::vector<jint>& argb = s->argb;
+    argb.resize((size_t)ow * oh);
     // back to one channel: 1-channel models as-is, RGB ones averaged
     const int oc = out.c;
     const float* o0 = out.channel(0);
