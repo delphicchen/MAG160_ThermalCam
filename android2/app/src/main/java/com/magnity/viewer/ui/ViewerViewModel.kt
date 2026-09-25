@@ -886,7 +886,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                         ncnn?.close(); ncnn = it; ncnnSize = w to h
                         notice = "ncnn model loaded (${if (it.vulkan) "Vulkan" else "CPU"})"
                     }
-                if (u != null) return u.render(field, w, h, lo, hi, Palettes.lut(paletteName))
+                if (u != null) {
+                    val img = u.render(field, w, h, lo, hi, Palettes.lut(paletteName))
+                    noteSrTimings(u)
+                    return img
+                }
                 upscaler = Upscaler.ANIME4K
                 notice = "No ncnn model in ${NcnnUpscaler.modelDir(getApplication()).name}/ — using Anime4K"
             } catch (e: Throwable) {
@@ -925,6 +929,20 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Bicubic-path display pixels, reused per frame. */
     private var pixBuf = IntArray(0)
+
+    // Thermal SR diagnostics for the status line: which backend/model ran this frame and
+    // where its time went (smoothed like the stage split; processing thread)
+    private var srFrame = false
+    private var srLabel = ""
+    private val srMs = FloatArray(3)
+
+    private fun noteSrTimings(u: NcnnUpscaler) {
+        val t = u.lastTimings()
+        for (i in 0..2) srMs[i] += STAGE_EMA * (t[i] - srMs[i])
+        srLabel = "SR ${if (u.vulkan) "Vulkan" else "CPU"} · ${u.inChannels}-ch " +
+            (if (u.fromFiles) "pushed" else "bundled")
+        srFrame = true
+    }
 
     private var anime4k: Anime4kGpu? = null
     private var ncnn: NcnnUpscaler? = null
@@ -966,7 +984,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private fun frameStatus(fc: Long, t0: Long): String {
         totalMs += STAGE_EMA * ((System.nanoTime() - t0) / 1e6f - totalMs)
         val split = STAGES.indices.joinToString(" · ") { "${STAGES[it]} %.1f".format(stageMs[it]) }
-        return "${sdk.width}×${sdk.height} · frames=$fc · " + "%.1f ms\n".format(totalMs) + split
+        // the up stage broken down when Thermal SR produced this frame
+        val sr = if (srFrame) "\n$srLabel · net %.1f · pre %.1f · post %.1f"
+                     .format(srMs[1], srMs[0], srMs[2]) else ""
+        srFrame = false
+        return "${sdk.width}×${sdk.height} · frames=$fc · " + "%.1f ms\n".format(totalMs) + split + sr
     }
 
     private var fpsWindowStart = 0L

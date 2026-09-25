@@ -30,6 +30,9 @@ class NcnnUpscaler private constructor() : AutoCloseable {
     var vulkan = false; private set
     /** 1 or 3 — how many copies of the grey field the network takes. */
     var inChannels = 3; private set
+    /** Loaded from the external files dir (a pushed test model) rather than the APK. */
+    var fromFiles = false; private set
+    private val timings = FloatArray(3)
     private var out = IntArray(0)
 
     companion object {
@@ -90,6 +93,7 @@ class NcnnUpscaler private constructor() : AutoCloseable {
                 else ctx.assets.open(assetNames(w, h).first).use { it.readBytes().decodeToString() }
             }.getOrDefault("")
             u.inChannels = ncnnParamInputChannels(param)
+            u.fromFiles = fromFiles
             Log.i(TAG, "ncnn model ${w}x$h: ${u.inChannels}-channel input")
             return u
         }
@@ -101,6 +105,7 @@ class NcnnUpscaler private constructor() : AutoCloseable {
         useVulkan: Boolean,
     ): Long
     private external fun nativeRelease(handle: Long)
+    private external fun nativeTimings(handle: Long, out: FloatArray)
     private external fun nativeGpuAvailable(): Boolean
     private external fun nativeRun(
         handle: Long, field: FloatArray, w: Int, h: Int, lo: Float, hi: Float,
@@ -117,6 +122,12 @@ class NcnnUpscaler private constructor() : AutoCloseable {
             "ncnn inference failed"
         }
         return ArgbImage(out, ow, oh)
+    }
+
+    /** The last [render]'s split in ms: input fill, network, palette + copy-out. */
+    fun lastTimings(): FloatArray {
+        if (handle != 0L) nativeTimings(handle, timings)
+        return timings
     }
 
     override fun close() {

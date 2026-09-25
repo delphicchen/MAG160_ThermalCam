@@ -16,6 +16,7 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <chrono>
 #include <vector>
 
 #include "net.h"
@@ -28,6 +29,8 @@ namespace {
 struct Session {
     ncnn::Net net;
     bool vulkan = false;
+    // last nativeRun split, ms: input fill, network (input + extract), palette + copy-out
+    float prepMs = 0.f, netMs = 0.f, postMs = 0.f;
 };
 
 }  // namespace
@@ -135,6 +138,11 @@ Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeRun(
         return JNI_FALSE;
     }
 
+    using clock = std::chrono::steady_clock;
+    auto ms = [](clock::time_point a, clock::time_point b) {
+        return std::chrono::duration<float, std::milli>(b - a).count();
+    };
+    const auto t0 = clock::now();
     jfloat* field = env->GetFloatArrayElements(jfield, nullptr);
 
     const int ic = inCh == 1 ? 1 : 3;
@@ -150,6 +158,7 @@ Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeRun(
     }
     env->ReleaseFloatArrayElements(jfield, field, JNI_ABORT);
 
+    const auto t1 = clock::now();
     ncnn::Mat out;
     {
         ncnn::Extractor ex = s->net.create_extractor();
@@ -163,6 +172,7 @@ Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeRun(
             return JNI_FALSE;
         }
     }
+    const auto t2 = clock::now();
     if (out.w != ow || out.h != oh) {
         LOGE("unexpected output %dx%d, wanted %dx%d", out.w, out.h, ow, oh);
         return JNI_FALSE;
@@ -182,5 +192,19 @@ Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeRun(
     }
     env->ReleaseIntArrayElements(jlut, lut, JNI_ABORT);
     env->SetIntArrayRegion(jout, 0, ow * oh, argb.data());
+    const auto t3 = clock::now();
+    s->prepMs = ms(t0, t1);
+    s->netMs = ms(t1, t2);
+    s->postMs = ms(t2, t3);
     return JNI_TRUE;
+}
+
+/** The last nativeRun's split in ms: {input fill, network, palette + copy-out}. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_magnity_viewer_pipeline_NcnnUpscaler_nativeTimings(
+        JNIEnv* env, jobject, jlong handle, jfloatArray jout) {
+    auto* s = reinterpret_cast<Session*>(handle);
+    if (s == nullptr || env->GetArrayLength(jout) < 3) return;
+    const jfloat t[3] = {s->prepMs, s->netMs, s->postMs};
+    env->SetFloatArrayRegion(jout, 0, 3, t);
 }
