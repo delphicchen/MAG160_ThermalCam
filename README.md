@@ -81,6 +81,17 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.4 — 2026-09-26
+- **New built-in Thermal SR model (v4)** — trained on a °C sensor view with L1 + spectrum +
+  gradient loss and no GAN. On 38 real MAG160 frames it invents fewer hot spots (5.0 vs 5.9
+  per frame) and the worst one is far weaker (52 vs 129 levels); flat walls no longer grow
+  fake texture.
+- **Load SR model (.zip)…** in the drawer imports a trained model package without
+  rebuilding the app; *Use built-in* goes back. The status line says which one is running.
+- Runs both 1-channel and 3-channel SR models; faster native glue, frame timing moved to a
+  Debug overlay.
+- Faster visible-light fusion: table-driven, parallel, one frame copy.
+
 ### 2.3 — 2026-09-24
 - **Temperature captures** — snapshots and recordings can also write a `.mgt` file holding
   every pixel's °C; *Open temperature capture…* replays it: scrub the frames, tap any

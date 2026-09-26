@@ -78,6 +78,15 @@ Magnity **MAG-Mx / MAG-Cx** USB 热像仪（VID `0x833C`）硬件很好，但原
 完整说明与各版本 APK 都在
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases)。
 
+### 2.4 — 2026-09-26
+- **内置新的 Thermal SR 模型（v4）** —— 以 °C 传感器视角训练，L1 + 频谱 + 梯度损失，不用
+  GAN。在 38 张真实 MAG160 画面上，凭空多出的热点更少（每张 5.0 vs 5.9），最严重的一个也
+  弱很多（52 vs 129 阶）；白墙不再长出假纹理。
+- 侧边菜单 **Load SR model (.zip)…** 可导入训练好的模型包，无需重新编译 App；
+  *Use built-in* 切回内置。状态栏会显示当前使用哪一个。
+- 支持单通道与三通道 SR 模型；原生层加速，帧时间改放在 Debug 叠加层。
+- 可见光融合加速：查表、并行处理、只复制一次画面。
+
 ### 2.3 — 2026-09-24
 - **温度码流** —— 拍照与录像可另存 `.mgt` 文件，记录每个像素的 °C；用 "Open temperature
   capture…" 打开回放：拖时间轴选帧、点画面任一点读出温度（[格式说明](android2/docs/THERMAL_CAPTURE.md)）。
