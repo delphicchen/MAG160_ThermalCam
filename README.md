@@ -83,9 +83,9 @@ Full notes and the APK for each version are in
 
 ### 2.4 — 2026-09-26
 - **New built-in Thermal SR model (v4)** — trained on a °C sensor view with L1 + spectrum +
-  gradient loss and no GAN. On 38 real MAG160 frames it invents fewer hot spots (5.0 vs 5.9
-  per frame) and the worst one is far weaker (52 vs 129 levels); flat walls no longer grow
-  fake texture.
+  gradient loss and no GAN (2.3 shipped a GAN-trained model). On 38 real MAG160 frames it
+  invents fewer hot spots than the previous v3 training run (5.0 vs 5.9 per frame), and the
+  worst one is far weaker (52 vs 129 levels).
 - **Load SR model (.zip)…** in the drawer imports a trained model package without
   rebuilding the app; *Use built-in* goes back. The status line says which one is running.
 - Runs both 1-channel and 3-channel SR models; faster native glue, frame timing moved to a
