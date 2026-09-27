@@ -43,6 +43,7 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 | 🌡️ **Temperature captures** | Snapshots and recordings can also save a `.mgt` file holding every pixel's °C — reopen it in the app and read any position, in any frame. |
 | 🔀 **Visible-light fusion (beta)** | Overlay the phone camera's edges on the thermal image (MSX-style), blend, or search in the wide visible view — with alignment calibrated at several distances, auto distance from centre-weighted lens focus (with a crosshair showing the patch it measures), and calibration export/import. |
 | 📍 **Optional geo-tag** | Stamp precise GPS location into snapshots and videos — off until you turn it on. |
+| 🌐 **Interface language** | English, 繁體中文 or 简体中文, switched in the drawer (or follow the system). |
 | 💾 **Remembers your setup** | Palette, range, rotation, upscaler, emissivity and more survive restarts. |
 | 🚫 **No watermark** | Your images are yours. |
 | 👍 **Compact portrait UI** | Designed for one-handed use in the field. |
@@ -80,6 +81,12 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
+
+### 2.5 — 2026-09-27
+- **Interface language** — English, 繁體中文 or 简体中文, picked in the drawer or under
+  Android's per-app language settings; *System* follows the phone. Switching is instant and
+  keeps the camera connected. Measurement and product terms (MIN / MAX / SPOT, FFC, ε,
+  Thermal SR, Anime4K, MSX…) stay in English in every language.
 
 ### 2.4 — 2026-09-26
 - **New built-in Thermal SR model (v4)** — trained on a °C sensor view with L1 + spectrum +
