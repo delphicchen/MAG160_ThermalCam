@@ -31,12 +31,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.magnity.viewer.R
 import com.magnity.viewer.pipeline.Fusion
 import com.magnity.viewer.pipeline.FusionCalibration
 import com.magnity.viewer.pipeline.Palettes
@@ -118,7 +121,7 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                     ColorBar(vm.paletteName, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
                 }
             } else {
-                Text("Waiting for camera — plug it in and allow USB access", color = DIM)
+                Text(stringResource(R.string.waiting_camera), color = DIM)
             }
         }
 
@@ -146,7 +149,7 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.height(48.dp)) {
-                Text("RANGE", color = DIM, fontSize = 11.sp)
+                Text(stringResource(R.string.range), color = DIM, fontSize = 11.sp)
                 RangeBar(
                     lo = vm.scaleLo, hi = vm.scaleHi,
                     domLo = vm.tempMinC, domHi = vm.tempMaxC,
@@ -157,7 +160,7 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                 OutlinedButton(onClick = { vm.autoScale = !vm.autoScale },
                                modifier = Modifier.height(34.dp),
                                contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    Text(if (vm.autoScale) "AUTO" else "MAN", fontSize = 11.sp,
+                    Text(stringResource(if (vm.autoScale) R.string.auto else R.string.manual_short), fontSize = 11.sp,
                          color = if (vm.autoScale) DIM else ACCENT)
                 }
             }
@@ -169,16 +172,16 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                     Text(if (vm.ffcBusy) "FFC…" else "FFC") }
                 Button(onClick = { vm.paused = !vm.paused }, enabled = vm.connected,
                        modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                    Text(if (vm.paused) "Resume" else "Pause") }
+                    Text(stringResource(if (vm.paused) R.string.resume else R.string.pause)) }
                 FilledTonalButton(onClick = { vm.takeScreenshot() }, enabled = fr != null,
                                   modifier = Modifier.weight(1f),
-                                  contentPadding = PaddingValues(4.dp)) { Text("Snap") }
+                                  contentPadding = PaddingValues(4.dp)) { Text(stringResource(R.string.snap)) }
                 Button(onClick = { vm.toggleRecording() }, enabled = fr != null || vm.recording,
                        colors = ButtonDefaults.buttonColors(
                            containerColor = if (vm.recording) Color(0xFFDA3633) else Color(0xFF5A2E2E),
                            contentColor = Color.White),
                        modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                    Text(if (vm.recording) "Stop" else "Rec") }
+                    Text(stringResource(if (vm.recording) R.string.stop else R.string.rec)) }
             }
 
         }
@@ -426,8 +429,19 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
     ) {
         Text("MagViewer", color = ACCENT, fontSize = 15.sp)
 
+        // language names are written in their own language, so each is findable from any
         Column {
-            Text("Upscaler", color = DIM, fontSize = 11.sp)
+            Text(stringResource(R.string.language), color = DIM, fontSize = 11.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("" to stringResource(R.string.lang_system), "en" to "English",
+                       "zh-TW" to "繁體中文", "zh-CN" to "简体中文").forEach { (tag, label) ->
+                    Chip(label, vm.appLanguage == tag, Modifier.weight(1f)) { vm.setLanguage(tag) }
+                }
+            }
+        }
+
+        Column {
+            Text(stringResource(R.string.upscaler), color = DIM, fontSize = 11.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth()) {
                 Chip("Anime4K", vm.upscaler == ViewerViewModel.Upscaler.ANIME4K,
@@ -438,8 +452,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
                      Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.BICUBIC }
             }
             if (!vm.ncnnModelInstalled()) {
-                Text("Thermal SR needs a trained model — load a package below, or push the " +
-                     ".param/.bin into\n" + vm.ncnnModelDir(),
+                Text(stringResource(R.string.sr_needs_model, vm.ncnnModelDir()),
                      color = DIM, fontSize = 9.sp)
             }
             // a model package = the zip of thermal_<w>x<h>_fp16.param/.bin from sr_train's
@@ -451,22 +464,22 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
                 OutlinedButton(onClick = { importModel.launch(arrayOf("*/*")) },
                                modifier = Modifier.weight(1f),
                                contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    Text("Load SR model (.zip)…", fontSize = 12.sp)
+                    Text(stringResource(R.string.load_sr_model), fontSize = 12.sp)
                 }
                 if (vm.srImportedSizes.isNotEmpty()) {
                     OutlinedButton(onClick = { vm.removeSrModel() },
                                    contentPadding = PaddingValues(horizontal = 8.dp)) {
-                        Text("Use built-in", fontSize = 12.sp)
+                        Text(stringResource(R.string.use_builtin), fontSize = 12.sp)
                     }
                 }
             }
-            Text(if (vm.srImportedSizes.isEmpty()) "Thermal SR model: built-in"
-                 else "Thermal SR model: imported (${vm.srImportedSizes.joinToString()})",
+            Text(if (vm.srImportedSizes.isEmpty()) stringResource(R.string.sr_model_builtin)
+                 else stringResource(R.string.sr_model_imported, vm.srImportedSizes.joinToString()),
                  color = DIM, fontSize = 9.sp)
         }
 
         Column {
-            Text("Display resolution", color = DIM, fontSize = 11.sp)
+            Text(stringResource(R.string.display_resolution), color = DIM, fontSize = 11.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 listOf(1, 4).forEach { k ->
                     val label = vm.lastFrame?.let { "${it.w * k}×${it.h * k}" } ?: "${k}×"
@@ -476,7 +489,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
         }
 
         Column {
-            Text("Rotate", color = DIM, fontSize = 11.sp)
+            Text(stringResource(R.string.rotate), color = DIM, fontSize = 11.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 listOf(0, 90, 180, 270).forEach { deg ->
                     Chip("$deg°", vm.rotation == deg, Modifier.weight(1f)) { vm.rotation = deg }
@@ -485,27 +498,28 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.mirror, onCheckedChange = { vm.mirror = it })
-            Text("Mirror ↔", color = FG)
+            Text(stringResource(R.string.mirror), color = FG)
         }
 
         HorizontalDivider(color = Color(0xFF30363D))
 
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Emissivity ε", color = FG, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.emissivity), color = FG, modifier = Modifier.weight(1f))
                 Text("%.2f".format(vm.emissivity), color = ACCENT, fontSize = 13.sp)
             }
             Slider(vm.emissivity,
                    onValueChange = { vm.emissivity = (it * 100).roundToInt() / 100f },
                    valueRange = 0.10f..1f)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf("1.00" to 1f, "Skin .98" to 0.98f, "Matte .95" to 0.95f,
-                       "Wood .90" to 0.90f).forEach { (label, e) ->
+                listOf("1.00" to 1f, stringResource(R.string.emis_skin) to 0.98f,
+                       stringResource(R.string.emis_matte) to 0.95f,
+                       stringResource(R.string.emis_wood) to 0.90f).forEach { (label, e) ->
                     Chip(label, kotlin.math.abs(vm.emissivity - e) < 0.005f,
                          Modifier.weight(1f)) { vm.emissivity = e }
                 }
             }
-            Text("Shiny metal reads far too cold at any ε — tape or paint a matte patch.",
+            Text(stringResource(R.string.emis_metal_hint),
                  color = DIM, fontSize = 9.sp)
         }
 
@@ -515,7 +529,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
             ActivityResultContracts.RequestMultiplePermissions()
         ) { granted ->
             vm.geotag = granted[Manifest.permission.ACCESS_FINE_LOCATION] == true
-            if (!vm.geotag) vm.notice = "Geo-tag needs precise location permission"
+            if (!vm.geotag) vm.notice = vm.str(R.string.geotag_needs_permission)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.geotag, onCheckedChange = { on ->
@@ -527,10 +541,10 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
                 }
             })
             Column {
-                Text("Geo-tag snapshots & video", color = FG)
+                Text(stringResource(R.string.geotag), color = FG)
                 if (vm.geotag) {
-                    Text(vm.location?.let { "fix ±%.0f m".format(it.accuracy) }
-                             ?: "waiting for location fix…",
+                    Text(vm.location?.let { stringResource(R.string.location_fix, it.accuracy) }
+                             ?: stringResource(R.string.waiting_location),
                          color = DIM, fontSize = 10.sp)
                 }
             }
@@ -541,10 +555,9 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.saveThermalData, onCheckedChange = { vm.saveThermalData = it })
             Column {
-                Text("Save temperature data with captures", color = FG)
-                Text(("Snap and Rec also write Download/MagViewer/*.mgt — every pixel's " +
-                      "°C, readable again below (about %.0f kB per frame)")
-                         .format(vm.lastFrame?.let { it.w * it.h * 2 / 1024f } ?: 38f),
+                Text(stringResource(R.string.save_thermal), color = FG)
+                Text(stringResource(R.string.save_thermal_hint,
+                                    vm.lastFrame?.let { it.w * it.h * 2 / 1024f } ?: 38f),
                      color = DIM, fontSize = 10.sp)
             }
         }
@@ -553,7 +566,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
         ) { uri -> uri?.let { vm.openPlayback(it) } }
         OutlinedButton(onClick = { openCapture.launch(arrayOf("*/*")); onCloseDrawer() },
                        modifier = Modifier.fillMaxWidth()) {
-            Text("Open temperature capture…")
+            Text(stringResource(R.string.open_capture))
         }
 
         HorizontalDivider(color = Color(0xFF30363D))
@@ -562,7 +575,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
             ActivityResultContracts.RequestPermission()
         ) { granted ->
             vm.fusionOn = granted
-            if (!granted) vm.notice = "Visible fusion needs camera permission"
+            if (!granted) vm.notice = vm.str(R.string.fusion_needs_camera)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.fusionOn, onCheckedChange = { on ->
@@ -572,25 +585,26 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
                     vm.fusionOn = on
                 }
             })
-            Text("Visible fusion (beta)", color = FG)
+            Text(stringResource(R.string.fusion), color = FG)
         }
         if (vm.fusionOn) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf("MSX edges" to Fusion.Mode.EDGES, "Blend" to Fusion.Mode.BLEND,
-                       "Wide" to Fusion.Mode.SEARCH).forEach { (label, m) ->
+                listOf(stringResource(R.string.fusion_edges) to Fusion.Mode.EDGES,
+                       stringResource(R.string.fusion_blend) to Fusion.Mode.BLEND,
+                       stringResource(R.string.fusion_wide) to Fusion.Mode.SEARCH).forEach { (label, m) ->
                     Chip(label, vm.fusionMode == m, Modifier.weight(1f)) { vm.fusionMode = m }
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(when (vm.fusionMode) {
-                         Fusion.Mode.EDGES -> "Edge strength"
-                         Fusion.Mode.BLEND -> "Thermal weight"
-                         Fusion.Mode.SEARCH -> "Thermal opacity"
-                     }, color = FG, modifier = Modifier.weight(1f))
+                Text(stringResource(when (vm.fusionMode) {
+                         Fusion.Mode.EDGES -> R.string.edge_strength
+                         Fusion.Mode.BLEND -> R.string.thermal_weight
+                         Fusion.Mode.SEARCH -> R.string.thermal_opacity
+                     }), color = FG, modifier = Modifier.weight(1f))
                 Text("%.2f".format(vm.fusionStrength), color = DIM, fontSize = 11.sp)
             }
             Slider(vm.fusionStrength, onValueChange = { vm.fusionStrength = it })
-            Text("Visible camera rotation", color = DIM, fontSize = 11.sp)
+            Text(stringResource(R.string.visible_rotation), color = DIM, fontSize = 11.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 listOf(0, 90, 180, 270).forEach { deg ->
                     Chip("$deg°", vm.fusionRotation == deg, Modifier.weight(1f)) {
@@ -602,24 +616,23 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(vm.fusionCrosshair, onCheckedChange = { vm.fusionCrosshair = it })
                 Column {
-                    Text("Show visible-camera crosshair", color = FG, fontSize = 13.sp)
-                    Text("marks the centre of the phone camera — the patch its focus, " +
-                         "and with it the Auto object distance, is measured on",
+                    Text(stringResource(R.string.show_crosshair), color = FG, fontSize = 13.sp)
+                    Text(stringResource(R.string.crosshair_hint),
                          color = DIM, fontSize = 10.sp)
                 }
             }
 
             FocusLine(vm)
 
-            Text("Object distance", color = DIM, fontSize = 11.sp)
+            Text(stringResource(R.string.object_distance), color = DIM, fontSize = 11.sp)
             val distSrc = vm.fusionDistanceSource
             val effSrc = vm.effectiveDistanceSource()
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Chip("Auto focus", distSrc == FusionCalibration.DistanceSource.AUTO,
+                Chip(stringResource(R.string.dist_auto), distSrc == FusionCalibration.DistanceSource.AUTO,
                      Modifier.weight(1f)) {
                     vm.fusionDistanceSource = FusionCalibration.DistanceSource.AUTO
                 }
-                Chip("Manual", distSrc == FusionCalibration.DistanceSource.MANUAL,
+                Chip(stringResource(R.string.dist_manual), distSrc == FusionCalibration.DistanceSource.MANUAL,
                      Modifier.weight(1f)) {
                     vm.fusionDistanceSource = FusionCalibration.DistanceSource.MANUAL
                 }
@@ -632,32 +645,28 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
                 val learned = vm.focusMap
                 when {
                     effSrc == FusionCalibration.DistanceSource.MANUAL ->
-                        Text("Auto unavailable — using manual (focus not reported)",
+                        Text(stringResource(R.string.auto_unavailable),
                              color = Color(0xFFD6A93D), fontSize = 10.sp)
                     vm.focusTrusted() -> {}
                     learned.usable ->
-                        Text("Auto via focus learned from ${learned.points} alignments",
+                        Text(stringResource(R.string.auto_learned, learned.points),
                              color = DIM, fontSize = 10.sp)
                     else ->
-                        Text("Lens focus UNCALIBRATED — reading used as-is; alignments saved " +
-                             "at 2 distances refine it (${learned.points}/2)",
+                        Text(stringResource(R.string.focus_uncalibrated, learned.points),
                              color = DIM, fontSize = 10.sp)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(vm.fusionCalibPrompt, onCheckedChange = { vm.fusionCalibPrompt = it })
                     Column {
-                        Text("Offer an Align button when the object is outside the " +
-                             "saved distances", color = FG, fontSize = 12.sp)
-                        // one literal: .format() binds to the string it follows
-                        Text(("more than %.1f m past the nearest/farthest saved " +
-                              "distance, for 1.5 s").format(FusionCalibration.RANGE_TOL_M),
+                        Text(stringResource(R.string.offer_align), color = FG, fontSize = 12.sp)
+                        Text(stringResource(R.string.offer_align_hint, FusionCalibration.RANGE_TOL_M),
                              color = DIM, fontSize = 10.sp)
                     }
                 }
             }
             if (effSrc == FusionCalibration.DistanceSource.MANUAL) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Distance", color = FG, modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.distance), color = FG, modifier = Modifier.weight(1f))
                     Text(vm.distanceText(vm.fusionManualInvZ), color = ACCENT, fontSize = 12.sp)
                 }
                 // linear in 1/Z: equal thumb travel = equal parallax change
@@ -670,9 +679,9 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
             }
 
             Button(onClick = onAlign, modifier = Modifier.fillMaxWidth()) {
-                Text("Align on live image")
+                Text(stringResource(R.string.align_live))
             }
-            Text("zoom ×%.2f · offset %+.3f / %+.3f".format(vm.fusionZoom, vm.fusionDx, vm.fusionDy),
+            Text(stringResource(R.string.zoom_offset, vm.fusionZoom, vm.fusionDx, vm.fusionDy),
                  color = DIM, fontSize = 10.sp)
             CalibrationSection(vm)
         }
@@ -681,7 +690,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.temporalDenoise, onCheckedChange = { vm.temporalDenoise = it })
-            Text("Temporal denoise", color = FG, modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.temporal_denoise), color = FG, modifier = Modifier.weight(1f))
             Text("%.2f".format(vm.temporalStrength), color = DIM, fontSize = 11.sp)
         }
         if (vm.temporalDenoise) {
@@ -693,9 +702,9 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
                      onCheckedChange = { vm.spatialDenoise = it },
                      enabled = !vm.thermalSrActive)
             Column {
-                Text("Spatial denoise", color = if (vm.thermalSrActive) DIM else FG)
+                Text(stringResource(R.string.spatial_denoise), color = if (vm.thermalSrActive) DIM else FG)
                 if (vm.thermalSrActive) {
-                    Text("off while Thermal SR is on — the model denoises itself",
+                    Text(stringResource(R.string.spatial_off_sr),
                          color = DIM, fontSize = 10.sp)
                 }
             }
@@ -703,13 +712,13 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
 
         HorizontalDivider(color = Color(0xFF30363D))
 
-        Text("Factory SDK test (libcoresdk.so arm64)", color = DIM, fontSize = 10.sp)
-        Text("Interrupts the live stream", color = DIM, fontSize = 9.sp)
+        Text(stringResource(R.string.sdk_test_title), color = DIM, fontSize = 10.sp)
+        Text(stringResource(R.string.sdk_test_interrupts), color = DIM, fontSize = 9.sp)
         Button(onClick = { vm.runSdkSmokeTest() }, enabled = !vm.sdkBusy,
                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2B3D2B),
                                                     contentColor = Color.White),
                modifier = Modifier.fillMaxWidth()) {
-            Text(if (vm.sdkBusy) "Running…" else "Run SDK smoke test")
+            Text(stringResource(if (vm.sdkBusy) R.string.running else R.string.run_sdk_test))
         }
         vm.sdkLog?.let { logText ->
             Text(logText, color = Color(0xFF9DD69D), fontSize = 9.sp,
@@ -725,11 +734,9 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
         Button(onClick = { vm.disconnect() }, enabled = vm.connected,
                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5A2E2E),
                                                     contentColor = Color.White),
-               modifier = Modifier.fillMaxWidth()) { Text("Disconnect") }
+               modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.disconnect)) }
 
-        Text("Tap the image to place SPOT, long-press to clear.\n" +
-             "Tap MIN / MAX / SPOT under the image to hide a marker.\n" +
-             "Red ring = MAX, green ring = MIN.",
+        Text(stringResource(R.string.help_live),
              color = DIM, fontSize = 10.sp)
     }
 }
@@ -742,11 +749,11 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
 private fun CalibPromptBar(vm: ViewerViewModel) {
     Row(verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Focus ${vm.fusionDistanceLabel} is outside the saved distances",
+        Text(stringResource(R.string.calib_outside, vm.fusionDistanceLabel),
              color = WARN, fontSize = 11.sp, modifier = Modifier.weight(1f))
         OutlinedButton(onClick = { vm.startPromptedAlign() },
                        contentPadding = PaddingValues(horizontal = 12.dp)) {
-            Text("Align", fontSize = 12.sp)
+            Text(stringResource(R.string.align), fontSize = 12.sp)
         }
         TextButton(onClick = { vm.dismissCalibPrompt() },
                    contentPadding = PaddingValues(horizontal = 6.dp)) { Text("✕") }
@@ -759,8 +766,7 @@ private fun AlignPanel(vm: ViewerViewModel) {
     var saveDlg by remember { mutableStateOf(false) }
     Column {
         if (vm.calibPromptActive) {
-            Text("Focus ${vm.fusionDistanceLabel} is outside the saved distances — " +
-                 "align on the centre object, then Save…",
+            Text(stringResource(R.string.calib_outside_align, vm.fusionDistanceLabel),
                  color = Color(0xFFD6A93D), fontSize = 11.sp)
         }
         AlignSlider("ZOOM", vm.fusionZoom, 1f..3f, "×%.2f") { vm.fusionZoom = it }
@@ -768,12 +774,12 @@ private fun AlignPanel(vm: ViewerViewModel) {
         AlignSlider("Y", vm.fusionDy, -0.3f..0.3f, "%+.3f") { vm.fusionDy = it }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { vm.fusionZoom = 1.6f; vm.fusionDx = 0f; vm.fusionDy = 0f },
-                           modifier = Modifier.weight(1f)) { Text("Reset") }
+                           modifier = Modifier.weight(1f)) { Text(stringResource(R.string.reset)) }
             OutlinedButton(onClick = { saveDlg = true }, modifier = Modifier.weight(1f)) {
-                Text("Save…")
+                Text(stringResource(R.string.save_ellipsis))
             }
             Button(onClick = { vm.endAligning() },
-                   modifier = Modifier.weight(1f)) { Text("Done") }
+                   modifier = Modifier.weight(1f)) { Text(stringResource(R.string.done)) }
         }
     }
     if (saveDlg) SaveSampleDialog(vm, onClose = { saveDlg = false })
@@ -798,14 +804,13 @@ private fun SaveSampleDialog(vm: ViewerViewModel, onClose: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Save alignment at distance") },
+        title = { Text(stringResource(R.string.save_align_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Distance to the object you just aligned on, in metres (or ∞):",
+                Text(stringResource(R.string.save_align_prompt),
                      color = DIM, fontSize = 12.sp)
                 vm.focusDiopters?.let { d ->
-                    Text("Lens focus reading %.2f is saved with it".format(d) +
-                         " (pre-filled)",
+                    Text(stringResource(R.string.lens_focus_saved, d),
                          color = DIM, fontSize = 10.sp)
                 }
                 TextField(value = text, onValueChange = { text = it; error = false },
@@ -817,7 +822,7 @@ private fun SaveSampleDialog(vm: ViewerViewModel, onClose: () -> Unit) {
                         Chip(v, text.trim() == v, Modifier.weight(1f)) { text = v; error = false }
                     }
                 }
-                if (error) Text("Enter metres > 0, or ∞", color = HOT, fontSize = 11.sp)
+                if (error) Text(stringResource(R.string.enter_metres), color = HOT, fontSize = 11.sp)
             }
         },
         confirmButton = {
@@ -829,9 +834,9 @@ private fun SaveSampleDialog(vm: ViewerViewModel, onClose: () -> Unit) {
                     vm.addCalibSample(invZ, vm.fusionZoom, vm.fusionDx, vm.fusionDy)
                     onClose()
                 }
-            }) { Text("Save") }
+            }) { Text(stringResource(R.string.save)) }
         },
-        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.cancel)) } },
     )
 }
 
@@ -871,14 +876,14 @@ private fun focusCalName(c: Int?): String = when (c) {
 @Composable
 private fun FocusLine(vm: ViewerViewModel) {
     val d = vm.focusDiopters
+    val cal = focusCalName(vm.focusCalibration)
     val text = when {
-        vm.focusCalibration == null && d == null -> "Focus: not reported"
-        d == null || d < 0f ->
-            "Focus: " + focusCalName(vm.focusCalibration) + " · not reported"
-        else -> "Focus: " + focusCalName(vm.focusCalibration) +
-                " · %.2f D".format(d) +
+        vm.focusCalibration == null && d == null -> stringResource(R.string.focus_not_reported)
+        d == null || d < 0f -> stringResource(R.string.focus_cal_not_reported, cal)
+        else -> stringResource(R.string.focus_reading, cal, d) +
                 (vm.suggestedInvZ()?.let { " (" + vm.distanceText(it) + ")" } ?: "") +
-                (if (vm.afScanning) " · focusing…" else if (vm.afActive) " · centre AF" else "")
+                (if (vm.afScanning) " · " + stringResource(R.string.focusing)
+                 else if (vm.afActive) " · " + stringResource(R.string.centre_af) else "")
     }
     Text(text, color = DIM, fontSize = 10.sp)
 }
@@ -920,14 +925,14 @@ private fun CalibrationSection(vm: ViewerViewModel) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = { exportLauncher.launch("fusion_calibration.json") },
                        enabled = vm.calibSamples.isNotEmpty(),
-                       modifier = Modifier.weight(1f)) { Text("Export…", fontSize = 12.sp) }
+                       modifier = Modifier.weight(1f)) { Text(stringResource(R.string.export), fontSize = 12.sp) }
         OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/json",
                                                                  "text/plain", "*/*")) },
-                       modifier = Modifier.weight(1f)) { Text("Import…", fontSize = 12.sp) }
+                       modifier = Modifier.weight(1f)) { Text(stringResource(R.string.import_), fontSize = 12.sp) }
     }
     val samples = vm.calibSamples
     if (samples.isEmpty()) {
-        Text("Tip: align at a known distance, then “Save at distance” under the image.",
+        Text(stringResource(R.string.calib_tip),
              color = DIM, fontSize = 10.sp)
         return
     }
@@ -935,9 +940,9 @@ private fun CalibrationSection(vm: ViewerViewModel) {
     val tw = vm.lastFrame?.w ?: 160
     val th = vm.lastFrame?.h ?: 120
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Distance fit", color = DIM, fontSize = 11.sp, modifier = Modifier.weight(1f))
-        Text("%d sample%s · zoom ×%.2f".format(
-                 samples.size, if (samples.size == 1) "" else "s", fit.zoom),
+        Text(stringResource(R.string.distance_fit), color = DIM, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text(LocalContext.current.resources.getQuantityString(
+                 R.plurals.samples_zoom, samples.size, samples.size, fit.zoom),
              color = DIM, fontSize = 10.sp)
     }
     samples.forEachIndexed { i, s ->
@@ -954,6 +959,6 @@ private fun CalibrationSection(vm: ViewerViewModel) {
         }
     }
     TextButton(onClick = { vm.clearCalibSamples() }, modifier = Modifier.fillMaxWidth()) {
-        Text("Clear all samples", color = HOT, fontSize = 11.sp)
+        Text(stringResource(R.string.clear_samples), color = HOT, fontSize = 11.sp)
     }
 }

@@ -9,12 +9,16 @@ import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.hardware.camera2.CameraMetadata
+import android.app.LocaleManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.location.LocationRequest
+import android.os.LocaleList
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.annotation.PluralsRes
+import androidx.annotation.StringRes
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -22,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.magnity.viewer.R
 import com.magnity.viewer.camera.RgbCamera
 import com.magnity.viewer.media.FrameComposer
 import com.magnity.viewer.media.MediaSaver
@@ -109,7 +114,26 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- UI state ---------------------------------------------------------------
 
-    var status by mutableStateOf("disconnected"); private set
+    /** UI text in the app's current language. Status and notices are built with it, so a
+     *  line already on screen stays in the old language until it is next replaced. */
+    fun str(@StringRes id: Int, vararg args: Any): String =
+        getApplication<Application>().getString(id, *args)
+
+    private fun plural(@PluralsRes id: Int, n: Int, vararg args: Any): String =
+        getApplication<Application>().resources.getQuantityString(id, n, *args)
+
+    // Per-app language (Android 13+ LocaleManager): the system stores it, shows it under
+    // Settings → Apps → Language too, and applies it without restarting the activity.
+    // "" = follow the system.
+    private val localeManager = app.getSystemService(LocaleManager::class.java)
+    var appLanguage by mutableStateOf(localeManager.applicationLocales.toLanguageTags()); private set
+
+    fun setLanguage(tag: String) {
+        localeManager.applicationLocales = LocaleList.forLanguageTags(tag)
+        appLanguage = tag
+    }
+
+    var status by mutableStateOf(str(R.string.st_disconnected)); private set
     var connected by mutableStateOf(false); private set
     var paused by mutableStateOf(false)
 
@@ -314,18 +338,18 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val ctx = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                status = "opening factory SDK…"
+                status = str(R.string.st_opening)
                 MagDeviceWrapper.probeNativeLib()?.let { throw it }
                 sdk.open(ctx)
                 sdk.start()
                 if (!sdk.setEmissivity(emissivity)) Log.w(TAG, "emissivity not applied on connect")
                 connected = true
                 lastDevId = "${device.vendorId}:${device.productId}:${device.deviceId}"
-                status = "connected ${sdk.width}×${sdk.height}"
+                status = str(R.string.st_connected, sdk.width, sdk.height)
                 startSdkLoop()
             } catch (e: Throwable) {
                 Log.e(TAG, "connect failed", e)
-                status = "connect failed: ${e.message}"
+                status = str(R.string.st_connect_failed, e.message ?: "")
                 runCatching { sdk.close() }
                 connected = false
                 // let the firmware settle before the next auto-attempt
@@ -343,7 +367,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         connected = false
         lastFrame = null
         fps = 0f; fpsWindowStart = 0L; fpsWindowFrames = 0
-        status = "disconnected"
+        status = str(R.string.st_disconnected)
     }
 
     /** Drop the dead camera and let the 2 s poll reconnect (same devId retains USB
@@ -361,13 +385,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val ctx = getApplication<Application>()
         val usb = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
         val dev = usb.deviceList.values.firstOrNull { MagDeviceWrapper.isMagnity(it) } ?: run {
-            status = "camera not found — plug it in and try again"
+            status = str(R.string.st_not_found)
             return
         }
         if (usb.hasPermission(dev)) {
             connect(dev, true)
         } else {
-            status = "requesting USB permission…"
+            status = str(R.string.st_requesting_usb)
             usb.requestPermission(
                 dev,
                 android.app.PendingIntent.getBroadcast(
@@ -385,7 +409,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             ffcBusy = true
             try {
-                status = if (sdk.triggerFfc()) "FFC done" else "FFC failed"
+                status = str(if (sdk.triggerFfc()) R.string.st_ffc_done else R.string.st_ffc_failed)
             } finally {
                 ffcBusy = false
             }
@@ -399,7 +423,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         emissivityJob?.cancel()
         emissivityJob = viewModelScope.launch(Dispatchers.IO) {
             delay(150)
-            if (connected && !sdk.setEmissivity(emissivity)) notice = "Emissivity not applied"
+            if (connected && !sdk.setEmissivity(emissivity)) notice = str(R.string.n_emis_not_applied)
         }
     }
 
@@ -437,7 +461,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             locationActive = true
         } catch (e: Exception) {
             Log.e(TAG, "location updates failed", e)
-            notice = "Location unavailable: ${e.message}"
+            notice = str(R.string.n_location_unavailable, e.message ?: "")
         }
     }
 
@@ -458,7 +482,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val want = fusionOn && appVisible && hasCameraPermission()
         if (want == (rgbCameraLazy.isInitialized() && rgbCamera.running)) return
         if (want) {
-            rgbCamera.start { msg -> fusionOn = false; notice = "Visible camera failed: $msg" }
+            rgbCamera.start { msg -> fusionOn = false; notice = str(R.string.n_visible_failed, msg) }
         } else {
             rgbCamera.stop()
             edgeSmooth = null
@@ -575,8 +599,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             notice = runCatching {
                 getApplication<Application>().contentResolver.openOutputStream(uri, "wt")!!
                     .use { it.write(text.toByteArray()) }
-                "Calibration exported (${calibSamples.size} samples)"
-            }.getOrElse { "Export failed: ${it.message}" }
+                plural(R.plurals.n_calib_exported, calibSamples.size, calibSamples.size)
+            }.getOrElse { str(R.string.n_export_failed, it.message ?: "") }
         }
     }
 
@@ -587,12 +611,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     .use { it.readBytes().decodeToString() }
             }.getOrNull()?.let { FusionCalibration.decodeFile(it) }
             withContext(Dispatchers.Main) {
-                if (f == null) { notice = "Not a fusion calibration file"; return@withContext }
+                if (f == null) { notice = str(R.string.n_not_calib); return@withContext }
                 fusionRotation = f.rotation
                 fusionZoom = f.zoom; fusionDx = f.dx; fusionDy = f.dy
                 calibSamples = f.samples.sortedByDescending { it.invZ }
                 fusionCalibJson = FusionCalibration.encodeSamples(calibSamples)
-                notice = "Calibration imported (${f.samples.size} samples)"
+                notice = plural(R.plurals.n_calib_imported, f.samples.size, f.samples.size)
             }
         }
     }
@@ -895,7 +919,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 val u = ncnn?.takeIf { ncnnSize == w to h }
                     ?: NcnnUpscaler.open(getApplication(), w, h)?.also {
                         ncnn?.close(); ncnn = it; ncnnSize = w to h
-                        notice = "ncnn model loaded (${if (it.vulkan) "Vulkan" else "CPU"})"
+                        notice = str(R.string.n_ncnn_loaded, if (it.vulkan) "Vulkan" else "CPU")
                     }
                 if (u != null) {
                     val img = u.render(field, w, h, lo, hi, Palettes.lut(paletteName))
@@ -903,13 +927,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     return img
                 }
                 upscaler = Upscaler.ANIME4K
-                notice = "No ncnn model in ${NcnnUpscaler.modelDir(getApplication()).name}/ — using Anime4K"
+                notice = str(R.string.n_no_ncnn, NcnnUpscaler.modelDir(getApplication()).name)
             } catch (e: Throwable) {
                 Log.e(TAG, "ncnn failed — falling back to Anime4K", e)
                 runCatching { ncnn?.close() }
                 ncnn = null
                 upscaler = Upscaler.ANIME4K
-                notice = "ncnn failed, using Anime4K: ${e.message}"
+                notice = str(R.string.n_ncnn_failed, e.message ?: "")
             }
         }
         if (k > 1 && upscaler == Upscaler.ANIME4K) {
@@ -922,7 +946,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching { anime4k?.close() }
                 anime4k = null
                 upscaler = Upscaler.BICUBIC
-                notice = "Anime4K GPU failed, using bicubic: ${e.message}"
+                notice = str(R.string.n_anime4k_failed, e.message ?: "")
             }
         }
         val src = if (k > 1) ImageOps.resizeBicubic(field, w, h, w * k, h * k) else field
@@ -990,10 +1014,10 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     ?: error("cannot open the file")
                 ncnnReload = true
                 srImportedSizes = sizes
-                "SR model imported (${sizes.joinToString()}) — select Thermal SR to use it"
+                str(R.string.n_sr_imported, sizes.joinToString())
             } catch (e: Throwable) {
                 Log.e(TAG, "SR model import failed", e)
-                "SR model import failed: ${e.message}"
+                str(R.string.n_sr_import_failed, e.message ?: "")
             }
         }
     }
@@ -1004,7 +1028,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             NcnnUpscaler.removeImported(getApplication())
             ncnnReload = true
             srImportedSizes = emptyList()
-            notice = "Using the built-in SR model"
+            notice = str(R.string.n_using_builtin)
         }
     }
     private val temporalFilter = TemporalDenoise()
@@ -1086,12 +1110,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             notice = try {
                 MediaSaver.savePng(ctx, composite(fr), loc)
                     ?.let { (_, tagged) ->
-                        "Snapshot saved to Pictures/MagViewer" + geoSuffix(loc, tagged) +
+                        str(R.string.n_snapshot_saved) + geoSuffix(loc, tagged) +
                             thermalSuffix(fr)
                     }
-                    ?: "Snapshot failed"
+                    ?: str(R.string.n_snapshot_failed)
             } catch (e: Throwable) {
-                Log.e(TAG, "screenshot failed", e); "Snapshot failed: ${e.message}"
+                Log.e(TAG, "screenshot failed", e); str(R.string.n_snapshot_failed_msg, e.message ?: "")
             }
         }
     }
@@ -1101,7 +1125,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         if (!saveThermalData) return ""
         val name = ThermalStream.writeSingle(getApplication(), fr.temps, fr.w, fr.h,
                                              fr.emissivity)
-        return if (name != null) " + $name" else " (temperature file failed)"
+        return if (name != null) " + $name" else " " + str(R.string.n_temp_file_failed)
     }
 
     fun toggleRecording() {
@@ -1121,21 +1145,21 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                             .getOrNull()
                     else null
                 }
-                if (geotag && loc == null) notice = "Recording without geo-tag — no location fix yet"
+                if (geotag && loc == null) notice = str(R.string.n_rec_no_geotag)
                 recordStartMs = System.currentTimeMillis()
                 recording = true
             } catch (e: Throwable) {
                 Log.e(TAG, "recorder start failed", e)
-                notice = "Recording failed to start: ${e.message}"
+                notice = str(R.string.n_rec_start_failed, e.message ?: "")
             }
         }
     }
 
     private fun geoSuffix(loc: Location?, tagged: Boolean) = when {
         !geotag -> ""
-        loc == null -> " (no location fix — not geo-tagged)"
-        tagged -> " (geo-tagged)"
-        else -> " (geo-tag failed)"
+        loc == null -> " " + str(R.string.n_geo_no_fix)
+        tagged -> " " + str(R.string.n_geo_tagged)
+        else -> " " + str(R.string.n_geo_failed)
     }
 
     fun stopRecording() {
@@ -1150,10 +1174,10 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             val uri = r.stop()
             val temps = t?.let { w -> if (w.close() != null) w.displayName else null }
             notice = if (uri != null)
-                         "Video saved to Movies/MagViewer (${r.codecName}, ${r.frames} frames" +
-                             (if (r.geoTagged) ", geo-tagged)" else ")") +
+                         plural(if (r.geoTagged) R.plurals.n_video_saved_geo
+                                else R.plurals.n_video_saved, r.frames, r.codecName, r.frames) +
                              (temps?.let { " + $it" } ?: "")
-                     else "Recording failed (no usable frames)"
+                     else str(R.string.n_rec_failed)
         }
     }
 
@@ -1170,7 +1194,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 return
             } catch (e: Throwable) {
                 Log.e(TAG, "video frame failed", e)
-                notice = "Recording stopped: ${e.message}"
+                notice = str(R.string.n_rec_stopped, e.message ?: "")
             }
         }
         stopRecording()          // encoder broke — finalise what we have
@@ -1195,7 +1219,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     playback = ThermalPlayback(r, name)
                 }.onFailure {
                     Log.e(TAG, "playback open failed", it)
-                    notice = "Cannot read temperature file: ${it.message}"
+                    notice = str(R.string.n_cannot_read_capture, it.message ?: "")
                 }
             }
         }
@@ -1303,7 +1327,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 loop?.cancel()
                 connected = false
                 retryNotBefore = System.currentTimeMillis() + 60_000   // keep the poll off USB
-                status = "SDK smoke test…"
+                status = str(R.string.st_sdk_test)
                 delay(750)
 
                 wrapper.open(ctx)
@@ -1345,7 +1369,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 runCatching { wrapper.close() }
                 retryNotBefore = System.currentTimeMillis() + 2000   // let the poll take over
-                status = "SDK test finished — see log"
+                status = str(R.string.st_sdk_test_done)
                 sdkBusy = false
             }
         }

@@ -24,7 +24,10 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import com.magnity.viewer.R
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,12 +58,12 @@ fun PlaybackPane(vm: ViewerViewModel, pb: ThermalPlayback) {
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.weight(1f)) {
                 Text(pb.name, color = ACCENT, fontSize = 14.sp, maxLines = 1)
-                Text("%d×%d · %d frame%s · ε %.2f · %s".format(
-                         pb.w, pb.h, pb.frameCount, if (pb.frameCount == 1) "" else "s",
+                Text(LocalContext.current.resources.getQuantityString(R.plurals.playback_info,
+                         pb.frameCount, pb.w, pb.h, pb.frameCount,
                          pb.emissivity, stamp(pb.startEpochMs + pb.tMs)),
                      color = DIM, fontSize = 10.sp, maxLines = 1)
             }
-            OutlinedButton(onClick = { vm.closePlayback() }) { Text("Close") }
+            OutlinedButton(onClick = { vm.closePlayback() }) { Text(stringResource(R.string.close)) }
         }
 
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f),
@@ -82,7 +85,7 @@ fun PlaybackPane(vm: ViewerViewModel, pb: ThermalPlayback) {
                     ColorBar(palette, pb.scaleLo, pb.scaleHi, Modifier.width(dispWdp))
                 }
             } else {
-                Text("Reading capture…", color = DIM)
+                Text(stringResource(R.string.reading_capture), color = DIM)
             }
         }
 
@@ -95,7 +98,7 @@ fun PlaybackPane(vm: ViewerViewModel, pb: ThermalPlayback) {
 
         if (pb.frameCount > 1) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("frame %d / %d".format(pb.index + 1, pb.frameCount),
+                Text(stringResource(R.string.frame_n, pb.index + 1, pb.frameCount),
                      color = FG, fontSize = 12.sp, modifier = Modifier.weight(1f))
                 Text("%.2f s".format(pb.tMs / 1000f), color = DIM, fontSize = 12.sp)
             }
@@ -104,14 +107,13 @@ fun PlaybackPane(vm: ViewerViewModel, pb: ThermalPlayback) {
                    valueRange = 0f..(pb.frameCount - 1).toFloat())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { pb.step(-1) }, modifier = Modifier.weight(1f),
-                       contentPadding = PaddingValues(4.dp)) { Text("◀ prev") }
+                       contentPadding = PaddingValues(4.dp)) { Text(stringResource(R.string.prev)) }
                 Button(onClick = { pb.step(1) }, modifier = Modifier.weight(1f),
-                       contentPadding = PaddingValues(4.dp)) { Text("next ▶") }
+                       contentPadding = PaddingValues(4.dp)) { Text(stringResource(R.string.next)) }
             }
         }
 
-        Text("Tap the image to read a temperature, long-press to clear.\n" +
-             "Colour range follows each frame; the numbers are absolute °C as captured.",
+        Text(stringResource(R.string.help_playback),
              color = DIM, fontSize = 10.sp)
     }
 }
