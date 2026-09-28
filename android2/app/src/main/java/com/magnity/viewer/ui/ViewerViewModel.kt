@@ -272,6 +272,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     private var loop: Job? = null
 
+    // Declared ABOVE init: init launches the auto-connect poll on Dispatchers.IO, which can
+    // run before the constructor reaches properties declared further down — `connecting`
+    // was still null there (NPE on launch, only on some starts).
+    private val connecting = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var retryNotBefore = 0L        // cooldown after a failed open
+    @Volatile private var lastDevId: String? = null   // detect replug (re-enumeration)
+
     init {
         // permission may have been revoked in system settings since the last run
         if (geotag && !hasLocationPermission()) geotag = false else updateLocationUpdates()
@@ -325,9 +332,6 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- connection -----------------------------------------------------------
 
-    private val connecting = java.util.concurrent.atomic.AtomicBoolean(false)
-    @Volatile private var retryNotBefore = 0L        // cooldown after a failed open
-    @Volatile private var lastDevId: String? = null   // detect replug (re-enumeration)
 
     fun connect(device: UsbDevice, permissionGranted: Boolean) {
         if (!MagDeviceWrapper.isMagnity(device)) return
