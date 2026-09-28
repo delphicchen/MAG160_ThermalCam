@@ -13,6 +13,11 @@ import kotlin.math.exp
  *
  * Per pixel: w = strength · exp(-(d / (k·σ))²), out = w·history + (1-w)·frame. Static
  * pixels average over several frames, moving ones follow the new frame (no ghosting).
+ *
+ * Scene cuts (shutter / FFC, a fast pan): when most of the frame jumps at once the
+ * history is dropped and σ is NOT updated from that frame. Otherwise the MAD sample taken
+ * across the shutter inflates σ, k·σ then calls real motion "static", and the image
+ * smears for a second or two after every FFC — the "blurry after shutter" report.
  */
 class TemporalDenoise {
     var strength = 0.85f      // max history weight in fully static areas
@@ -23,14 +28,20 @@ class TemporalDenoise {
     private var sigma = 0f
     private var frame = 0
     private var sample = FloatArray(0)
+    @Volatile private var resetPending = false
 
     private companion object {
         const val Q_MAX = 6f          // exp(-6) ≈ 0.0025 → treat as full motion beyond
         const val LUT_N = 1024
+        const val CUT_SIGMA = 4f      // a sample pixel beyond this many σ counts as changed
+        const val CUT_FRACTION = 0.5f // more than this share changed → scene cut
         val LUT = FloatArray(LUT_N) { exp(-(it.toFloat() / (LUT_N - 1)) * Q_MAX) }
     }
 
     fun reset() { avg = null }
+
+    /** Thread-safe reset: the history is dropped at the start of the next [apply]. */
+    fun requestReset() { resetPending = true }
 
     /**
      * Returns the filtered field. The array is the internal history buffer: read it before
@@ -38,14 +49,29 @@ class TemporalDenoise {
      * @param key anything that invalidates history when it changes (orientation, source)
      */
     fun apply(f: FloatArray, key: Int): FloatArray {
+        if (resetPending) { resetPending = false; avg = null }
         val a = avg
         if (a == null || a.size != f.size || key != this.key) {
             this.key = key; sigma = 0f; frame = 0
             return f.copyOf().also { avg = it }
         }
 
+        // scene-cut check on the same sparse grid, every frame (~1/16 of the pixels)
+        val n = f.size / 16
+        if (sigma > 0f && n > 0) {
+            val lim = CUT_SIGMA * sigma
+            var changed = 0
+            for (i in 0 until n) {
+                val j = i * 16 + (i and 15)
+                if (abs(f[j] - a[j]) > lim) changed++
+            }
+            if (changed > n * CUT_FRACTION) {
+                f.copyInto(a)
+                return a
+            }
+        }
+
         if (frame++ % 8 == 0) {
-            val n = f.size / 16
             if (sample.size != n) sample = FloatArray(n)
             for (i in 0 until n) {
                 val j = i * 16 + (i and 15)          // stagger the stride so it isn't column-locked

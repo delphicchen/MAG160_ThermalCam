@@ -78,8 +78,18 @@ class MagDeviceWrapper {
 
     @Volatile var frameCount = 0L; private set
 
-    private var device: MagDevice? = null
+    @Volatile private var device: MagDevice? = null
     private val running = AtomicBoolean(false)
+
+    /**
+     * Guards every native call against [close]: the SDK frame callback runs on its own
+     * thread, and a call landing on a handle mid-`dislinkCamera` is a native crash
+     * (SIGSEGV in libcoresdk) — the crash-on-launch loop that only a force-stop cleared.
+     */
+    private val devLock = ReentrantLock()
+
+    private inline fun <T> withDev(block: (MagDevice) -> T): T? =
+        devLock.withLock { device?.let(block) }
 
     private val lock = ReentrantLock()
     private var latestTemp: IntArray? = null
@@ -207,7 +217,7 @@ class MagDeviceWrapper {
             }
         })")
 
-        device = magDev
+        devLock.withLock { device = magDev }
         Log.i(TAG, "camera ready: ${width}x$height")
     }
 
@@ -230,10 +240,17 @@ class MagDeviceWrapper {
 
     /** Per-pixel temperature, milli-Celsius as the SDK reports it (see [degC]). */
     private fun pullFrameData() {
-        val magDev = device ?: return
-        val buf = IntArray(width * height)
-        if (magDev.getTemperatureData(buf, true, true)) {
-            lock.withLock { latestTemp = buf }
+        // tryLock, not lock: if close() holds devLock and dislinkCamera waits for this
+        // callback thread to return, blocking here would deadlock — drop the frame instead.
+        if (!running.get() || !devLock.tryLock()) return
+        try {
+            val magDev = device ?: return
+            val buf = IntArray(width * height)
+            if (magDev.getTemperatureData(buf, true, true)) {
+                lock.withLock { latestTemp = buf }
+            }
+        } finally {
+            devLock.unlock()
         }
     }
 
@@ -257,17 +274,16 @@ class MagDeviceWrapper {
      * explicitly so the 3-arg `(x, y, size)` form is selected.
      */
     fun probe(x: Int, y: Int, size: Int = 0): Int? =
-        device?.getTemperatureProbe(x, y, size)?.takeIf { it != Int.MIN_VALUE }
+        withDev { it.getTemperatureProbe(x, y, size) }?.takeIf { it != Int.MIN_VALUE }
 
-    fun getFrameStats(): StatisticInfo? {
-        val magDev = device ?: return null
+    fun getFrameStats(): StatisticInfo? = withDev { magDev ->
         val info = StatisticInfo()
-        return if (magDev.getFrameStatisticInfo(info)) info else null
+        if (magDev.getFrameStatisticInfo(info)) info else null
     }
 
     /** Shutter/housing temperature, milli-Celsius. GetSenorTemperature is absent here. */
     fun sensorTemp(): Int? =
-        device?.getCurrentCameraInnerTemperature()?.takeIf { it != Int.MIN_VALUE }
+        withDev { it.getCurrentCameraInnerTemperature() }?.takeIf { it != Int.MIN_VALUE }
 
     /**
      * Target emissivity, (0, 1]. Goes through the SDK's fix-para block
@@ -276,11 +292,10 @@ class MagDeviceWrapper {
      * the values the SDK holds. Takes effect because [pullFrameData] reads temperature
      * with external correction enabled.
      */
-    fun setEmissivity(e: Float): Boolean {
-        val magDev = device ?: return false
-        return try {
+    fun setEmissivity(e: Float): Boolean = withDev { magDev ->
+        try {
             val p = CorrectionPara()
-            if (!magDev.getFixPara(p)) return false
+            if (!magDev.getFixPara(p)) return@withDev false
             p.fEmissivity = e.coerceIn(0.01f, 1f)
             val r = magDev.setFixPara(p)
             Log.i(TAG, "setFixPara emissivity=${p.fEmissivity} → $r")
@@ -288,10 +303,10 @@ class MagDeviceWrapper {
         } catch (e: Throwable) {
             Log.e(TAG, "setFixPara failed", e); false
         }
-    }
+    } ?: false
 
     fun triggerFfc(): Boolean = try {
-        device?.triggrtFFC() ?: false
+        withDev { it.triggrtFFC() } ?: false
     } catch (e: Exception) {
         Log.e(TAG, "triggrtFFC failed", e); false
     }
@@ -300,15 +315,16 @@ class MagDeviceWrapper {
 
     fun stop() {
         running.set(false)
-        runCatching { device?.stopProcessImage() }
+        runCatching { withDev { it.stopProcessImage() } }
             .onFailure { Log.e(TAG, "stopProcessImage failed", it) }
     }
 
     fun close() {
         stop()
-        runCatching { device?.dislinkCamera() }
+        // detach the handle under devLock so no native call can start on it after this
+        val magDev = devLock.withLock { device.also { device = null } }
+        runCatching { magDev?.dislinkCamera() }
             .onFailure { Log.e(TAG, "dislinkCamera failed", it) }
-        device = null
         lock.withLock { latestTemp = null }
     }
 }

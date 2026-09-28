@@ -409,7 +409,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             ffcBusy = true
             try {
-                status = str(if (sdk.triggerFfc()) R.string.st_ffc_done else R.string.st_ffc_failed)
+                val ok = sdk.triggerFfc()
+                temporalFilter.requestReset()   // don't blend pre-FFC frames into the new NUC
+                status = str(if (ok) R.string.st_ffc_done else R.string.st_ffc_failed)
             } finally {
                 ffcBusy = false
             }

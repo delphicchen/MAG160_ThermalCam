@@ -30,6 +30,10 @@ class MainActivity : ComponentActivity() {
     // spam the prompt faster than once / 10 s
     private var lastPermReqMs = 0L
 
+    // unregistered in onDestroy — a leaked receiver keeps calling the previous
+    // (cleared) ViewModel and races the new one for the camera on every plug event
+    private var usbReceiver: BroadcastReceiver? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -57,6 +61,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        usbReceiver = receiver
         // targetSdk 34+: custom-action receivers MUST declare export state,
         // otherwise SecurityException at registration = instant crash on launch.
         ContextCompat.registerReceiver(
@@ -78,6 +83,12 @@ class MainActivity : ComponentActivity() {
         val target = device?.takeIf { MagDeviceWrapper.isMagnity(it) }
             ?: usb.deviceList.values.firstOrNull { MagDeviceWrapper.isMagnity(it) }
         if (target != null) requestPermission(usb, target)
+    }
+
+    override fun onDestroy() {
+        usbReceiver?.let { runCatching { unregisterReceiver(it) } }
+        usbReceiver = null
+        super.onDestroy()
     }
 
     override fun onStart() {
