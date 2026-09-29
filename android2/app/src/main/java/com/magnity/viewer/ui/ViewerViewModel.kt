@@ -367,7 +367,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     fun disconnect() {
         loop?.cancel()
         stopRecording()
-        viewModelScope.launch(Dispatchers.IO) { runCatching { sdk.close() } }
+        // Hold the connect gate until close() finishes, or the 2 s poll can start a new
+        // open() while the old link is still being torn down.
+        val gated = connecting.compareAndSet(false, true)
+        viewModelScope.launch(Dispatchers.IO) {
+            try { runCatching { sdk.close() } } finally { if (gated) connecting.set(false) }
+        }
         connected = false
         lastFrame = null
         fps = 0f; fpsWindowStart = 0L; fpsWindowFrames = 0

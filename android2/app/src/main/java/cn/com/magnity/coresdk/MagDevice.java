@@ -31,7 +31,10 @@ public class MagDevice implements MagUsb.IUSBCallback {
     public static final int PREPARE_FAILED = -1;
     public static final int PREPARE_PENDING = 1;
     public static final int PREPARE_SUCC = 0;
-    private int mChannel = -1;
+    // volatile + the synchronized link/dislink/usbResult below: the SDK's USB receiver
+    // (main thread) and the app's close() (IO thread) used to race through dislinkCamera,
+    // both passing `mChannel > 0` and freeing the same native channel twice (Scudo abort).
+    private volatile int mChannel = -1;
     private Context mContext;
     private Handler mHadler;
     private Runnable mRunnable;
@@ -267,10 +270,14 @@ public class MagDevice implements MagUsb.IUSBCallback {
     }
 
     @Override // cn.com.magnity.coresdk.MagUsb.IUSBCallback
-    public void usbResult(Context ctx, int status, int fd, ILinkCallback cb) {
+    public synchronized void usbResult(Context ctx, int status, int fd, ILinkCallback cb) {
         switch (status) {
             case -4:
-                dislinkCamera();
+                // Detach: do NOT dislink here. This runs on the main thread outside the
+                // app wrapper's devLock, so freeing the channel here pulls it out from
+                // under in-flight native calls (probe/stats). The owner — MagDeviceWrapper
+                // .close(), driven by the app's own DETACHED receiver or stall recovery —
+                // tears the link down under its lock.
                 if (cb != null) {
                     cb.linkResult(-2);
                     break;
@@ -314,7 +321,7 @@ public class MagDevice implements MagUsb.IUSBCallback {
         this.mHadler.postDelayed(this.mRunnable, 2L);
     }
 
-    public int linkCamera(Context ctx, int id, ILinkCallback cb) {
+    public synchronized int linkCamera(Context ctx, int id, ILinkCallback cb) {
         if (ctx == null || this.mUsb != null || this.mChannel > 0) {
             return -1;
         }
@@ -340,7 +347,7 @@ public class MagDevice implements MagUsb.IUSBCallback {
         return 1;
     }
 
-    public void dislinkCamera() {
+    public synchronized void dislinkCamera() {
         if (this.mChannel > 0) {
             if (IsProcessingImage(this.mChannel)) {
                 StopProcessImage(this.mChannel);
