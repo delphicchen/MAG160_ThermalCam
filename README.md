@@ -82,6 +82,12 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.5.1 — 2026-09-29
+- **Crash fixes** — no more crash when unplugging the camera mid-stream (the SDK and the app
+  could release the same USB link twice), on launch with the camera already attached, or
+  from a quick unplug/replug starting a new connection before the old one was closed.
+- Picture no longer smears for ~2 s after a shutter (FFC) or a fast pan.
+
 ### 2.5 — 2026-09-27
 - **Interface language** — English, 繁體中文 or 简体中文, picked in the drawer or under
   Android's per-app language settings; *System* follows the phone. Switching is instant and

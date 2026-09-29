@@ -79,6 +79,11 @@ Magnity **MAG-Mx / MAG-Cx** USB 熱像儀（VID `0x833C`）硬體很好，但原
 完整說明與各版本 APK 都在
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases)。
 
+### 2.5.1 — 2026-09-29
+- **閃退修正** —— 串流中拔掉熱像儀不再閃退（SDK 與 App 可能重複釋放同一個 USB 連線）；
+  插著相機啟動 App、快速拔插時舊連線尚未關閉就重新連線，也不再閃退。
+- 快門（FFC）或快速轉動後，畫面不再拖影約 2 秒。
+
 ### 2.5 — 2026-09-27
 - **介面語言** —— English、繁體中文、简体中文，可在側邊選單或 Android 的 App 語言設定切換；
   選「跟隨系統」則依手機語言。切換立即生效，相機不會斷線。量測與產品名詞（MIN / MAX /
