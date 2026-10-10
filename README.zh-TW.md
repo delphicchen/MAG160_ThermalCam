@@ -79,6 +79,10 @@ Magnity **MAG-Mx / MAG-Cx** USB 熱像儀（VID `0x833C`）硬體很好，但原
 完整說明與各版本 APK 都在
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases)。
 
+### 2.5.2 — 2026-10-10
+- **首次連線修正** —— 手機第一次連某台熱像儀時會出現 `startProcessImage failed`：相機的校正檔
+  （約 1.8 MB）還在下載，App 就開始取像。現在會等下載完成，並在狀態列顯示進度。
+
 ### 2.5.1 — 2026-09-29
 - **閃退修正** —— 串流中拔掉熱像儀不再閃退（SDK 與 App 可能重複釋放同一個 USB 連線）；
   插著相機啟動 App、快速拔插時舊連線尚未關閉就重新連線，也不再閃退。

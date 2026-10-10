@@ -82,6 +82,12 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.5.2 — 2026-10-10
+- **First connection fixed** — on a phone that had never linked that camera, connecting
+  failed with `startProcessImage failed`: the app started streaming while the camera's
+  calibration file (~1.8 MB) was still downloading. It now waits for the download and
+  shows its progress in the status line.
+
 ### 2.5.1 — 2026-09-29
 - **Crash fixes** — no more crash when unplugging the camera mid-stream (the SDK and the app
   could release the same USB link twice), on launch with the camera already attached, or
