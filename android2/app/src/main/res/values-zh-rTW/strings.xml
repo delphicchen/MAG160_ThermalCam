@@ -102,6 +102,7 @@
     <string name="st_requesting_usb">正在要求 USB 權限…</string>
     <string name="st_ffc_done">FFC 完成</string>
     <string name="st_ffc_failed">FFC 失敗</string>
+    <string name="st_cali_download">正在從相機下載校正檔… %1$d%%</string>
     <string name="st_sdk_test">SDK 測試中…</string>
     <string name="st_sdk_test_done">SDK 測試完成 —— 請看紀錄</string>
     <string name="n_emis_not_applied">發射率未套用</string>

@@ -344,7 +344,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 status = str(R.string.st_opening)
                 MagDeviceWrapper.probeNativeLib()?.let { throw it }
-                sdk.open(ctx)
+                sdk.open(ctx) { p -> status = str(R.string.st_cali_download, p) }
                 sdk.start()
                 if (!sdk.setEmissivity(emissivity)) Log.w(TAG, "emissivity not applied on connect")
                 connected = true
@@ -1341,8 +1341,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 status = str(R.string.st_sdk_test)
                 delay(750)
 
-                wrapper.open(ctx)
-                say("OK  link + prepare")
+                wrapper.open(ctx) { p -> status = str(R.string.st_cali_download, p) }
+                say("OK  link + prepare" +
+                    if (wrapper.caliDownloaded) " (calibration downloaded from the camera)" else "")
                 say("    fpa=${wrapper.width}x${wrapper.height} " +
                     "bmp=${wrapper.bmpWidth}x${wrapper.bmpHeight} fps=${wrapper.fps}")
                 say("    name='${wrapper.cameraName}' type='${wrapper.cameraType}'")

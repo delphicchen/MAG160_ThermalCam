@@ -42,6 +42,10 @@ class MagDeviceWrapper {
         const val TAG = "MagDeviceWrapper"
         const val VID = 0x833C
         val PIDS = intArrayOf(0x0001, 0x0002)
+        /** First-link calibration download (~1.8 MB over USB; seconds in practice). */
+        private const val CALI_DOWNLOAD_TIMEOUT_S = 120L
+        private const val START_RETRIES = 5
+        private const val START_RETRY_MS = 400L
 
         fun isMagnity(device: UsbDevice): Boolean =
             device.vendorId == VID && PIDS.contains(device.productId)
@@ -75,6 +79,8 @@ class MagDeviceWrapper {
     var fps = 0; private set
     var cameraName = ""; private set
     var cameraType = ""; private set
+    /** The last [open] had to download the calibration file (no cached copy). */
+    var caliDownloaded = false; private set
 
     @Volatile var frameCount = 0L; private set
 
@@ -143,8 +149,12 @@ class MagDeviceWrapper {
      * [MagDevice.init] needs external storage mounted — it hands the native side
      * `getExternalFilesDir("")`, under which `prepareProcessImage` caches the
      * `mag_cali.bin` it pulls off the camera (`<dir>/cali/<name>.<n>.<serial>`).
+     *
+     * The first link of a camera on a phone has no cached file: prepare then returns
+     * PENDING and downloads it (~1.8 MB) on a detached SDK thread, and streaming cannot
+     * start until that finishes — so wait for it here. [onCaliProgress] gets 0..100.
      */
-    fun open(context: Context) {
+    fun open(context: Context, onCaliProgress: (Int) -> Unit = {}) {
         if (!initialized) {
             if (!MagDevice.init(context)) {
                 throw RuntimeException(
@@ -201,9 +211,20 @@ class MagDeviceWrapper {
         }
 
         // Pulls mag_cali.bin off the camera and builds the NUC / radiometric tables.
+        // Callback (from libcoresdk's CNetComm::GetCaliFile): (0, 0..100) while the file
+        // transfers, (0, 100) once it is written and closed, (<0, _) on a failed transfer.
         Log.i(TAG, "prepareProcessImage…")
+        val caliDone = java.util.concurrent.CountDownLatch(1)
+        val caliStatus = java.util.concurrent.atomic.AtomicInteger(0)
         val prep = magDev.prepareProcessImage { status, progress ->
             Log.i(TAG, "prepare: status=$status progress=$progress")
+            if (status < 0) {
+                caliStatus.set(status)
+                caliDone.countDown()
+            } else {
+                onCaliProgress(progress)
+                if (progress >= 100) caliDone.countDown()
+            }
         }
         if (prep < 0) {
             magDev.dislinkCamera()
@@ -216,6 +237,18 @@ class MagDeviceWrapper {
                 else -> "?"
             }
         })")
+        caliDownloaded = prep == MagDevice.PREPARE_PENDING
+        if (caliDownloaded) {
+            if (!caliDone.await(CALI_DOWNLOAD_TIMEOUT_S, java.util.concurrent.TimeUnit.SECONDS)) {
+                magDev.dislinkCamera()
+                throw RuntimeException("calibration download from the camera timed out")
+            }
+            if (caliStatus.get() < 0) {
+                magDev.dislinkCamera()
+                throw RuntimeException("calibration download failed: ${caliStatus.get()}")
+            }
+            Log.i(TAG, "calibration file downloaded")
+        }
 
         devLock.withLock { device = magDev }
         Log.i(TAG, "camera ready: ${width}x$height")
@@ -227,10 +260,17 @@ class MagDeviceWrapper {
         require(width > 0 && height > 0) { "no FPA geometry from getCameraInfo" }
         running.set(true)
         // 4-arg overload only — the 5-arg one maps to StartProcessImage_v2, absent here.
-        val ok = magDev.startProcessImage({ _, _ ->
-            frameCount++
-            pullFrameData()
-        }, 0, 0)
+        // Right after a download the SDK's prepare thread may still be unwinding (the
+        // 100 % callback fires just before it returns), so allow a few short retries.
+        var ok = false
+        for (attempt in 0 until if (caliDownloaded) START_RETRIES else 1) {
+            if (attempt > 0) Thread.sleep(START_RETRY_MS)
+            ok = magDev.startProcessImage({ _, _ ->
+                frameCount++
+                pullFrameData()
+            }, 0, 0)
+            if (ok) break
+        }
         if (!ok) {
             running.set(false)
             throw RuntimeException("startProcessImage failed")

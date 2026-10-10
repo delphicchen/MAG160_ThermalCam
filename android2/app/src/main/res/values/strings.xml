@@ -102,6 +102,7 @@
     <string name="st_requesting_usb">requesting USB permission…</string>
     <string name="st_ffc_done">FFC done</string>
     <string name="st_ffc_failed">FFC failed</string>
+    <string name="st_cali_download">Downloading calibration from the camera… %1$d%%</string>
     <string name="st_sdk_test">SDK smoke test…</string>
     <string name="st_sdk_test_done">SDK test finished — see log</string>
     <string name="n_emis_not_applied">Emissivity not applied</string>
