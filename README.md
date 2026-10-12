@@ -41,7 +41,7 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 | 📸 **Snapshots** | One tap saves a PNG. |
 | 🎬 **Video recording** | Hardware **HEVC/H.265** encoding with automatic H.264 fallback. |
 | 🌡️ **Temperature captures** | Snapshots and recordings can also save a `.mgt` file holding every pixel's °C — reopen it in the app and read any position, in any frame. |
-| 🔀 **Visible-light fusion (beta)** | Overlay the phone camera's edges on the thermal image (MSX-style), blend, or search in the wide visible view — with alignment calibrated at several distances, auto distance from centre-weighted lens focus (with a crosshair showing the patch it measures), and calibration export/import. |
+| 🔀 **Visible-light fusion (beta)** | Overlay the phone camera's edges on the thermal image (MSX-style), blend, or search in the wide visible view — with alignment calibrated at several distances, a calibration wizard that fits the alignment over several measured distances, auto distance from centre-weighted lens focus (with a crosshair showing the patch it measures), and calibration export/import. |
 | 📍 **Optional geo-tag** | Stamp precise GPS location into snapshots and videos — off until you turn it on. |
 | 🌐 **Interface language** | English, 繁體中文 or 简体中文, switched in the drawer (or follow the system). |
 | 💾 **Remembers your setup** | Palette, range, rotation, upscaler, emissivity and more survive restarts. |
@@ -81,6 +81,20 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
+
+### 2.6 — 2026-10-12
+- **Calibration wizard** — a guided fusion calibration: one far point, then 1 m, 0.5 m and
+  0.3 m. Enter the measured distance first and X/Y start where the fitted line predicts, so
+  only a nudge is left; ZOOM is worked out from the phone's lens data. The summary marks any
+  point more than 3 px off the line for a redo, and the old calibration is replaced only when
+  you finish.
+- **Steadier close-range fusion** — with three or more calibrated distances the overlay follows
+  the best-fit line in 1/Z instead of passing through every saved point, so one badly aligned
+  point no longer bends the whole curve. Existing calibrations get this too.
+- A lens focus reading that contradicts the other points (some lenses misread very close or
+  plain targets) is left out of the autofocus distance map.
+- Focus diagnostics in the drawer: AF state, the AF regions the camera actually uses (drawn on
+  the image) and the active physical lens; a debug button saves 10-frame fusion bursts.
 
 ### 2.5.2 — 2026-10-10
 - **First connection fixed** — on a phone that had never linked that camera, connecting
