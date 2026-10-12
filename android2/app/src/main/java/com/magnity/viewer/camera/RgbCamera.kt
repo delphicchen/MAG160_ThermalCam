@@ -1,6 +1,8 @@
 package com.magnity.viewer.camera
 
 import android.content.Context
+import android.graphics.Rect
+import android.graphics.RectF
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
@@ -86,12 +88,33 @@ class RgbCamera(private val context: Context) {
     @Volatile var afScanning = false; private set
     /** The centred AF window was accepted by the HAL (else AF weights the whole frame). */
     @Volatile var afCentreRegion = false; private set
+    /** Last CONTROL_AF_STATE (null = not reported) — diagnostics: tells a settled
+     *  focus from one the AF gave up on (PASSIVE_UNFOCUSED / NOT_FOCUSED_LOCKED). */
+    @Volatile var afState: Int? = null; private set
+    /** AF regions the HAL reports in its capture results, normalized to the sensor
+     *  active array (sensor orientation). Null = not reported; empty = no weighted
+     *  region, i.e. the HAL meters the whole frame. */
+    @Volatile var halAfRegions: List<RectF>? = null; private set
+    /** tan of the half field of view along the sensor's x and y (lens intrinsics, else
+     *  focal length / sensor size); null = not reported. Assumes the 4:3 analysis stream
+     *  spans the whole sensor — it is what the fusion zoom is estimated from. */
+    @Volatile var fovTan: Pair<Float, Float>? = null; private set
+    /** SENSOR_INFO_ACTIVE_ARRAY_SIZE, what the AF regions are expressed in. */
+    @Volatile private var activeArray: Rect? = null
+    private var lastHalRegions: Array<MeteringRectangle>? = null
+    /** Physical lens the logical camera is streaming from (null = not a logical
+     *  multi-camera, or not reported) — a hidden switch to another lens changes what
+     *  the raw focus reading means. [lensSwitches] counts changes since start, so a
+     *  brief switch between two 2 Hz UI polls still shows. */
+    @Volatile var activePhysicalId: String? = null; private set
+    @Volatile var lensSwitches = 0; private set
     private val focusRing = FloatArray(FOCUS_MEDIAN_N)
     private var focusRingN = 0
     private var focusRingPos = 0
 
     /** Camera thread: keep settled readings only, publish their median. */
     private fun onFocusReading(d: Float?, af: Int?) {
+        afState = af
         afActive = af != null && af != CaptureResult.CONTROL_AF_STATE_INACTIVE
         afScanning = af == CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN ||
                      af == CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN
@@ -101,6 +124,19 @@ class RgbCamera(private val context: Context) {
         if (focusRingN < FOCUS_MEDIAN_N) focusRingN++
         val sorted = focusRing.copyOf(focusRingN).also { it.sort() }
         focusDiopters = sorted[focusRingN / 2]
+    }
+
+    /** Camera thread: publish the AF regions the HAL says it used (diagnostics). */
+    private fun onAfRegions(regions: Array<MeteringRectangle>?) {
+        val arr = activeArray ?: return
+        if (regions != null && regions.contentEquals(lastHalRegions)) return
+        lastHalRegions = regions
+        halAfRegions = regions?.filter { it.meteringWeight > 0 && it.width > 0 && it.height > 0 }
+            ?.map { m ->
+                RectF(m.x.toFloat() / arr.width(), m.y.toFloat() / arr.height(),
+                      (m.x + m.width).toFloat() / arr.width(),
+                      (m.y + m.height).toFloat() / arr.height())
+            }
     }
 
     /** Bind the analysis stream. Main thread only; CAMERA permission must be granted. */
@@ -146,6 +182,11 @@ class RgbCamera(private val context: Context) {
                         ) {
                             onFocusReading(result.get(CaptureResult.LENS_FOCUS_DISTANCE),
                                            result.get(CaptureResult.CONTROL_AF_STATE))
+                            onAfRegions(result.get(CaptureResult.CONTROL_AF_REGIONS))
+                            result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)?.let { id ->
+                                if (activePhysicalId != null && id != activePhysicalId) lensSwitches++
+                                activePhysicalId = id
+                            }
                         }
                     })
                 val analysis = builder.build()
@@ -197,6 +238,19 @@ class RgbCamera(private val context: Context) {
                         CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
                     val arr = info.getCameraCharacteristic(
                         CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                    activeArray = arr
+                    val k = info.getCameraCharacteristic(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
+                    val pre = info.getCameraCharacteristic(
+                        CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE) ?: arr
+                    val f = info.getCameraCharacteristic(
+                        CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+                    val phys = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    // intrinsics are in pre-correction array pixels
+                    fovTan = if (k != null && k.size >= 2 && k[0] > 0f && k[1] > 0f && pre != null)
+                        (pre.width() / 2f / k[0]) to (pre.height() / 2f / k[1])
+                    else if (f != null && f > 0f && phys != null)
+                        (phys.width / 2f / f) to (phys.height / 2f / f)
+                    else null
                     if (maxAf > 0 && arr != null) {
                         val rw = (arr.width() * AF_CENTER_FRAC).toInt()
                         val rh = (arr.height() * AF_CENTER_FRAC).toInt()
@@ -230,6 +284,12 @@ class RgbCamera(private val context: Context) {
         afActive = false
         afScanning = false
         afCentreRegion = false
+        afState = null
+        halAfRegions = null
+        lastHalRegions = null
+        activeArray = null
+        activePhysicalId = null
+        lensSwitches = 0
         focusRingN = 0
         focusRingPos = 0
         focusCalibration = null

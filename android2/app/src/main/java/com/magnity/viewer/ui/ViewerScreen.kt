@@ -2,6 +2,7 @@ package com.magnity.viewer.ui
 
 import android.Manifest
 import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.CaptureResult
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -20,6 +21,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -27,6 +29,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -58,6 +61,8 @@ internal val HOT = Color(0xFFF85149)
 internal val COLD = Color(0xFF3FB950)
 /** AF window / attention colour. */
 internal val WARN = Color(0xFFD6A93D)
+/** AF regions the HAL reports using (diagnostics, next to the requested [WARN] window). */
+internal val HAL_AF = Color(0xFF39C5CF)
 
 @Composable
 fun ViewerScreen(vm: ViewerViewModel = viewModel()) {
@@ -73,6 +78,9 @@ fun ViewerScreen(vm: ViewerViewModel = viewModel()) {
             ModalDrawerSheet(drawerContainerColor = Color(0xFF161B22)) {
                 DrawerControls(vm, onAlign = {
                     vm.fusionAligning = true
+                    scope.launch { drawerState.close() }
+                }, onWizard = {
+                    vm.startWizard()
                     scope.launch { drawerState.close() }
                 }, onCloseDrawer = { scope.launch { drawerState.close() } })
             }
@@ -136,11 +144,13 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp)
         }
 
-        if (vm.fusionOn && vm.calibPromptActive && !vm.fusionAligning) {
+        if (vm.fusionOn && vm.calibPromptActive && !vm.fusionAligning && vm.wizardStep == null) {
             CalibPromptBar(vm)
         }
 
-        if (vm.fusionOn && vm.fusionAligning) {
+        if (vm.fusionOn && vm.wizardStep != null) {
+            WizardPanel(vm)
+        } else if (vm.fusionOn && vm.fusionAligning) {
             AlignPanel(vm)
         } else {
             // Display range in one fixed-height row: a thin two-thumb bar, draggable in
@@ -280,6 +290,12 @@ private fun ThermalImage(
             val c = Offset(left + (sx + 0.5f) * cellW, top + (sy + 0.5f) * cellH)
             drawLine(Color.White, c - Offset(18f, 0f), c + Offset(18f, 0f), 3f)
             drawLine(Color.White, c - Offset(0f, 18f), c + Offset(0f, 18f), 3f)
+        }
+        // AF regions the HAL reports — dashed cyan, compare with the requested window
+        fr.afHalBoxes?.forEach { b ->
+            drawRect(HAL_AF, Offset(b.left * dispW, b.top * dispH),
+                     Size((b.right - b.left) * dispW, (b.bottom - b.top) * dispH),
+                     style = Stroke(2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))))
         }
         // visible-camera AF window: what the Auto object distance is measured on
         fr.afBox?.let { b ->
@@ -421,7 +437,7 @@ internal fun Readout(label: String, value: Float?, color: Color, on: Boolean,
 }
 
 @Composable
-private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
+private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: () -> Unit,
                            onCloseDrawer: () -> Unit) {
     Column(
         Modifier.fillMaxHeight().verticalScroll(rememberScrollState()).padding(14.dp),
@@ -624,6 +640,12 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
 
             FocusLine(vm)
 
+            // B1 data collection for image-based triangulation (PLAN_TRIANGULATION.md)
+            OutlinedButton(onClick = { vm.requestFusionDump() }, modifier = Modifier.fillMaxWidth(),
+                           contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Text(stringResource(R.string.fusion_dump, vm.fusionDumpCount), fontSize = 12.sp)
+            }
+
             Text(stringResource(R.string.object_distance), color = DIM, fontSize = 11.sp)
             val distSrc = vm.fusionDistanceSource
             val effSrc = vm.effectiveDistanceSource()
@@ -678,7 +700,10 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit,
                 InvZStopLabels()
             }
 
-            Button(onClick = onAlign, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onWizard, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.wizard_button))
+            }
+            OutlinedButton(onClick = onAlign, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.align_live))
             }
             Text(stringResource(R.string.zoom_offset, vm.fusionZoom, vm.fusionDx, vm.fusionDy),
@@ -785,6 +810,145 @@ private fun AlignPanel(vm: ViewerViewModel) {
     if (saveDlg) SaveSampleDialog(vm, onClose = { saveDlg = false })
 }
 
+/** Metres (or "∞") → invZ; null = invalid. */
+private fun parseDistance(s: String): Float? = when (s.trim().lowercase()) {
+    "∞", "inf", "infinity" -> 0f
+    else -> s.trim().toFloatOrNull()?.takeIf { it > 0f }?.let { 1f / it }
+}
+
+/** Metres as typed into a distance field: "3", "0.5", "∞". */
+private fun distanceField(m: Float): String =
+    if (m.isInfinite()) "∞" else if (m == m.toInt().toFloat()) "${m.toInt()}" else "$m"
+
+/**
+ * Guided calibration (PLAN_CALIBRATION.md): intro, one page per distance — measured
+ * distance first, so X/Y can be pre-set and only nudged — then a summary that checks
+ * every point against the fitted line. Replaces the align panel while it runs.
+ */
+@Composable
+private fun WizardPanel(vm: ViewerViewModel) {
+    val step = vm.wizardStep ?: return
+    val n = ViewerViewModel.WIZARD_STEPS_M.size
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        when {
+            step == 0 -> {
+                Text(stringResource(R.string.wizard_title), color = FG, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.wizard_intro), color = DIM, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.wizardCancel() }, modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                    Button(onClick = { vm.wizardBegin() }, modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.wizard_start))
+                    }
+                }
+            }
+            step <= n -> WizardCapture(vm, step, n)
+            else -> WizardSummary(vm)
+        }
+    }
+}
+
+@Composable
+private fun WizardCapture(vm: ViewerViewModel, step: Int, n: Int) {
+    val suggest = ViewerViewModel.WIZARD_STEPS_M[step - 1]
+    var text by remember(step) { mutableStateOf(distanceField(suggest)) }
+    var dlg by remember(step) { mutableStateOf(true) }     // measure first, then align
+    val invZ = parseDistance(text)
+    Text(stringResource(R.string.wizard_step, step, n), color = FG, fontWeight = FontWeight.Bold)
+    Text(if (step == 1) stringResource(R.string.wizard_far_hint)
+         else stringResource(R.string.wizard_near_hint, distanceField(suggest) + " m"),
+         color = DIM, fontSize = 11.sp)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(R.string.wizard_distance, invZ?.let { vm.distanceText(it) } ?: "?"),
+             color = ACCENT, fontSize = 12.sp)
+        TextButton(onClick = { dlg = true }) { Text(stringResource(R.string.wizard_edit), fontSize = 12.sp) }
+        vm.suggestedInvZ()?.let {
+            Text(stringResource(R.string.wizard_lens_estimate, vm.distanceText(it)), color = DIM, fontSize = 10.sp)
+        }
+    }
+    // ZOOM is the lenses' FOV ratio: estimated, fine-tuned once at the far step, then kept
+    if (step == 1) AlignSlider("ZOOM", vm.fusionZoom, 1f..3f, "×%.2f") { vm.fusionZoom = it }
+    AlignSlider("X", vm.fusionDx, -0.3f..0.3f, "%+.3f") { vm.fusionDx = it }
+    AlignSlider("Y", vm.fusionDy, -0.3f..0.3f, "%+.3f") { vm.fusionDy = it }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { vm.wizardCancel() }, modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.cancel))
+        }
+        if (step > 1) OutlinedButton(onClick = { vm.wizardSkip() }, modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.wizard_skip))
+        }
+        Button(onClick = { invZ?.let { vm.wizardSave(it) } }, enabled = invZ != null,
+               modifier = Modifier.weight(1f)) { Text(stringResource(R.string.wizard_save)) }
+    }
+    if (dlg) WizardDistanceDialog(text, if (step == 1) listOf("3", "5", "∞") else listOf(distanceField(suggest)),
+        onOk = { t -> text = t; dlg = false; parseDistance(t)?.let { vm.wizardSeed(it) } },
+        onDismiss = { dlg = false })
+}
+
+@Composable
+private fun WizardDistanceDialog(initial: String, chips: List<String>, onOk: (String) -> Unit,
+                                 onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    var error by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.wizard_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.wizard_dist_prompt), color = DIM, fontSize = 12.sp)
+                TextField(value = text, onValueChange = { text = it; error = false }, singleLine = true,
+                          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    chips.forEach { v -> Chip(v, text.trim() == v, Modifier.weight(1f)) { text = v; error = false } }
+                }
+                if (error) Text(stringResource(R.string.enter_metres), color = HOT, fontSize = 11.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (parseDistance(text) == null) error = true else onOk(text.trim()) }) {
+                Text(stringResource(android.R.string.ok))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+private fun WizardSummary(vm: ViewerViewModel) {
+    val taken = vm.wizardTaken.entries.sortedBy { it.key }
+    val fit = FusionCalibration.fit(taken.map { it.value })
+    val tw = vm.lastFrame?.w ?: 160
+    val th = vm.lastFrame?.h ?: 120
+    var anyOff = false
+    Text(stringResource(R.string.wizard_summary), color = FG, fontWeight = FontWeight.Bold)
+    taken.forEach { (step, s) ->
+        val r = if (fit.lineFit) fit.residualPx(s, tw, th) else null
+        val off = r != null && r > ViewerViewModel.WIZARD_MAX_RESIDUAL_PX
+        if (off) anyOff = true
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text((r?.let { stringResource(R.string.wizard_point, vm.distanceText(s.invZ), it) }
+                    ?: vm.distanceText(s.invZ)) +
+                 (if (s.focusD == null) " " + stringResource(R.string.wizard_focus_unused) else ""),
+                 color = if (off) Color(0xFFD6A93D) else FG, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            TextButton(onClick = { vm.wizardRedo(step) }) { Text(stringResource(R.string.wizard_redo), fontSize = 12.sp) }
+        }
+    }
+    val enough = taken.map { it.value.invZ }.distinct().size >= 2
+    when {
+        !enough -> Text(stringResource(R.string.wizard_need_two), color = Color(0xFFD6A93D), fontSize = 11.sp)
+        anyOff -> Text(stringResource(R.string.wizard_redo_hint), color = Color(0xFFD6A93D), fontSize = 11.sp)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { vm.wizardCancel() }, modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.cancel))
+        }
+        Button(onClick = { vm.wizardFinish() }, enabled = enough, modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.wizard_finish))
+        }
+    }
+}
+
 /** Distance entry for saving the current alignment as a calibration sample. */
 @Composable
 private fun SaveSampleDialog(vm: ViewerViewModel, onClose: () -> Unit) {
@@ -795,12 +959,7 @@ private fun SaveSampleDialog(vm: ViewerViewModel, onClose: () -> Unit) {
         } ?: "3")
     }
     var error by remember { mutableStateOf(false) }
-
-    /** Metres (or "∞") → invZ; null = invalid. */
-    fun parse(s: String): Float? = when (s.trim().lowercase()) {
-        "∞", "inf", "infinity" -> 0f
-        else -> s.trim().toFloatOrNull()?.takeIf { it > 0f }?.let { 1f / it }
-    }
+    val parse = ::parseDistance
 
     AlertDialog(
         onDismissRequest = onClose,
@@ -872,6 +1031,20 @@ private fun focusCalName(c: Int?): String = when (c) {
     else -> "UNCALIBRATED"
 }
 
+/** CONTROL_AF_STATE in words; null = not reported. */
+@Composable
+private fun afStateName(state: Int?): String? = when (state) {
+    null -> null
+    CaptureResult.CONTROL_AF_STATE_INACTIVE -> stringResource(R.string.af_inactive)
+    CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN,
+    CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN -> stringResource(R.string.focusing)
+    CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED,
+    CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> stringResource(R.string.af_focused)
+    CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED,
+    CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> stringResource(R.string.af_unfocused)
+    else -> "AF $state"
+}
+
 /** One small diagnostics line: what the lens reports about its own focus distance. */
 @Composable
 private fun FocusLine(vm: ViewerViewModel) {
@@ -882,8 +1055,13 @@ private fun FocusLine(vm: ViewerViewModel) {
         d == null || d < 0f -> stringResource(R.string.focus_cal_not_reported, cal)
         else -> stringResource(R.string.focus_reading, cal, d) +
                 (vm.suggestedInvZ()?.let { " (" + vm.distanceText(it) + ")" } ?: "") +
-                (if (vm.afScanning) " · " + stringResource(R.string.focusing)
-                 else if (vm.afActive) " · " + stringResource(R.string.centre_af) else "")
+                (afStateName(vm.afState)?.let { " · $it" } ?: "") +
+                "\n" + stringResource(R.string.hal_af_region, when (val n = vm.halAfRegionCount) {
+                    null -> stringResource(R.string.hal_af_not_reported)
+                    0 -> stringResource(R.string.hal_af_whole_frame)
+                    else -> stringResource(R.string.hal_af_boxes, n)
+                }) +
+                (vm.activePhysicalId?.let { " · " + stringResource(R.string.physical_lens, it, vm.lensSwitches) } ?: "")
     }
     Text(text, color = DIM, fontSize = 10.sp)
 }

@@ -45,14 +45,17 @@ object FusionCalibration {
     }
 
     /**
-     * Fit over the samples. [at] interpolates between them (what the overlay uses);
-     * the least-squares lines (zoom = sample mean, dx/dy against invZ, a constant for
-     * a single distance) give the parallax slope outside the samples and the per-sample
-     * residual shown in the drawer. [usable] is false until the first sample exists.
+     * Fit over the samples: least-squares lines (zoom = sample mean, dx/dy against invZ,
+     * a constant for a single distance) and the per-sample residual shown in the drawer.
+     * [at] is what the overlay uses. [usable] is false until the first sample exists.
      */
     class Fit(samples: List<CalibSample>) {
         val count = samples.size
         val usable = samples.isNotEmpty()
+        /** Three or more distances: the overlay follows the lines. Parallax is exactly linear
+         *  in 1/Z, so the line averages out each sample's hand-alignment error where passing
+         *  through every sample would copy it (PLAN_CALIBRATION.md). */
+        val lineFit = samples.map { it.invZ }.distinct().size >= 3
         val zoom: Float = if (usable) samples.map { it.zoom }.average().toFloat() else 0f
 
         private val dxLine = line(samples.map { it.invZ }, samples.map { it.dx })
@@ -71,12 +74,13 @@ object FusionCalibration {
             .sortedBy { it[0] }
 
         /**
-         * Registration (zoom, dx, dy) at [invZ]: piecewise linear between neighbouring
-         * samples, so every saved distance is matched exactly. Beyond the nearest/farthest
-         * sample the offsets continue from that sample along the fitted parallax slope
-         * (kx, ky) and zoom holds — no wild extrapolation off one noisy segment.
+         * Registration (zoom, dx, dy) at [invZ]. With [lineFit], the fitted lines. With one
+         * or two distances, piecewise linear between the samples, so each is matched
+         * exactly; beyond the nearest/farthest sample the offsets continue from that sample
+         * along the fitted parallax slope (kx, ky) and zoom holds.
          */
         fun at(invZ: Float): Triple<Float, Float, Float> {
+            if (lineFit) return Triple(zoom, dxAt(invZ), dyAt(invZ))
             val first = pts.first(); val last = pts.last()
             if (invZ <= first[0])
                 return Triple(first[1], first[2] + kx * (invZ - first[0]),
@@ -127,6 +131,19 @@ object FusionCalibration {
             return (z0 + (z1 - z0) * (f - f0) / (f1 - f0)).coerceAtLeast(0f)
         }
     }
+
+    /**
+     * Whether lens reading [focusD] at [invZ] keeps [FocusMap] monotonic with the readings
+     * already in [samples]: a nearer object must not read a smaller focus value. A lens asked
+     * to focus closer than it can (or fooled by a plain or shiny target) reports such
+     * readings, and one of them would bend the map for every distance around it. Equal
+     * readings at different distances are fine — far away the lens stops moving.
+     */
+    fun focusConsistent(focusD: Float, invZ: Float, samples: List<CalibSample>): Boolean =
+        samples.all { s ->
+            val f = s.focusD
+            f == null || kotlin.math.abs(s.invZ - invZ) < 1e-4f || (focusD - f) * (invZ - s.invZ) >= 0f
+        }
 
     /** Metres for an inverse distance; at or below the noise floor = ∞. */
     fun distanceM(invZ: Float): Float =

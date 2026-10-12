@@ -71,6 +71,9 @@ data class FrameResult(
     /** The visible camera's AF window in normalized [bitmap] coordinates — the patch the
      *  AUTO object distance is measured on. Null = fusion off or the crosshair is off. */
     val afBox: android.graphics.RectF? = null,
+    /** AF regions the HAL reports using, in the same coordinates as [afBox]
+     *  (diagnostics). Null = not reported, fusion off or the crosshair is off. */
+    val afHalBoxes: List<android.graphics.RectF>? = null,
 )
 
 /**
@@ -106,6 +109,16 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         private const val ST_REC = 6
         /** Smoothing of the stage timings (≈ the last 10 frames). */
         private const val STAGE_EMA = 0.1f
+        /** Calibration wizard: suggested distance per step (m; the first, far one also takes ∞). */
+        val WIZARD_STEPS_M = floatArrayOf(3f, 1f, 0.5f, 0.3f)
+        /** A wizard sample further than this from the fitted line is flagged for a redo. */
+        const val WIZARD_MAX_RESIDUAL_PX = 3f
+        /** Thermal lens focal length in native pixels, for the starting zoom: measured once
+         *  (2026-10-12) as zoom 2.38 against a phone camera whose half-FOV tangent is 0.560
+         *  across the upright frame (PLAN_TRIANGULATION.md). */
+        private const val THERMAL_FOCAL_PX = 255f
+        /** Consecutive frames one press of the fusion debug dump saves. */
+        private const val FUSION_DUMP_FRAMES = 10
     }
 
     enum class Upscaler { BICUBIC, ANIME4K, NCNN }
@@ -249,6 +262,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var afScanning by mutableStateOf(false); private set
     /** The centred AF window is in force (else the HAL meters the whole frame). */
     var afCentreRegion by mutableStateOf(false); private set
+    /** Last CONTROL_AF_STATE, null = not reported. */
+    var afState by mutableStateOf<Int?>(null); private set
+    /** How many weighted AF regions the HAL reports; 0 = whole frame, null = not reported. */
+    var halAfRegionCount by mutableStateOf<Int?>(null); private set
+    /** Physical lens behind the logical camera (null = not reported) and how often it changed. */
+    var activePhysicalId by mutableStateOf<String?>(null); private set
+    var lensSwitches by mutableStateOf(0); private set
     private val rgbCameraLazy = lazy { RgbCamera(getApplication()) }
     private val rgbCamera by rgbCameraLazy
     private var appVisible = true
@@ -323,6 +343,10 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     afActive = rgbCamera.afActive
                     afScanning = rgbCamera.afScanning
                     afCentreRegion = rgbCamera.afCentreRegion
+                    afState = rgbCamera.afState
+                    halAfRegionCount = rgbCamera.halAfRegions?.size
+                    activePhysicalId = rgbCamera.activePhysicalId
+                    lensSwitches = rgbCamera.lensSwitches
                     checkCalibRange()
                 }
                 delay(500)
@@ -544,7 +568,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     fun addCalibSample(invZ: Float, zoom: Float, dx: Float, dy: Float) {
         val rest = calibSamples.filter { kotlin.math.abs(it.invZ - invZ) > 1e-4f }
         // record the lens reading too: it teaches AUTO the focus → distance map
-        calibSamples = (rest + FusionCalibration.CalibSample(invZ, zoom, dx, dy, focusDiopters))
+        calibSamples = (rest + FusionCalibration.CalibSample(invZ, zoom, dx, dy, checkedFocus(invZ, rest)))
             .sortedByDescending { it.invZ }
         fusionCalibJson = FusionCalibration.encodeSamples(calibSamples)
         calibPromptActive = false
@@ -642,6 +666,113 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         fusionCalibJson = FusionCalibration.encodeSamples(calibSamples)
     }
 
+    /** The lens reading to store with a sample at [invZ], or null (with a notice) when it
+     *  contradicts the readings already in [others] — see [FusionCalibration.focusConsistent]. */
+    private fun checkedFocus(invZ: Float, others: List<FusionCalibration.CalibSample>): Float? {
+        val d = focusDiopters ?: return null
+        if (FusionCalibration.focusConsistent(d, invZ, others)) return d
+        notice = str(R.string.n_focus_dropped, distanceText(invZ))
+        return null
+    }
+
+    // ---- calibration wizard (PLAN_CALIBRATION.md, B) ------------------------------
+
+    /** Wizard page: null = not running, 0 = intro, 1..[WIZARD_STEPS_M].size = one distance
+     *  each, past that = the summary. */
+    var wizardStep by mutableStateOf<Int?>(null); private set
+    /** Samples taken in this run, by step; the saved calibration changes only on finish. */
+    var wizardTaken by mutableStateOf(mapOf<Int, FusionCalibration.CalibSample>()); private set
+    private var wizardBackup: Triple<Float, Float, Float>? = null
+
+    /** Starting zoom from the two lenses' fields of view (the phone reports its own; see
+     *  [THERMAL_FOCAL_PX]); null = the phone camera doesn't report its optics. */
+    fun estimatedZoom(): Float? {
+        val (tx, ty) = rgbCamera.fovTan ?: return null
+        val ow = lastFrame?.w ?: return null           // oriented thermal width
+        // the upright frame's width runs along the sensor's y when it is mounted 90°/270°
+        val vis = if (fusionRotation == 90 || fusionRotation == 270) ty else tx
+        return (vis / (ow / 2f / THERMAL_FOCAL_PX)).takeIf { it in 1f..3f }
+    }
+
+    fun startWizard() {
+        wizardBackup = Triple(fusionZoom, fusionDx, fusionDy)
+        wizardTaken = emptyMap()
+        fusionAligning = false
+        wizardStep = 0
+    }
+
+    /** Intro → first distance: zoom from the optics, offsets from the old calibration if any. */
+    fun wizardBegin() {
+        estimatedZoom()?.let { fusionZoom = it }
+        calibFit.takeIf { it.usable }?.let { f -> fusionDx = f.dxAt(0f); fusionDy = f.dyAt(0f) }
+        fusionAligning = true
+        wizardStep = 1
+    }
+
+    /** The distance for this step was entered: pre-set X/Y from what is known so far, so
+     *  only a nudge is left — the line once two distances exist, else the far sample. */
+    fun wizardSeed(invZ: Float) {
+        val ss = wizardTaken.values.toList()
+        when {
+            ss.map { it.invZ }.distinct().size >= 2 ->
+                FusionCalibration.fit(ss).let { fusionDx = it.dxAt(invZ); fusionDy = it.dyAt(invZ) }
+            ss.isNotEmpty() -> { fusionDx = ss[0].dx; fusionDy = ss[0].dy }
+        }
+    }
+
+    /** Save the current alignment for this step at the measured [invZ]; ZOOM stays from the
+     *  first step on, so every sample shares it. */
+    fun wizardSave(invZ: Float) {
+        val step = wizardStep ?: return
+        val others = wizardTaken.filterKeys { it != step }
+        val s = FusionCalibration.CalibSample(invZ, fusionZoom, fusionDx, fusionDy,
+                                              checkedFocus(invZ, others.values.toList()))
+        wizardTaken = others + (step to s)
+        if (s.focusD != null || focusDiopters == null) notice = str(R.string.n_wizard_saved, distanceText(invZ))
+        wizardAdvance()
+    }
+
+    fun wizardSkip() = wizardAdvance()
+
+    /** Go to the next step that has no sample yet, else the summary. */
+    private fun wizardAdvance() {
+        val n = WIZARD_STEPS_M.size
+        val next = (1..n).firstOrNull { it !in wizardTaken && it > (wizardStep ?: 0) }
+        wizardStep = next ?: (n + 1)
+        fusionAligning = next != null
+    }
+
+    /** Summary → take one step again. */
+    fun wizardRedo(step: Int) {
+        wizardTaken = wizardTaken - step
+        wizardStep = step
+        fusionAligning = true
+    }
+
+    /** Replace the calibration with this run's samples and let the lens drive the distance. */
+    fun wizardFinish() {
+        val ss = wizardTaken.values.sortedByDescending { it.invZ }
+        if (ss.map { it.invZ }.distinct().size < 2) return
+        calibSamples = ss
+        fusionCalibJson = FusionCalibration.encodeSamples(calibSamples)
+        fusionDistanceSource = FusionCalibration.DistanceSource.AUTO
+        calibPromptActive = false
+        wizardEnd()
+        notice = str(R.string.n_wizard_done)
+    }
+
+    fun wizardCancel() {
+        wizardBackup?.let { (z, x, y) -> fusionZoom = z; fusionDx = x; fusionDy = y }
+        wizardEnd()
+    }
+
+    private fun wizardEnd() {
+        wizardStep = null
+        wizardTaken = emptyMap()
+        wizardBackup = null
+        fusionAligning = false
+    }
+
     // exponential smoothing of the AUTO 1/Z so AF hunting doesn't jitter the overlay
     private var autoInvZ = 0f
     private var lastDistSrc: FusionCalibration.DistanceSource? = null
@@ -678,8 +809,80 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                else Registration(fusionZoom, fusionDx, fusionDy)
     }
 
+    /** Visible frame, registration and 1/Z the last [fuse] used (processing thread). */
+    private var lastFuse: Triple<RgbCamera.LumaFrame, Registration, Float>? = null
+
+    // ---- fusion debug dump (PLAN_TRIANGULATION.md, B1) ----------------------------
+
+    /** Frames of the current burst still to write; set from the UI, counted down by the processing loop. */
+    @Volatile private var fusionDumpLeft = 0
+    private var fusionDumpStamp = ""
+    var fusionDumpCount by mutableStateOf(0); private set
+
+    fun requestFusionDump() { if (fusionDumpLeft == 0) fusionDumpLeft = FUSION_DUMP_FRAMES }
+
+    /**
+     * Processing thread: the raw oriented thermal field (°C), the same field after the
+     * temporal/spatial denoisers, the visible frame of the same fuse() turned upright by
+     * the mounting rotation, and the registration in effect, as
+     * `<files>/fusion_dump/fd_<burst time>_<k>.{f32,dn.f32,u8,json}` for offline matching.
+     */
+    private fun dumpFusion(raw: FloatArray, dn: FloatArray, ow: Int, oh: Int) {
+        val (fr, reg, invZ) = lastFuse ?: return
+        val k = FUSION_DUMP_FRAMES - fusionDumpLeft
+        if (k == 0) fusionDumpStamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss_SSS", java.util.Locale.US).format(java.util.Date())
+        val last = --fusionDumpLeft == 0
+        val rot = fusionRotation
+        val (vis, uw, uh) = uprightLuma(fr, rot)
+        val therm = raw.copyOf()
+        val thermDn = dn.copyOf()
+        val meta = "{\"thermal_w\":$ow,\"thermal_h\":$oh,\"visible_w\":$uw,\"visible_h\":$uh," +
+            "\"fusion_rotation\":$rot,\"thermal_rotation\":$rotation,\"thermal_mirror\":$mirror," +
+            "\"zoom\":${reg.zoom},\"dx\":${reg.dx},\"dy\":${reg.dy},\"invZ\":$invZ," +
+            "\"distance_source\":\"${effectiveDistanceSource()}\",\"focus_diopters\":${rgbCamera.focusDiopters}," +
+            "\"af_state\":${rgbCamera.afState}," +
+            "\"calib\":${FusionCalibration.encodeSamples(calibSamples)}}\n"
+        val dir = java.io.File(getApplication<Application>().getExternalFilesDir(null), "fusion_dump")
+        val stamp = "${fusionDumpStamp}_$k"
+        fun f32(a: FloatArray) = java.nio.ByteBuffer.allocate(a.size * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            .also { bb -> a.forEach { bb.putFloat(it) } }.array()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                dir.mkdirs()
+                java.io.File(dir, "fd_$stamp.f32").writeBytes(f32(therm))
+                java.io.File(dir, "fd_$stamp.dn.f32").writeBytes(f32(thermDn))
+                java.io.File(dir, "fd_$stamp.u8").writeBytes(vis)
+                java.io.File(dir, "fd_$stamp.json").writeText(meta)
+            }.onFailure { Log.e(TAG, "fusion dump failed", it) }
+            if (last) {
+                fusionDumpCount++
+                notice = str(R.string.n_fusion_dumped, fusionDumpCount)
+            }
+        }
+    }
+
+    /** Visible luma turned upright by the mounting rotation [rot]: (pixels, width, height). */
+    private fun uprightLuma(fr: RgbCamera.LumaFrame, rot: Int): Triple<ByteArray, Int, Int> {
+        val lw = fr.width; val lh = fr.height
+        val uw = if (rot == 90 || rot == 270) lh else lw
+        val uh = if (rot == 90 || rot == 270) lw else lh
+        val out = ByteArray(uw * uh)
+        for (uy in 0 until uh) for (ux in 0 until uw) {
+            // same sensor index as Fusion's rowPart + colPart
+            val i = when (rot) {
+                90 -> uy + (lh - 1 - ux) * lw
+                180 -> (lh - 1 - uy) * lw + (lw - 1 - ux)
+                270 -> (lw - 1 - uy) + ux * lw
+                else -> uy * lw + ux
+            }
+            out[uy * uw + ux] = fr.data[i]
+        }
+        return Triple(out, uw, uh)
+    }
+
     /** [fuse] publishes the AF window for the frame it just built (processing thread). */
     private var afBoxOut: android.graphics.RectF? = null
+    private var afHalBoxesOut: List<android.graphics.RectF>? = null
 
     /**
      * The visible camera's AF window in normalized coordinates of the composed frame.
@@ -694,6 +897,30 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val cy = if (wide) 0.5f else 0.5f - reg.dy * reg.zoom
         val half = if (wide) frac / 2f else frac * reg.zoom / 2f
         return android.graphics.RectF(cx - half, cy - half, cx + half, cy + half)
+    }
+
+    /**
+     * The HAL-reported AF regions ([RgbCamera.halAfRegions], sensor-normalized) in the
+     * composed frame's coordinates, for comparing with [afBox]. Sensor → upright by the
+     * mounting rotation (the same mapping as Fusion's row/col parts), then the overlay
+     * projection n_disp = (n_vis − 0.5 − d)·zoom + 0.5; wide search is the upright frame.
+     */
+    private fun afHalBoxes(reg: Registration, wide: Boolean): List<android.graphics.RectF>? {
+        if (!fusionCrosshair) return null
+        val regions = rgbCamera.halAfRegions ?: return null
+        fun up(sx: Float, sy: Float): Pair<Float, Float> = when (fusionRotation) {
+            90 -> (1f - sy) to sx
+            180 -> (1f - sx) to (1f - sy)
+            270 -> sy to (1f - sx)
+            else -> sx to sy
+        }
+        fun disp(n: Float, d: Float) = if (wide) n else (n - 0.5f - d) * reg.zoom + 0.5f
+        return regions.map { r ->
+            val (ax, ay) = up(r.left, r.top)
+            val (bx, by) = up(r.right, r.bottom)
+            android.graphics.RectF(disp(minOf(ax, bx), reg.dx), disp(minOf(ay, by), reg.dy),
+                                   disp(maxOf(ax, bx), reg.dx), disp(maxOf(ay, by), reg.dy))
+        }
     }
 
     /** Temporally smoothed EDGES map in sensor pixels — what compose() samples. */
@@ -714,10 +941,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private fun fuse(img: ArgbImage, gate: FloatArray?, gw: Int, gh: Int)
             : Pair<ArgbImage, android.graphics.RectF?>? {
         afBoxOut = null
+        afHalBoxesOut = null
         val fr = rgbCamera.latest() ?: return null
         val invZ = currentInvZ()
         val reg = registration(invZ)
+        lastFuse = Triple(fr, reg, invZ)
         afBoxOut = afBox(reg, fusionMode == Fusion.Mode.SEARCH)
+        afHalBoxesOut = afHalBoxes(reg, fusionMode == Fusion.Mode.SEARCH)
         fusionDistanceLabel = if (invZ <= 1e-4f) "∞" else "≈" + distanceText(invZ)
         val w = img.w; val h = img.h
         if (fusionMode == Fusion.Mode.SEARCH) {
@@ -883,6 +1113,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         t = lap(ST_UP, t)
         var inset: android.graphics.RectF? = null
         var afWindow: android.graphics.RectF? = null
+        var afHal: List<android.graphics.RectF>? = null
         if (fusionOn) {
             // EDGES: gate the overlay by the thermal gradient so visible structure
             // only fills flat thermal areas (fusion is display-only; the readouts
@@ -891,6 +1122,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 thermalGate(oriented, ow, oh, shi - slo) else null
             fuse(img, gate, ow, oh)?.let { (i, r) -> img = i; inset = r }
             afWindow = afBoxOut
+            afHal = afHalBoxesOut
+            if (fusionDumpLeft > 0) dumpFusion(raw, oriented, ow, oh)
         }
         t = lap(ST_FUSE, t)
         // the one copy of the frame: every stage above worked on reused pixel buffers
@@ -908,6 +1141,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             temps = raw,
             inset = inset,
             afBox = afWindow,
+            afHalBoxes = afHal,
         )
     }
 
