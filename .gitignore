@@ -28,6 +28,9 @@ android2/recon/factory_gain_offset.npz
 android2/recon/factory_nuc_tables.npz
 
 # per-camera / personal captures (not portable between cameras)
+# fusion triangulation captures: photos of a private room + per-camera data
+recon/triangulation/data_*/*
+!recon/triangulation/data_*/README.md
 gain_nuc.npz
 flatfield.npy
 *.ddt
