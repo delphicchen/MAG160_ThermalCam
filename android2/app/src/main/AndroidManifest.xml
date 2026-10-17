@@ -10,6 +10,8 @@
     <!-- optional visible-camera fusion; asked for only when the user turns it on -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- only to download a Thermal SR model from the GitHub `sr-models` release on a tap -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:label="${appLabel}"

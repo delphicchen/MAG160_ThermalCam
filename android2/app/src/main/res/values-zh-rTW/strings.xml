@@ -20,6 +20,8 @@
     <string name="use_builtin">改用內建</string>
     <string name="sr_model_builtin">Thermal SR 模型：內建</string>
     <string name="sr_model_imported">Thermal SR 模型：已匯入（%1$s）</string>
+    <string name="download_sr_model">下載 %1$s 的 Thermal SR 模型（%2$s MB）</string>
+    <string name="sr_downloading">正在下載 SR 模型… %1$s / %2$s MB</string>
     <string name="display_resolution">顯示解析度</string>
     <string name="rotate">旋轉</string>
     <string name="mirror">鏡像 ↔</string>
@@ -149,6 +151,8 @@
     <string name="n_sr_imported">SR 模型已匯入（%1$s）—— 選 Thermal SR 即可使用</string>
     <string name="n_sr_import_failed">SR 模型匯入失敗：%1$s</string>
     <string name="n_using_builtin">已改用內建 SR 模型</string>
+    <string name="n_sr_download_failed">SR 模型下載失敗：%1$s</string>
+    <string name="n_sr_download_cancelled">已取消 SR 模型下載</string>
     <string name="n_snapshot_saved">照片已存到 Pictures/MagViewer</string>
     <string name="n_snapshot_failed">拍照失敗</string>
     <string name="n_snapshot_failed_msg">拍照失敗：%1$s</string>

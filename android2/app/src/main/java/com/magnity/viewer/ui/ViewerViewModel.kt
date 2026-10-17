@@ -39,6 +39,7 @@ import com.magnity.viewer.pipeline.FusionCalibration
 import com.magnity.viewer.pipeline.ImageOps
 import com.magnity.viewer.pipeline.NcnnUpscaler
 import com.magnity.viewer.pipeline.Palettes
+import com.magnity.viewer.pipeline.SrModelDownloader
 import com.magnity.viewer.pipeline.TemporalDenoise
 import com.magnity.viewer.usb.MagDeviceWrapper
 import kotlin.math.abs
@@ -1275,6 +1276,60 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             srImportedSizes = emptyList()
             notice = str(R.string.n_using_builtin)
         }
+    }
+
+    /** The `sr-models` package to offer for the current frame size (none installed, or a
+     *  newer one than downloaded); null when there is nothing to offer. */
+    var srRemote by mutableStateOf<SrModelDownloader.Package?>(null); private set
+    /** Bytes done / total of the running model download; null when none runs. */
+    var srDownload by mutableStateOf<Pair<Long, Long>?>(null); private set
+    @Volatile private var srManifest: List<SrModelDownloader.Package>? = null
+    private var srDownloadJob: Job? = null
+
+    /** Look up the current frame size in `models.json` (fetched once per run; a failure,
+     *  e.g. offline, is retried on the next call). Network only — nothing is downloaded. */
+    fun checkSrRemote() {
+        val fr = lastFrame ?: return
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val list = srManifest ?: runCatching { SrModelDownloader.fetchManifest() }
+                .onFailure { Log.i(TAG, "sr-models manifest: ${it.message}") }
+                .getOrNull()?.also { srManifest = it } ?: return@launch
+            srRemote = list.firstOrNull { "${fr.w}x${fr.h}" in it.sizes }?.takeIf {
+                val have = SrModelDownloader.installedVersion(NcnnUpscaler.modelDir(ctx), it.file)
+                if (have > 0) it.version > have else !NcnnUpscaler.isInstalled(ctx, fr.w, fr.h)
+            }
+        }
+    }
+
+    fun downloadSrModel() {
+        val pkg = srRemote ?: return
+        if (srDownloadJob?.isActive == true) return
+        val ctx = getApplication<Application>()
+        srDownload = 0L to pkg.bytes
+        srDownloadJob = viewModelScope.launch(Dispatchers.IO) {
+            notice = try {
+                val sizes = SrModelDownloader.download(
+                    NcnnUpscaler.modelDir(ctx), ctx.cacheDir, pkg,
+                    onProgress = { done, total -> srDownload = done to total },
+                    isCancelled = { !isActive })
+                ncnnReload = true
+                srImportedSizes = NcnnUpscaler.importedSizes(ctx)
+                srRemote = null
+                str(R.string.n_sr_imported, sizes.joinToString())
+            } catch (e: java.util.concurrent.CancellationException) {
+                str(R.string.n_sr_download_cancelled)
+            } catch (e: Throwable) {
+                Log.e(TAG, "SR model download failed", e)
+                str(R.string.n_sr_download_failed, e.message ?: e.javaClass.simpleName)
+            } finally {
+                srDownload = null
+            }
+        }
+    }
+
+    fun cancelSrDownload() {
+        srDownloadJob?.cancel()
     }
     private val temporalFilter = TemporalDenoise()
 

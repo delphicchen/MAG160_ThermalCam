@@ -471,6 +471,34 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                 Text(stringResource(R.string.sr_needs_model, vm.ncnnModelDir()),
                      color = DIM, fontSize = 9.sp)
             }
+            // a model for this frame size on the `sr-models` release (another camera's
+            // sensor, or a newer download): offered here, fetched only on a tap
+            val frameSize = vm.lastFrame?.let { it.w to it.h }
+            LaunchedEffect(frameSize, vm.srImportedSizes) { vm.checkSrRemote() }
+            val dl = vm.srDownload
+            val pkg = vm.srRemote
+            if (dl != null) {
+                val (done, total) = dl
+                LinearProgressIndicator(
+                    progress = { if (total > 0) done.toFloat() / total else 0f },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.sr_downloading, mb(done), mb(total)),
+                         color = DIM, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { vm.cancelSrDownload() }) {
+                        Text(stringResource(R.string.cancel), fontSize = 12.sp)
+                    }
+                }
+            } else if (pkg != null) {
+                OutlinedButton(onClick = { vm.downloadSrModel() },
+                               modifier = Modifier.fillMaxWidth(),
+                               contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text(stringResource(R.string.download_sr_model,
+                                        frameSize?.let { "${it.first}×${it.second}" }
+                                            ?: pkg.sizes.first(), mb(pkg.bytes)),
+                         fontSize = 12.sp)
+                }
+            }
             // a model package = the zip of thermal_<w>x<h>_fp16.param/.bin from sr_train's
             // Colab export; it overrides the built-in model until removed
             val importModel = rememberLauncherForActivityResult(
@@ -1140,3 +1168,6 @@ private fun CalibrationSection(vm: ViewerViewModel) {
         Text(stringResource(R.string.clear_samples), color = HOT, fontSize = 11.sp)
     }
 }
+
+/** Bytes as "1.5" (MB, one decimal) for the model download labels. */
+private fun mb(bytes: Long): String = "%.1f".format(bytes / 1048576f)

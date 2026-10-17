@@ -191,13 +191,14 @@ object SrModelFiles {
 
     /**
      * Install a model package — a zip of `thermal_<w>x<h>_fp16.param/.bin` pairs — into
-     * [dir] (staged next to it), replacing whatever was imported before. Folders inside
+     * [dir] (staged next to it), replacing whatever was imported before — or, with
+     * [merge], only the sizes the package carries (a downloaded model). Folders inside
      * the zip are ignored (entries are matched by file name only, so nothing lands
      * outside [dir]), and nothing is replaced unless every size in the package has both
      * files and a real ncnn .param. Returns the sizes installed; throws with a readable
      * message. Blocking I/O — call off the main thread.
      */
-    fun install(dir: File, input: InputStream): List<String> {
+    fun install(dir: File, input: InputStream, merge: Boolean = false): List<String> {
         val staging = File(dir.parentFile, "model.import").apply { deleteRecursively(); mkdirs() }
         try {
             var total = 0L
@@ -231,8 +232,16 @@ object SrModelFiles {
                     "thermal_${sz}_fp16.param is not an ncnn model"
                 }
             }
-            dir.deleteRecursively()
-            check(staging.renameTo(dir)) { "could not install into $dir" }
+            if (merge && dir.isDirectory) {
+                for (f in staging.listFiles().orEmpty()) {
+                    val dst = File(dir, f.name)
+                    dst.delete()
+                    check(f.renameTo(dst)) { "could not install into $dir" }
+                }
+            } else {
+                dir.deleteRecursively()
+                check(staging.renameTo(dir)) { "could not install into $dir" }
+            }
             return sizes
         } finally {
             staging.deleteRecursively()          // no-op after a successful rename

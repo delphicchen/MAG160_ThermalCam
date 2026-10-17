@@ -20,6 +20,8 @@
     <string name="use_builtin">Use built-in</string>
     <string name="sr_model_builtin">Thermal SR model: built-in</string>
     <string name="sr_model_imported">Thermal SR model: imported (%1$s)</string>
+    <string name="download_sr_model">Download Thermal SR model for %1$s (%2$s MB)</string>
+    <string name="sr_downloading">Downloading SR model… %1$s / %2$s MB</string>
     <string name="display_resolution">Display resolution</string>
     <string name="rotate">Rotate</string>
     <string name="mirror">Mirror ↔</string>
@@ -149,6 +151,8 @@
     <string name="n_sr_imported">SR model imported (%1$s) — select Thermal SR to use it</string>
     <string name="n_sr_import_failed">SR model import failed: %1$s</string>
     <string name="n_using_builtin">Using the built-in SR model</string>
+    <string name="n_sr_download_failed">SR model download failed: %1$s</string>
+    <string name="n_sr_download_cancelled">SR model download cancelled</string>
     <string name="n_snapshot_saved">Snapshot saved to Pictures/MagViewer</string>
     <string name="n_snapshot_failed">Snapshot failed</string>
     <string name="n_snapshot_failed_msg">Snapshot failed: %1$s</string>
