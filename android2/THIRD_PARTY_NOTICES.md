@@ -15,6 +15,14 @@
 - **Anyone building this app supplies the vendor SDK themselves** from their own copy of
   the vendor software.
 
+## InfiRay AC020 SDK (Tiny2C) — proprietary, not covered by this repository's licence
+- Files: `app/libs/ac020/libAC020sdk_USB_IR_UVC_1.1.5.aar`, `libcommon_1.2.0_2409191614.aar`,
+  `libirutils_1.2.1.aar` (Android USB IR UVC SDK 1.1.5, 2024-10-22), as supplied by the
+  module vendor; they bundle MNN, OpenCV, libyuv, libjpeg-turbo, libpng and zlib builds.
+- Owner: the module vendor (InfiRay AC020 ASIC). All rights reserved by them.
+- Use: `usb/Tiny2cSource.kt` streams and controls the Tiny2C through it. No licence to
+  the SDK is granted or implied here.
+
 ## ncnn
 - Source: https://github.com/Tencent/ncnn (release 20260526, android-vulkan prebuilt)
 - Copyright (c) THL A29 Limited, a Tencent company — BSD 3-Clause (see
