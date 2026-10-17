@@ -765,13 +765,16 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
 
         HorizontalDivider(color = Color(0xFF30363D))
 
-        Text(stringResource(R.string.sdk_test_title), color = DIM, fontSize = 10.sp)
-        Text(stringResource(R.string.sdk_test_interrupts), color = DIM, fontSize = 9.sp)
-        Button(onClick = { vm.runSdkSmokeTest() }, enabled = !vm.sdkBusy,
-               colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2B3D2B),
-                                                    contentColor = Color.White),
-               modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(if (vm.sdkBusy) R.string.running else R.string.run_sdk_test))
+        // the smoke test drives the MAG SDK only
+        if (vm.cameraKind == "mag160") {
+            Text(stringResource(R.string.sdk_test_title), color = DIM, fontSize = 10.sp)
+            Text(stringResource(R.string.sdk_test_interrupts), color = DIM, fontSize = 9.sp)
+            Button(onClick = { vm.runSdkSmokeTest() }, enabled = !vm.sdkBusy,
+                   colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2B3D2B),
+                                                        contentColor = Color.White),
+                   modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(if (vm.sdkBusy) R.string.running else R.string.run_sdk_test))
+            }
         }
         vm.sdkLog?.let { logText ->
             Text(logText, color = Color(0xFF9DD69D), fontSize = 9.sp,

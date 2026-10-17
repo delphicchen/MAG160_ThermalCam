@@ -17,6 +17,10 @@ interface ThermalSource {
     val width: Int
     val height: Int
     val fps: Int
+    /** Short id keeping per-camera settings apart ("mag160", "tiny2c"). */
+    val kind: String
+    /** Thermal lens focal length in native pixels — fusion's starting zoom. */
+    val focalPx: Float
     /** Frames delivered since [start]; the loop watches it to spot a stalled stream. */
     val frameCount: Long
 

@@ -52,7 +52,15 @@ EMS = 發射率 × 16384；`libAC020sdk.so` NEEDED 幾乎全部 .so（MNN/OpenCV
   高低增益切換（-15~150 / 50~550 °C）、信息行的防灼傷旗標。
 - `device_filter.xml` 加 Tiny2C 的 VID/PID。
 
-## 階段 3 — 解析度相關
+## 階段 3 — 解析度相關 — ✅ 已實作（2026-10-18）
+
+- 寫死尺寸只剩 UI 的 `?: 160/120` fallback（無幀時），處理管線本身不綁尺寸。
+- 熱像焦距改成 `ThermalSource.focalPx`（MAG160 255 實測；Tiny2C 266.6 由規格 51.3°/256 px 推算）。
+- 融合對位（zoom/dx/dy/校正樣本）依 `cameraKind` 分開存：換相機時舊的存到 `<key>@<kind>`，
+  載入新相機的（首次為預設值）。
+- MAG SDK smoke test 只在上次連的是 MAG160 時顯示。
+
+原始設計：
 
 - 所有寫死 160×120 的地方 grep 出來改成跟著 source 走（`grep -rn "160\|120" app/src/main/java`）。
 - 融合校正（`FusionCalibration`）：校正檔按相機型號分開存；Tiny2C FOV 51.3×39.6° 需重新跑校正精靈。

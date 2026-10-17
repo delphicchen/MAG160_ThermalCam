@@ -70,6 +70,11 @@ class MagDeviceWrapper : ThermalSource {
         private var initialized = false
     }
 
+    override val kind = "mag160"
+    /** Measured once (2026-10-12) as zoom 2.38 against a phone camera whose half-FOV
+     *  tangent is 0.560 across the upright frame (PLAN_TRIANGULATION.md). */
+    override val focalPx = 255f
+
     /** FPA geometry as reported by the SDK (valid after [open]). */
     override var width = 0; private set
     override var height = 0; private set

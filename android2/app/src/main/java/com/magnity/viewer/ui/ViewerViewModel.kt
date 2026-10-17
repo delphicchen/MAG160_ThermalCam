@@ -116,10 +116,6 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val WIZARD_STEPS_M = floatArrayOf(3f, 1f, 0.5f, 0.3f)
         /** A wizard sample further than this from the fitted line is flagged for a redo. */
         const val WIZARD_MAX_RESIDUAL_PX = 3f
-        /** Thermal lens focal length in native pixels, for the starting zoom: measured once
-         *  (2026-10-12) as zoom 2.38 against a phone camera whose half-FOV tangent is 0.560
-         *  across the upright frame (PLAN_TRIANGULATION.md). */
-        private const val THERMAL_FOCAL_PX = 255f
         /** Consecutive frames one press of the fusion debug dump saves. */
         private const val FUSION_DUMP_FRAMES = 10
     }
@@ -246,6 +242,10 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile var focusMap = FusionCalibration.FocusMap(calibSamples); private set
     /** Offer to re-align when the focus leaves the calibrated range (AUTO). */
     var fusionCalibPrompt: Boolean by pref("fusion_calib_prompt", true)
+    /** [ThermalSource.kind] of the last camera connected; the registration above
+     *  (zoom / offset / samples) belongs to it — see [switchCameraProfile]. */
+    var cameraKind by Persisted(prefs, "camera_kind", "mag160",
+        { k, d -> getString(k, d) ?: d }, { k, v -> putString(k, v) })
     /** Draw the visible camera's AF window over the fused image. */
     var fusionCrosshair: Boolean by pref("fusion_crosshair", true)
     /** Snap/Rec also write the per-pixel temperatures as a .mgt file. */
@@ -372,6 +372,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 status = str(R.string.st_opening)
                 sdk = ThermalSources.forDevice(device, sdk)
+                switchCameraProfile(sdk.kind)
                 sdk.open(ctx) { p -> status = str(R.string.st_cali_download, p) }
                 sdk.start()
                 if (!sdk.setEmissivity(emissivity)) Log.w(TAG, "emissivity not applied on connect")
@@ -631,6 +632,29 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         calibPromptActive = true
     }
 
+    /**
+     * Another kind of camera than last time: each lens sits elsewhere on the phone and has
+     * its own field of view, so park this camera's registration under `<key>@<kind>` and
+     * bring back the new camera's (the defaults on its first connect).
+     */
+    private fun switchCameraProfile(kind: String) {
+        val old = cameraKind
+        if (kind == old) return
+        prefs.edit()
+            .putFloat("fusion_zoom@$old", fusionZoom)
+            .putFloat("fusion_dx@$old", fusionDx)
+            .putFloat("fusion_dy@$old", fusionDy)
+            .putString("fusion_calib@$old", fusionCalibJson)
+            .apply()
+        fusionZoom = prefs.getFloat("fusion_zoom@$kind", 1.6f)
+        fusionDx = prefs.getFloat("fusion_dx@$kind", 0f)
+        fusionDy = prefs.getFloat("fusion_dy@$kind", 0f)
+        fusionCalibJson = prefs.getString("fusion_calib@$kind", "") ?: ""
+        calibSamples = FusionCalibration.decodeSamples(fusionCalibJson)
+        cameraKind = kind
+        Log.i(TAG, "camera profile $old → $kind (${calibSamples.size} calibration samples)")
+    }
+
     // ---- calibration file -------------------------------------------------------
 
     fun exportCalibration(uri: android.net.Uri) {
@@ -691,13 +715,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var wizardBackup: Triple<Float, Float, Float>? = null
 
     /** Starting zoom from the two lenses' fields of view (the phone reports its own; see
-     *  [THERMAL_FOCAL_PX]); null = the phone camera doesn't report its optics. */
+     *  [ThermalSource.focalPx]); null = the phone camera doesn't report its optics. */
     fun estimatedZoom(): Float? {
         val (tx, ty) = rgbCamera.fovTan ?: return null
         val ow = lastFrame?.w ?: return null           // oriented thermal width
         // the upright frame's width runs along the sensor's y when it is mounted 90°/270°
         val vis = if (fusionRotation == 90 || fusionRotation == 270) ty else tx
-        return (vis / (ow / 2f / THERMAL_FOCAL_PX)).takeIf { it in 1f..3f }
+        return (vis / (ow / 2f / sdk.focalPx)).takeIf { it in 1f..3f }
     }
 
     fun startWizard() {

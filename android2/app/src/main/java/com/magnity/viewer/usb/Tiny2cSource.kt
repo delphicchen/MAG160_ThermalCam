@@ -64,6 +64,9 @@ class Tiny2cSource(val device: UsbDevice) : ThermalSource {
         }
     }
 
+    override val kind = "tiny2c"
+    /** From the spec sheet's 3.2 mm lens, 51.3° across 256 px: 128 / tan(25.65°). */
+    override val focalPx = 266.6f
     override val width = W
     override val height = H
     override val fps = FPS
