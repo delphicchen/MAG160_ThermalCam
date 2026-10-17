@@ -16,7 +16,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.core.content.ContextCompat
 import com.magnity.viewer.ui.ViewerScreen
 import com.magnity.viewer.ui.ViewerViewModel
-import com.magnity.viewer.usb.MagDeviceWrapper
+import com.magnity.viewer.usb.ThermalSources
 
 class MainActivity : ComponentActivity() {
 
@@ -51,12 +51,12 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED == i.action) {
-                    i.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)?.let {
-                        requestPermission(usb, it)
-                    }
+                    i.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                        ?.takeIf { ThermalSources.isKnown(it) }
+                        ?.let { requestPermission(usb, it) }
                 } else if (UsbManager.ACTION_USB_DEVICE_DETACHED == i.action) {
                     i.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)?.let {
-                        if (MagDeviceWrapper.isMagnity(it)) vm.disconnect()
+                        if (ThermalSources.isCandidate(it)) vm.disconnect()
                     }
                 }
             }
@@ -80,8 +80,8 @@ class MainActivity : ComponentActivity() {
         setContent { MaterialTheme(colorScheme = darkColorScheme()) { ViewerScreen() } }
 
         // launch-by-intent (device_filter auto start) or manual open of an attached cam
-        val target = device?.takeIf { MagDeviceWrapper.isMagnity(it) }
-            ?: usb.deviceList.values.firstOrNull { MagDeviceWrapper.isMagnity(it) }
+        val target = device?.takeIf { ThermalSources.isKnown(it) }
+            ?: usb.deviceList.values.firstOrNull { ThermalSources.isKnown(it) }
         if (target != null) requestPermission(usb, target)
     }
 

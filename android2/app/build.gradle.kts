@@ -55,6 +55,10 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    packaging {
+        // the AC020 SDK ships its own libc++_shared (older NDK); ours from CMake wins
+        jniLibs.pickFirsts += "**/libc++_shared.so"
+    }
 }
 
 dependencies {
@@ -70,4 +74,8 @@ dependencies {
     implementation("androidx.camera:camera-core:1.4.1")
     implementation("androidx.camera:camera-camera2:1.4.1")
     implementation("androidx.camera:camera-lifecycle:1.4.1")
+    // InfiRay Tiny2C (AC020 UVC) — vendor SDK 1.1.5 from Tiny-2C/SDK/Android/sdk/
+    implementation(files("libs/ac020/libAC020sdk_USB_IR_UVC_1.1.5.aar",
+                         "libs/ac020/libcommon_1.2.0_2409191614.aar",
+                         "libs/ac020/libirutils_1.2.1.aar"))
 }

@@ -10,12 +10,17 @@ SDK 原檔：`../Tiny-2C/SDK/Android/ANDROID_AC020_SDK_USB_IR_UVC_1.1.5_20241022
 
 ## 待確認（動手前）
 
-- [ ] 對方模組是 **USB 版**（UVC 出圖），不是 DVP/MIPI 裸機芯。
-- [ ] 實機 VID/PID（`adb shell` 插上後 `lsusb` / UsbManager log），寫進 `device_filter.xml`。
-- [ ] SDK 授權：AAR 能否放進公開 repo、隨 release 散布。不行的話改成 `android2/lib/` 本地放、
-      `.gitignore` 掉，release APK 照包（需廠商同意散布二進位）。
+- [x] 對方模組是 **USB 版**（使用者確認 2026-10-18）。
+- [ ] 實機 VID/PID：廠商 filter 是抓全部 UVC，暫用 `0x0A0A:0x2602`（demo 註解點名，未證實）。
+      請對方用 Windows 裝置管理員或 demo APK 的 USB info 頁查；手動「連線」會連任何 UVC 裝置當備援。
+- [x] SDK 授權：使用者決定 AAR 直接進 repo（`app/libs/ac020/`）。
 
-## 階段 1 — 相機抽象層
+## 階段 1 — 相機抽象層 — ✅ 已實作（2026-10-18）
+
+`usb/ThermalSource.kt`（介面 + `ThermalSources.isKnown/isCandidate/forDevice`）；VM 的 `sdk` 改成
+`ThermalSource`，connect 時依裝置換實作；MainActivity ATTACHED 只對 known id 要權限。
+
+原始設計：
 
 現況：`ViewerViewModel` 直接持有 `MagDeviceWrapper`，吃「w×h 毫°C `IntArray`」。
 
@@ -27,7 +32,14 @@ SDK 原檔：`../Tiny-2C/SDK/Android/ANDROID_AC020_SDK_USB_IR_UVC_1.1.5_20241022
 - `ViewerViewModel` 裡 `MagDeviceWrapper.isMagnity(...)` 的 4 處改成 `ThermalSources.detect(device)`。
 - `MagDeviceWrapper.degC()` 的呼叫點（含自我測試 1550–1616 行）改走介面。
 
-## 階段 2 — `Tiny2cSource`
+## 階段 2 — `Tiny2cSource` — ✅ 程式完成（2026-10-18），待實機驗證
+
+`usb/Tiny2cSource.kt`。實測確認的事實：溫度 °C = raw/64 − 273.15（LibIRTemp 預設 scale=64）；
+EMS = 發射率 × 16384；`libAC020sdk.so` NEEDED 幾乎全部 .so（MNN/OpenCV/HiAI），無法瘦身。
+未做：TC2C 暖機補償（demo `TempCompensation`）、高低增益切換、sensorTemp。
+實機要驗：VID/PID、initHandle 成功、溫度合理、FFC、發射率（env correct 預設 TA/TU 不明）。
+
+原始設計：
 
 - 引入 3 個 AAR：`libAC020sdk_USB_IR_UVC_1.1.5`、`libcommon_1.2.0`、`libirutils_1.2.1`；
   `abiFilters` 只留 `arm64-v8a`，`packaging.jniLibs` 排除用不到的 MNN/HiAI/dual* 試試看能否瘦身

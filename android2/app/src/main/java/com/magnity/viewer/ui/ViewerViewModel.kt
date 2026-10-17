@@ -42,6 +42,8 @@ import com.magnity.viewer.pipeline.Palettes
 import com.magnity.viewer.pipeline.SrModelDownloader
 import com.magnity.viewer.pipeline.TemporalDenoise
 import com.magnity.viewer.usb.MagDeviceWrapper
+import com.magnity.viewer.usb.ThermalSource
+import com.magnity.viewer.usb.ThermalSources
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -124,7 +126,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     enum class Upscaler { BICUBIC, ANIME4K, NCNN }
 
-    val sdk = MagDeviceWrapper()
+    /** The connected camera's source; swapped in [connect] when another kind is plugged in. */
+    @Volatile var sdk: ThermalSource = MagDeviceWrapper(); private set
 
     // ---- UI state ---------------------------------------------------------------
 
@@ -313,7 +316,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 if (!connected && !connecting.get() && System.currentTimeMillis() >= retryNotBefore) {
                     val ctx = getApplication<Application>()
                     val usb = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
-                    val dev = usb.deviceList.values.firstOrNull { MagDeviceWrapper.isMagnity(it) }
+                    val dev = usb.deviceList.values.firstOrNull { ThermalSources.isKnown(it) }
                     if (dev != null) {
                         val devId = "${dev.vendorId}:${dev.productId}:${dev.deviceId}"
                         if (devId != lastDevId) {
@@ -359,7 +362,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
 
     fun connect(device: UsbDevice, permissionGranted: Boolean) {
-        if (!MagDeviceWrapper.isMagnity(device)) return
+        if (!ThermalSources.isCandidate(device)) return
         if (!connecting.compareAndSet(false, true)) {
             Log.i(TAG, "connect already in progress — skipping")
             return
@@ -368,7 +371,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 status = str(R.string.st_opening)
-                MagDeviceWrapper.probeNativeLib()?.let { throw it }
+                sdk = ThermalSources.forDevice(device, sdk)
                 sdk.open(ctx) { p -> status = str(R.string.st_cali_download, p) }
                 sdk.start()
                 if (!sdk.setEmissivity(emissivity)) Log.w(TAG, "emissivity not applied on connect")
@@ -418,7 +421,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     fun requestConnect() {
         val ctx = getApplication<Application>()
         val usb = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
-        val dev = usb.deviceList.values.firstOrNull { MagDeviceWrapper.isMagnity(it) } ?: run {
+        // a UVC device under an unknown id may still be a Tiny2C — tried only from here
+        val dev = usb.deviceList.values.firstOrNull { ThermalSources.isKnown(it) }
+            ?: usb.deviceList.values.firstOrNull { ThermalSources.isCandidate(it) } ?: run {
             status = str(R.string.st_not_found)
             return
         }
@@ -1015,7 +1020,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     // ---- processing loop --------------------------------------------------------
 
     /**
-     * The SDK pushes frames from its own thread into [MagDeviceWrapper]; this picks each
+     * The SDK pushes frames from its own thread into the [ThermalSource]; this picks each
      * new one up as soon as it lands. No FFC bookkeeping — the SDK does its own.
      */
     private fun startSdkLoop() {

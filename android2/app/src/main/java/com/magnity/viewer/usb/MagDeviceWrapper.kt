@@ -36,7 +36,7 @@ import kotlin.concurrent.withLock
  * USB is exclusive: `linkCamera` requests permission itself and opens its own
  * UsbDeviceConnection; nothing else may hold the device when [open] is called.
  */
-class MagDeviceWrapper {
+class MagDeviceWrapper : ThermalSource {
 
     companion object {
         const val TAG = "MagDeviceWrapper"
@@ -71,18 +71,18 @@ class MagDeviceWrapper {
     }
 
     /** FPA geometry as reported by the SDK (valid after [open]). */
-    var width = 0; private set
-    var height = 0; private set
+    override var width = 0; private set
+    override var height = 0; private set
     /** Palette-mapped output bitmap size as reported by the SDK. */
     var bmpWidth = 0; private set
     var bmpHeight = 0; private set
-    var fps = 0; private set
+    override var fps = 0; private set
     var cameraName = ""; private set
     var cameraType = ""; private set
     /** The last [open] had to download the calibration file (no cached copy). */
     var caliDownloaded = false; private set
 
-    @Volatile var frameCount = 0L; private set
+    @Volatile override var frameCount = 0L; private set
 
     @Volatile private var device: MagDevice? = null
     private val running = AtomicBoolean(false)
@@ -154,7 +154,8 @@ class MagDeviceWrapper {
      * PENDING and downloads it (~1.8 MB) on a detached SDK thread, and streaming cannot
      * start until that finishes — so wait for it here. [onCaliProgress] gets 0..100.
      */
-    fun open(context: Context, onCaliProgress: (Int) -> Unit = {}) {
+    override fun open(context: Context, onCaliProgress: (Int) -> Unit) {
+        probeNativeLib()?.let { throw it }
         if (!initialized) {
             if (!MagDevice.init(context)) {
                 throw RuntimeException(
@@ -255,7 +256,7 @@ class MagDeviceWrapper {
     }
 
     /** Start streaming. The SDK invokes the callback on its own thread. */
-    fun start() {
+    override fun start() {
         val magDev = device ?: throw IllegalStateException("camera not open")
         require(width > 0 && height > 0) { "no FPA geometry from getCameraInfo" }
         running.set(true)
@@ -295,7 +296,7 @@ class MagDeviceWrapper {
     }
 
     /** Latest per-pixel temperature frame in milli-Celsius, or null if none yet. */
-    fun getTemperatureData(): IntArray? = lock.withLock { latestTemp }
+    override fun getTemperatureData(): IntArray? = lock.withLock { latestTemp }
 
     /** Blocking variant for the smoke test. */
     fun awaitTemperatureData(timeoutMs: Long = 5000): IntArray? {
@@ -322,7 +323,7 @@ class MagDeviceWrapper {
     }
 
     /** Shutter/housing temperature, milli-Celsius. GetSenorTemperature is absent here. */
-    fun sensorTemp(): Int? =
+    override fun sensorTemp(): Int? =
         withDev { it.getCurrentCameraInnerTemperature() }?.takeIf { it != Int.MIN_VALUE }
 
     /**
@@ -332,7 +333,7 @@ class MagDeviceWrapper {
      * the values the SDK holds. Takes effect because [pullFrameData] reads temperature
      * with external correction enabled.
      */
-    fun setEmissivity(e: Float): Boolean = withDev { magDev ->
+    override fun setEmissivity(e: Float): Boolean = withDev { magDev ->
         try {
             val p = CorrectionPara()
             if (!magDev.getFixPara(p)) return@withDev false
@@ -345,7 +346,7 @@ class MagDeviceWrapper {
         }
     } ?: false
 
-    fun triggerFfc(): Boolean = try {
+    override fun triggerFfc(): Boolean = try {
         withDev { it.triggrtFFC() } ?: false
     } catch (e: Exception) {
         Log.e(TAG, "triggrtFFC failed", e); false
@@ -353,13 +354,13 @@ class MagDeviceWrapper {
 
     // ---- shutdown -----------------------------------------------------------
 
-    fun stop() {
+    override fun stop() {
         running.set(false)
         runCatching { withDev { it.stopProcessImage() } }
             .onFailure { Log.e(TAG, "stopProcessImage failed", it) }
     }
 
-    fun close() {
+    override fun close() {
         stop()
         // detach the handle under devLock so no native call can start on it after this
         val magDev = devLock.withLock { device.also { device = null } }
