@@ -1177,6 +1177,15 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             if (v < mn) { mn = v; mnI = i }
             if (v > mx) { mx = v; mxI = i }
         }
+        if (debugOsd) {
+            // frame-to-frame change: ~0 means the camera keeps sending the same picture
+            prevRaw?.takeIf { it.size == raw.size }?.let { p ->
+                var s = 0f
+                for (i in raw.indices) s += abs(raw[i] - p[i])
+                frameDiffC = s / raw.size
+            }
+            prevRaw = raw
+        }
         t = lap(ST_IN, t)
 
         oriented = temporal(oriented)
@@ -1261,6 +1270,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 if (u != null) {
                     val img = u.render(field, w, h, lo, hi, Palettes.lut(paletteName))
                     noteSrTimings(u)
+                    renderPath = "Thermal SR ${img.w}×${img.h}"
                     return img
                 }
                 upscaler = Upscaler.ANIME4K
@@ -1278,6 +1288,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 val gpu = anime4k ?: Anime4kGpu(getApplication()).also { anime4k = it }
                 return gpu.render(field, w, h, lo, hi, if (k >= 4) 2 else 1,
                                   Palettes.lut(paletteName))
+                    .also { renderPath = "Anime4K ${it.w}×${it.h}" }
             } catch (e: Throwable) {
                 Log.e(TAG, "Anime4K GPU failed — falling back to bicubic", e)
                 runCatching { anime4k?.close() }
@@ -1296,11 +1307,18 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             if (t < 0f) t = 0f else if (t > 255f) t = 255f
             img[i] = pal[(t + 0.5f).toInt()]
         }
+        renderPath = "bicubic ${w * k}×${h * k}"
         return ArgbImage(img, w * k, h * k)
     }
 
     /** Bicubic-path display pixels, reused per frame. */
     private var pixBuf = IntArray(0)
+
+    // debug overlay: which path drew the frame, and the mean per-pixel change since the
+    // previous one (processing thread)
+    private var renderPath = ""
+    private var prevRaw: FloatArray? = null
+    private var frameDiffC = 0f
 
     // Thermal SR diagnostics for the status line: which backend/model ran this frame and
     // where its time went (smoothed like the stage split; processing thread)
@@ -1466,6 +1484,15 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 .append("\nnet %.1f · pre %.1f · post %.1f ms".format(srMs[1], srMs[0], srMs[2]))
         }
         srFrame = false
+        // what the frame is made of: enough to tell a frozen or flat stream from a
+        // display problem in a user's screenshot
+        sb.append("\n$paletteName · ${upscaler.name} ×$upscale → $renderPath")
+        lastFrame?.let {
+            sb.append("\nT %.2f..%.2f °C · scale %.2f..%.2f · Δ %.3f °C"
+                .format(it.tempMin, it.tempMax, it.scaleLoC, it.scaleHiC, frameDiffC))
+        }
+        sb.append("\nsrc frames=${sdk.frameCount}")
+        sdk.diag()?.let { sb.append("\n").append(it) }
         return sb.toString()
     }
 

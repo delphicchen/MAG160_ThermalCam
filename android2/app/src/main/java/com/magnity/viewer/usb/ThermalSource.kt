@@ -36,6 +36,9 @@ interface ThermalSource {
     fun sensorTemp(): Int?
     fun setEmissivity(e: Float): Boolean
     fun triggerFfc(): Boolean
+
+    /** Camera-specific lines for the debug overlay (what the SDK delivers), if any. */
+    fun diag(): String? = null
 }
 
 object ThermalSources {

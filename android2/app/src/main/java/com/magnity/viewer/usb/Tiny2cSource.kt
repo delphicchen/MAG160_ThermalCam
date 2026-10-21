@@ -143,20 +143,48 @@ class Tiny2cSource(val device: UsbDevice) : ThermalSource {
         Log.i(TAG, "stream started")
     }
 
+    // what the SDK actually hands over, for [diag]: every callback (short ones included),
+    // the last length, and the value spread of the picture's Y bytes and the temperature rows
+    @Volatile private var callbacks = 0L
+    @Volatile private var shortFrames = 0L
+    @Volatile private var lastLength = 0
+    @Volatile private var rawLo = 0
+    @Volatile private var rawHi = 0
+    @Volatile private var yLo = 0
+    @Volatile private var yHi = 0
+
     private val frameCallback = IIrFrameCallback { frame, length ->
-        if (!running.get() || length < TEMP_OFFSET + W * H * 2) return@IIrFrameCallback
+        callbacks++
+        lastLength = length
+        if (!running.get()) return@IIrFrameCallback
+        if (length < TEMP_OFFSET + W * H * 2) { shortFrames++; return@IIrFrameCallback }
         val buf = IntArray(W * H)
         var o = TEMP_OFFSET
+        var lo = 0xffff; var hi = 0
         for (i in buf.indices) {
             val raw = (frame[o].toInt() and 0xff) or ((frame[o + 1].toInt() and 0xff) shl 8)
             buf[i] = ((raw * 125) shr 3) - 273150   // raw/64 K → milli-°C
+            if (raw < lo) lo = raw
+            if (raw > hi) hi = raw
             o += 2
         }
+        var ylo = 0xff; var yhi = 0
+        for (i in 0 until W * H * 2 step 2) {       // YUYV: Y on the even bytes
+            val y = frame[i].toInt() and 0xff
+            if (y < ylo) ylo = y
+            if (y > yhi) yhi = y
+        }
+        rawLo = lo; rawHi = hi; yLo = ylo; yHi = yhi
         lock.withLock { latestTemp = buf }
         frameCount++
     }
 
     override fun getTemperatureData(): IntArray? = lock.withLock { latestTemp }
+
+    override fun diag(): String =
+        "AC020 cb=$callbacks short=$shortFrames len=$lastLength (want ${TEMP_OFFSET + W * H * 2})\n" +
+            "raw $rawLo..$rawHi (%.1f..%.1f °C) · Y $yLo..$yHi"
+                .format(rawLo / 64f - 273.15f, rawHi / 64f - 273.15f)
 
     override fun sensorTemp(): Int? = null
 
