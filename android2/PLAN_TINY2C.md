@@ -11,7 +11,9 @@ SDK 原檔：`../Tiny-2C/SDK/Android/ANDROID_AC020_SDK_USB_IR_UVC_1.1.5_20241022
 ## 待確認（動手前）
 
 - [x] 對方模組是 **USB 版**（使用者確認 2026-10-18）。
-- [ ] 實機 VID/PID：廠商 filter 是抓全部 UVC，暫用 `0x0A0A:0x2602`（demo 註解點名，未證實）。
+- [x] 實機 VID/PID：**`0x3474:0x4321`**（"UVC Camera"，對方用 alpha2 回報，2026-10-21），
+      已加進 `Tiny2cSource.KNOWN` 與 `device_filter.xml`；`0x0A0A:0x2602` 留給其他 AC020 模組。
+      （原註：廠商 filter 是抓全部 UVC，暫用 `0x0A0A:0x2602`（demo 註解點名，未證實）。）
       請對方用 Windows 裝置管理員或 demo APK 的 USB info 頁查；手動「連線」會連任何 UVC 裝置當備援。
 - [x] SDK 授權：使用者決定 AAR 直接進 repo（`app/libs/ac020/`）。
 

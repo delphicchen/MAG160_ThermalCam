@@ -4,6 +4,8 @@
 <resources>
     <usb-device vendor-id="33596" product-id="1" />
     <usb-device vendor-id="33596" product-id="2" />
-    <!-- InfiRay Tiny2C (AC020 UVC): 0x0A0A:0x2602 from the vendor demo's filter, unconfirmed -->
+    <!-- InfiRay Tiny2C (AC020 UVC): 0x3474:0x4321, reported from a unit -->
+    <usb-device vendor-id="13428" product-id="17185" />
+    <!-- other AC020 modules: 0x0A0A:0x2602 from the vendor demo's filter, unconfirmed -->
     <usb-device vendor-id="2570" product-id="9730" />
 </resources>

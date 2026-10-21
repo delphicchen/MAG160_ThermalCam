@@ -52,10 +52,11 @@ class Tiny2cSource(val device: UsbDevice) : ThermalSource {
         private const val EMS_ONE = 16384
 
         /**
-         * USB ids an AC020 module enumerates under. 0x0A0A:0x2602 is the one the vendor
-         * demo's device filter singles out — not yet confirmed on a Tiny2C.
+         * USB ids an AC020 module enumerates under: 0x3474:0x4321 ("UVC Camera") reported
+         * from a Tiny2C (2026-10-21); 0x0A0A:0x2602 is the one the vendor demo's device
+         * filter singles out, kept for other AC020 modules (unconfirmed).
          */
-        private val KNOWN = setOf(0x0A0A to 0x2602)
+        private val KNOWN = setOf(0x3474 to 0x4321, 0x0A0A to 0x2602)
 
         fun isKnown(device: UsbDevice): Boolean = (device.vendorId to device.productId) in KNOWN
 
