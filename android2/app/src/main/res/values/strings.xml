@@ -131,6 +131,9 @@
     <string name="next">next ▶</string>
     <string name="help_playback">Tap the image to read a temperature, long-press to clear.\nColour range follows each frame; the numbers are absolute °C as captured.</string>
     <string name="st_disconnected">disconnected</string>
+    <string name="st_uvc_needs_camera">UVC camera %1$s: Android needs the Camera permission before it allows USB access — tap Allow</string>
+    <string name="st_uvc_camera_denied">Camera permission denied — a UVC camera (Tiny2C) cannot connect without it; turn it on in the app\'s system settings</string>
+    <string name="st_usb_denied">USB access to %1$s denied — replug the camera to be asked again</string>
     <string name="st_opening">opening factory SDK…</string>
     <string name="st_connected">connected %1$d×%2$d</string>
     <string name="st_connect_failed">connect failed: %1$s</string>

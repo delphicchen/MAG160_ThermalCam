@@ -131,6 +131,9 @@
     <string name="next">下一帧 ▶</string>
     <string name="help_playback">点画面读取温度，长按清除。\n色阶范围依每帧调整；数值是拍摄当时的绝对 °C。</string>
     <string name="st_disconnected">未连接</string>
+    <string name="st_uvc_needs_camera">UVC 相机 %1$s：Android 规定要先允许“相机”权限才能访问 USB —— 请点允许</string>
+    <string name="st_uvc_camera_denied">相机权限被拒 —— 没有它 UVC 相机（Tiny2C）无法连接，请到系统设置的应用权限中开启</string>
+    <string name="st_usb_denied">%1$s 的 USB 访问被拒 —— 重新插上相机会再询问</string>
     <string name="st_opening">正在打开原厂 SDK…</string>
     <string name="st_connected">已连接 %1$d×%2$d</string>
     <string name="st_connect_failed">连接失败：%1$s</string>

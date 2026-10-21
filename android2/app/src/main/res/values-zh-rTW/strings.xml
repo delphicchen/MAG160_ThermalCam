@@ -131,6 +131,9 @@
     <string name="next">下一幀 ▶</string>
     <string name="help_playback">點畫面讀取溫度，長按清除。\n色階範圍依每幀調整；數值是拍攝當下的絕對 °C。</string>
     <string name="st_disconnected">未連線</string>
+    <string name="st_uvc_needs_camera">UVC 相機 %1$s：Android 規定要先允許「相機」權限才能存取 USB —— 請按允許</string>
+    <string name="st_uvc_camera_denied">相機權限被拒 —— 沒有它 UVC 相機（Tiny2C）無法連線，請到系統設定的應用程式權限開啟</string>
+    <string name="st_usb_denied">%1$s 的 USB 存取被拒 —— 重新插上相機會再詢問</string>
     <string name="st_opening">正在開啟原廠 SDK…</string>
     <string name="st_connected">已連線 %1$d×%2$d</string>
     <string name="st_connect_failed">連線失敗：%1$s</string>

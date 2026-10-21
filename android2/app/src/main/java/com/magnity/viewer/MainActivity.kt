@@ -1,15 +1,18 @@
 package com.magnity.viewer
 
+import android.Manifest
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -17,6 +20,7 @@ import androidx.core.content.ContextCompat
 import com.magnity.viewer.ui.ViewerScreen
 import com.magnity.viewer.ui.ViewerViewModel
 import com.magnity.viewer.usb.ThermalSources
+import com.magnity.viewer.usb.Tiny2cSource
 
 class MainActivity : ComponentActivity() {
 
@@ -34,6 +38,17 @@ class MainActivity : ComponentActivity() {
     // (cleared) ViewModel and races the new one for the camera on every plug event
     private var usbReceiver: BroadcastReceiver? = null
 
+    // A UVC device (the Tiny2C) is granted to an app targeting P+ only while it holds
+    // CAMERA (UsbManager.requestPermission docs); without it the request is refused with
+    // no dialog at all. So ask for CAMERA first, then for the device.
+    private var pendingUvc: UsbDevice? = null
+    private val cameraPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+            val dev = pendingUvc.also { pendingUvc = null } ?: return@registerForActivityResult
+            if (ok) requestPermission(getSystemService(Context.USB_SERVICE) as UsbManager, dev)
+            else vm.reportUsb(getString(R.string.st_uvc_camera_denied))
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -48,6 +63,9 @@ class MainActivity : ComponentActivity() {
                         if (i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             && dev != null) {
                             vm.connect(dev, true)
+                        } else if (dev != null && ThermalSources.isCandidate(dev)) {
+                            vm.reportUsb(getString(R.string.st_usb_denied,
+                                                   ThermalSources.idText(dev)))
                         }
                     }
                 } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED == i.action) {
@@ -103,6 +121,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestPermission(usb: UsbManager, device: UsbDevice) {
+        if (Tiny2cSource.isUvc(device) && checkSelfPermission(Manifest.permission.CAMERA) !=
+            PackageManager.PERMISSION_GRANTED) {
+            if (pendingUvc != null) return                 // the CAMERA dialog is up
+            pendingUvc = device
+            vm.reportUsb(getString(R.string.st_uvc_needs_camera, ThermalSources.idText(device)))
+            cameraPermission.launch(Manifest.permission.CAMERA)
+            return
+        }
         if (usb.hasPermission(device)) {
             vm.connect(device, true)
         } else {

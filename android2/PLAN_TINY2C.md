@@ -54,6 +54,14 @@ EMS = 發射率 × 16384；`libAC020sdk.so` NEEDED 幾乎全部 .so（MNN/OpenCV
   高低增益切換（-15~150 / 50~550 °C）、信息行的防灼傷旗標。
 - `device_filter.xml` 加 Tiny2C 的 VID/PID。
 
+## 2.7-alpha3（2026-10-21）— UVC 需要 CAMERA 權限
+
+- 對方用 alpha2：等待畫面顯示 `3474:4321 UVC Camera`，狀態停在初始「未连接」→ connect() 從沒被呼叫。
+- 原因（UsbManager 官方文件）：targetSdk ≥ P 的 app，USB_CLASS_VIDEO 裝置的 USB 權限只在持有
+  CAMERA 時才會給，否則 requestPermission 直接拒絕、不跳視窗。MAG160 不是 UVC，所以沒遇過。
+- 修：MainActivity 對 UVC 裝置先要 CAMERA 再要 USB；被拒 / USB 被拒時黃字顯示原因。
+- 實際 id `0x3474:0x4321` 加進 KNOWN + device_filter（插上自動開 app）。
+
 ## 2.7-alpha2（2026-10-20）— 不知道 VID/PID 也能連
 
 - alpha1 的「手動 Connect 會試任何 UVC」其實沒有 UI 按鈕（`requestConnect` 沒人呼叫）→ 未知 id 連不上。

@@ -457,6 +457,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         retryNotBefore = System.currentTimeMillis() + 2000
     }
 
+    /** A USB permission step that ended before [connect] (shown on the waiting screen). */
+    fun reportUsb(message: String) {
+        if (!connected) status = message
+    }
+
     /** Manual connect: scan for the camera, reuse remembered permission or ask. */
     fun requestConnect() {
         val ctx = getApplication<Application>()
