@@ -302,6 +302,23 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private val connecting = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var retryNotBefore = 0L        // cooldown after a failed open
     @Volatile private var lastDevId: String? = null   // detect replug (re-enumeration)
+    /** A UVC device under an unknown id that failed to open or stream as a Tiny2C (a
+     *  webcam, say): skipped by the poll until it is replugged (new deviceId). */
+    @Volatile private var rejectedCandidate: String? = null
+    @Volatile private var currentDevice: UsbDevice? = null
+
+    /** One attached USB device, for the list shown while no camera streams. */
+    data class UsbEntry(val id: String, val label: String?, val name: String?)
+    /** Everything on the USB bus, refreshed by the 2 s poll. */
+    var usbDevices by mutableStateOf<List<UsbEntry>>(emptyList()); private set
+    /** "0A0A:2602 · Tiny2C" of the streaming camera; null when none. */
+    var connectedUsb by mutableStateOf<String?>(null); private set
+
+    private fun devKey(d: UsbDevice) = "${d.vendorId}:${d.productId}:${d.deviceId}"
+
+    /** VID/PID pairs a Tiny2C has streamed from, "0a0a:2602,…" (see [ThermalSources.learned]). */
+    private var tiny2cIds by Persisted(prefs, "tiny2c_ids", "",
+        { k, d -> getString(k, d) ?: d }, { k, v -> putString(k, v) })
 
     init {
         // permission may have been revoked in system settings since the last run
@@ -309,16 +326,26 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         if (fusionOn && !hasCameraPermission()) fusionOn = false else updateFusionCamera()
         refreshSrModelInfo()
 
+        ThermalSources.learned = parseUsbIds(tiny2cIds)
+
         // Poll-based auto-connect — USB attach broadcasts are unreliable on newer
         // Androids; scanning UsbManager every 2 s always works.
         viewModelScope.launch(Dispatchers.IO) {
+            val ctx = getApplication<Application>()
+            val usb = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
             while (isActive) {
+                val all = usb.deviceList.values.toList()
+                usbDevices = all.map { d ->
+                    UsbEntry(ThermalSources.idText(d), ThermalSources.label(d),
+                             runCatching { d.productName }.getOrNull())
+                }
                 if (!connected && !connecting.get() && System.currentTimeMillis() >= retryNotBefore) {
-                    val ctx = getApplication<Application>()
-                    val usb = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
-                    val dev = usb.deviceList.values.firstOrNull { ThermalSources.isKnown(it) }
+                    val dev = all.firstOrNull { ThermalSources.isKnown(it) }
+                        ?: all.firstOrNull {
+                            ThermalSources.isCandidate(it) && devKey(it) != rejectedCandidate
+                        }
                     if (dev != null) {
-                        val devId = "${dev.vendorId}:${dev.productId}:${dev.deviceId}"
+                        val devId = devKey(dev)
                         if (devId != lastDevId) {
                             retryNotBefore = 0L   // replug / re-enumeration → clear cooldown
                         }
@@ -377,14 +404,19 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 sdk.start()
                 if (!sdk.setEmissivity(emissivity)) Log.w(TAG, "emissivity not applied on connect")
                 connected = true
-                lastDevId = "${device.vendorId}:${device.productId}:${device.deviceId}"
+                lastDevId = devKey(device)
+                currentDevice = device
+                connectedUsb = ThermalSources.idText(device) + " · " +
+                    (if (sdk is MagDeviceWrapper) "MAG160" else "Tiny2C")
                 status = str(R.string.st_connected, sdk.width, sdk.height)
                 startSdkLoop()
             } catch (e: Throwable) {
                 Log.e(TAG, "connect failed", e)
-                status = str(R.string.st_connect_failed, e.message ?: "")
+                status = str(R.string.st_connect_failed,
+                             "${ThermalSources.idText(device)}: ${e.message ?: ""}")
                 runCatching { sdk.close() }
                 connected = false
+                if (!ThermalSources.isKnown(device)) rejectedCandidate = devKey(device)
                 // let the firmware settle before the next auto-attempt
                 retryNotBefore = System.currentTimeMillis() + 5000
             } finally {
@@ -403,6 +435,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             try { runCatching { sdk.close() } } finally { if (gated) connecting.set(false) }
         }
         connected = false
+        connectedUsb = null
         lastFrame = null
         fps = 0f; fpsWindowStart = 0L; fpsWindowFrames = 0
         status = str(R.string.st_disconnected)
@@ -415,6 +448,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         Log.w(TAG, "stream recover: close SDK, poll will reconnect")
         runCatching { sdk.close() }
         connected = false
+        connectedUsb = null
+        // an unknown UVC device that never streamed is not a Tiny2C — don't loop on it
+        currentDevice?.takeIf { !ThermalSources.isKnown(it) }?.let {
+            rejectedCandidate = devKey(it)
+            status = str(R.string.st_connect_failed, "${ThermalSources.idText(it)}: no frames")
+        }
         retryNotBefore = System.currentTimeMillis() + 2000
     }
 
@@ -630,6 +669,22 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         if (++outOfRangeTicks < PROMPT_TICKS) return
         outOfRangeTicks = 0
         calibPromptActive = true
+    }
+
+    private fun parseUsbIds(s: String): Set<Pair<Int, Int>> = s.split(',').mapNotNull { e ->
+        val (v, p) = e.split(':').takeIf { it.size == 2 } ?: return@mapNotNull null
+        (v.toIntOrNull(16) ?: return@mapNotNull null) to (p.toIntOrNull(16) ?: return@mapNotNull null)
+    }.toSet()
+
+    /** First frame from a Tiny2C under an id not in the list: remember it, so the next
+     *  plug-in connects on its own. */
+    private fun learnTiny2c() {
+        val d = currentDevice ?: return
+        if (sdk !is com.magnity.viewer.usb.Tiny2cSource || ThermalSources.isKnown(d)) return
+        val learned = ThermalSources.learned + (d.vendorId to d.productId)
+        ThermalSources.learned = learned
+        tiny2cIds = learned.joinToString(",") { "%04x:%04x".format(it.first, it.second) }
+        Log.i(TAG, "learned Tiny2C id ${ThermalSources.idText(d)}")
     }
 
     /**
@@ -1054,6 +1109,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             var lastSeen = 0L
             var lastSeenAt = startedAt
             var lastProcessed = -1L
+            var learnChecked = false
             while (isActive && connected) {
                 if (paused) { delay(50); continue }
 
@@ -1068,6 +1124,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     recover(); break
                 }
                 if (fc != lastSeen) { lastSeen = fc; lastSeenAt = now }
+                if (fc > 0L && !learnChecked) { learnChecked = true; learnTiny2c() }
 
                 // process each SDK frame once, as soon as it lands (no fixed period)
                 if (fc == lastProcessed) { delay(4); continue }

@@ -6,6 +6,10 @@
     <string name="language">語言</string>
     <string name="lang_system">跟隨系統</string>
     <string name="waiting_camera">等待相機 —— 請插上並允許 USB 存取</string>
+    <string name="usb_devices">USB 裝置（VID:PID）</string>
+    <string name="usb_none">沒有偵測到 USB 裝置 —— 請插上相機</string>
+    <string name="copy_usb_ids">複製 ID</string>
+    <string name="n_usb_copied">已複製 USB ID</string>
     <string name="range">範圍</string>
     <string name="auto">自動</string>
     <string name="manual_short">手動</string>

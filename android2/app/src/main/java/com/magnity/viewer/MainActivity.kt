@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
                     }
                 } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED == i.action) {
                     i.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-                        ?.takeIf { ThermalSources.isKnown(it) }
+                        ?.takeIf { ThermalSources.isCandidate(it) }
                         ?.let { requestPermission(usb, it) }
                 } else if (UsbManager.ACTION_USB_DEVICE_DETACHED == i.action) {
                     i.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)?.let {
@@ -80,8 +80,9 @@ class MainActivity : ComponentActivity() {
         setContent { MaterialTheme(colorScheme = darkColorScheme()) { ViewerScreen() } }
 
         // launch-by-intent (device_filter auto start) or manual open of an attached cam
-        val target = device?.takeIf { ThermalSources.isKnown(it) }
+        val target = device?.takeIf { ThermalSources.isCandidate(it) }
             ?: usb.deviceList.values.firstOrNull { ThermalSources.isKnown(it) }
+            ?: usb.deviceList.values.firstOrNull { ThermalSources.isCandidate(it) }
         if (target != null) requestPermission(usb, target)
     }
 

@@ -6,6 +6,10 @@
     <string name="language">Language</string>
     <string name="lang_system">System</string>
     <string name="waiting_camera">Waiting for camera — plug it in and allow USB access</string>
+    <string name="usb_devices">USB devices (VID:PID)</string>
+    <string name="usb_none">No USB device — plug the camera in</string>
+    <string name="copy_usb_ids">Copy IDs</string>
+    <string name="n_usb_copied">USB IDs copied</string>
     <string name="range">RANGE</string>
     <string name="auto">AUTO</string>
     <string name="manual_short">MAN</string>

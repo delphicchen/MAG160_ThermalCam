@@ -52,6 +52,15 @@ EMS = 發射率 × 16384；`libAC020sdk.so` NEEDED 幾乎全部 .so（MNN/OpenCV
   高低增益切換（-15~150 / 50~550 °C）、信息行的防灼傷旗標。
 - `device_filter.xml` 加 Tiny2C 的 VID/PID。
 
+## 2.7-alpha2（2026-10-20）— 不知道 VID/PID 也能連
+
+- alpha1 的「手動 Connect 會試任何 UVC」其實沒有 UI 按鈕（`requestConnect` 沒人呼叫）→ 未知 id 連不上。
+- 改成：插上 / 開 app 時 UVC 裝置也要 USB 權限（Android 的權限框就是使用者同意），2 s 輪詢會試；
+  開不了或 8 s 沒幀的未知裝置記為 rejected，直到重插。
+- 第一幀到達就把 VID/PID 記進 `tiny2c_ids`（`ThermalSources.learned`），之後當已知 id。
+- 等待畫面大字列出所有 USB 裝置的 VID:PID + 狀態，可一鍵複製；連線後 fps 旁顯示 `USB 0A0A:2602 · Tiny2C`。
+- 仍做不到：未知 id 插上時自動開 app（manifest filter 要寫死）。
+
 ## 階段 3 — 解析度相關 — ✅ 已實作（2026-10-18）
 
 - 寫死尺寸只剩 UI 的 `?: 160/120` fallback（無幀時），處理管線本身不綁尺寸。

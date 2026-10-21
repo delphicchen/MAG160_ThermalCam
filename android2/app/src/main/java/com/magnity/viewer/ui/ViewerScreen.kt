@@ -129,7 +129,7 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                     ColorBar(vm.paletteName, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
                 }
             } else {
-                Text(stringResource(R.string.waiting_camera), color = DIM)
+                UsbDevicePanel(vm)
             }
         }
 
@@ -234,7 +234,8 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             LaunchedEffect(notice) { if (notice != null) { delay(3000); vm.notice = null } }
             Column(Modifier.weight(1f)) {
                 if (fr != null) {
-                    Text("%.1f fps".format(vm.fps), color = ACCENT, fontSize = 13.sp)
+                    Text("%.1f fps".format(vm.fps) + (vm.connectedUsb?.let { " · USB $it" } ?: ""),
+                         color = ACCENT, fontSize = 13.sp)
                 }
                 Text(
                     notice ?: (vm.status + (fr?.let { " · FPA ${it.fpa}" } ?: "")),
@@ -242,6 +243,44 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                     fontSize = 10.sp, maxLines = 2,
                 )
             }
+        }
+    }
+}
+
+/**
+ * Shown where the image goes while no camera streams: every USB device on the bus, its
+ * VID:PID in large type (what a new camera's device filter needs), and the last status —
+ * a failed open says why. Copy puts the list on the clipboard to send on.
+ */
+@Composable
+private fun UsbDevicePanel(vm: ViewerViewModel) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val copied = stringResource(R.string.n_usb_copied)
+    Column(horizontalAlignment = Alignment.CenterHorizontally,
+           verticalArrangement = Arrangement.spacedBy(6.dp),
+           modifier = Modifier.padding(16.dp)) {
+        Text(stringResource(R.string.waiting_camera), color = DIM)
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.usb_devices), color = DIM, fontSize = 12.sp)
+        if (vm.usbDevices.isEmpty()) {
+            Text(stringResource(R.string.usb_none), color = DIM, fontSize = 12.sp)
+        }
+        vm.usbDevices.forEach { d ->
+            Text(d.id, color = ACCENT, fontSize = 30.sp, fontFamily = FontFamily.Monospace,
+                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            Text(listOfNotNull(d.label, d.name).joinToString(" · ").ifEmpty { "—" },
+                 color = FG, fontSize = 12.sp)
+        }
+        Text(vm.status, color = Color(0xFFD6A93D), fontSize = 12.sp,
+             textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        if (vm.usbDevices.isNotEmpty()) {
+            OutlinedButton(onClick = {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(
+                    vm.usbDevices.joinToString("\n") { d ->
+                        listOfNotNull(d.id, d.label, d.name).joinToString(" ")
+                    }))
+                vm.notice = copied
+            }) { Text(stringResource(R.string.copy_usb_ids), fontSize = 12.sp) }
         }
     }
 }

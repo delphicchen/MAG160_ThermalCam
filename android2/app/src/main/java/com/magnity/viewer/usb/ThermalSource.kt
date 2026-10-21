@@ -39,13 +39,29 @@ interface ThermalSource {
 }
 
 object ThermalSources {
-    /** A camera the viewer connects to on its own (known VID/PID). */
-    fun isKnown(device: UsbDevice): Boolean =
-        MagDeviceWrapper.isMagnity(device) || Tiny2cSource.isKnown(device)
+    /** VID/PID pairs a Tiny2C has streamed from on this phone (the viewer persists them);
+     *  treated like the built-in ids from then on. */
+    @Volatile var learned: Set<Pair<Int, Int>> = emptySet()
 
-    /** [isKnown], or a UVC device that may be a Tiny2C under another id — tried on a
-     *  manual Connect only, so a webcam never gets opened on its own. */
+    /** A camera the viewer connects to without asking first (known VID/PID). */
+    fun isKnown(device: UsbDevice): Boolean =
+        MagDeviceWrapper.isMagnity(device) || Tiny2cSource.isKnown(device) ||
+            (device.vendorId to device.productId) in learned
+
+    /** [isKnown], or a UVC device that may be a Tiny2C under another id — Android's USB
+     *  permission dialog is the user's say before it is opened. */
     fun isCandidate(device: UsbDevice): Boolean = isKnown(device) || Tiny2cSource.isUvc(device)
+
+    /** "0A0A:2602" — what the viewer shows and what a device filter needs. */
+    fun idText(device: UsbDevice): String = "%04X:%04X".format(device.vendorId, device.productId)
+
+    /** What the viewer takes [device] for, for the device list; null = not a camera. */
+    fun label(device: UsbDevice): String? = when {
+        MagDeviceWrapper.isMagnity(device) -> "MAG160"
+        isKnown(device) -> "Tiny2C"
+        Tiny2cSource.isUvc(device) -> "UVC"
+        else -> null
+    }
 
     /** The source for [device], reusing [current] when it is already the right kind. */
     fun forDevice(device: UsbDevice, current: ThermalSource?): ThermalSource = when {
