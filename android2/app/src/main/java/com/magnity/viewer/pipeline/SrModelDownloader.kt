@@ -21,6 +21,9 @@ import java.util.concurrent.CancellationException
  */
 object SrModelDownloader {
     const val BASE = "https://github.com/delphicchen/MAG160_ThermalCam/releases/download/sr-models/"
+    /** A package's version 1 is the built-in weights renamed, which already run at any
+     *  frame size — only a newer (retrained) version is worth offering. */
+    const val BUILTIN_VERSION = 1
     private const val VERSIONS = "downloaded.json"
     private const val PROGRESS_EVERY_MS = 100L
 

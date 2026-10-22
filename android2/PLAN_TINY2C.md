@@ -54,6 +54,16 @@ EMS = 發射率 × 16384；`libAC020sdk.so` NEEDED 幾乎全部 .so（MNN/OpenCV
   高低增益切換（-15~150 / 50~550 °C）、信息行的防灼傷旗標。
 - `device_filter.xml` 加 Tiny2C 的 VID/PID。
 
+## 2.7-alpha5（2026-10-22）— 內建 SR 模型通用所有尺寸
+
+- alpha4 Debug 截圖：Tiny2C 正常（25 fps、cb=frames、len 正確、Δ≈0.3 °C、raw 隨場景變），
+  但 `NCNN ×1 → bicubic 192×256`：選 768×1024 時找不到 192×256 模型 → 退回 Anime4K（使用者看到
+  「跳回第一個」）。下載按鈕沒出現 → 對方在中國，抓 GitHub 的 models.json 多半失敗（失敗只記 log）。
+- 修：ncnn 圖不綁尺寸，`NcnnUpscaler` 找不到該尺寸模型時用內建 160×120 那份；下載只在 release
+  有比內建新（version > 1）的套件時才提示。
+- 調色盤：截圖是 `gray`，下方「gray」按鈕就是調色盤選單（待對方確認換了有沒有變）。
+- 溫度存疑：手指 11.9 °C、手比背景冷 → 待對方測額頭 / 熱水確認（可能是未做暖機補償，或手真的冰）。
+
 ## 2.7-alpha4（2026-10-21）— 診斷資訊
 
 - 對方用 alpha3 有連上，但回報「超分無效、pseudocolor 無效」；程式碼看不出尺寸相關的錯，

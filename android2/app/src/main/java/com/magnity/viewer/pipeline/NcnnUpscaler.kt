@@ -18,8 +18,9 @@ import java.util.zip.ZipInputStream
  *   adb push thermal_120x160_fp16.param /sdcard/Android/data/com.magnity.viewer/files/model/
  *   adb push thermal_120x160_fp16.bin   /sdcard/Android/data/com.magnity.viewer/files/model/
  *
- * One model per orientation, because the exported graph has a static input size — the
- * portrait default is 120×160, the unrotated frame is 160×120.
+ * Files are named per input size (the portrait default is 120×160, the unrotated frame
+ * 160×120), but the exported SRVGG graph has no fixed shape (no input size, ×4 Interp), so
+ * when nothing matches a frame size — a Tiny2C's 256×192 — the built-in model runs on it.
  *
  * Both model generations run: the first release is 3-channel (the grey field replicated
  * into R=G=B, the outputs averaged), the v2 recipe 1-channel. Which one is read from the
@@ -70,47 +71,51 @@ class NcnnUpscaler private constructor() : AutoCloseable {
         private fun assetNames(w: Int, h: Int) =
             "model/thermal_${w}x${h}_fp16.param" to "model/thermal_${w}x${h}_fp16.bin"
 
-        private fun inAssets(ctx: Context, w: Int, h: Int): Boolean {
-            val (p, _) = assetNames(w, h)
-            return runCatching { ctx.assets.open(p).close() }.isSuccess
-        }
+        private fun inAssets(ctx: Context, names: Pair<String, String>): Boolean =
+            runCatching { ctx.assets.open(names.first).close() }.isSuccess
+
+        /** The bundled model for this size, else the bundled 160×120 one (size-agnostic). */
+        private fun assetFor(ctx: Context, w: Int, h: Int): Pair<String, String>? =
+            assetNames(w, h).takeIf { inAssets(ctx, it) }
+                ?: assetNames(160, 120).takeIf { inAssets(ctx, it) }
 
         fun isInstalled(ctx: Context, w: Int, h: Int): Boolean {
             val (p, b) = modelFiles(ctx, w, h)
-            return (p.isFile && b.isFile) || inAssets(ctx, w, h)
+            return (p.isFile && b.isFile) || assetFor(ctx, w, h) != null
         }
 
         /**
-         * Null when no model is installed for this frame size. A file pushed into the
-         * external dir wins over a bundled asset, so a bundled model can be overridden
+         * Null when no model is installed (not even the bundled one). A file pushed into
+         * the external dir wins over a bundled asset, so a bundled model can be overridden
          * for testing without rebuilding.
          */
         fun open(ctx: Context, w: Int, h: Int): NcnnUpscaler? {
             val (p, b) = modelFiles(ctx, w, h)
             val fromFiles = p.isFile && b.isFile
-            if (!fromFiles && !inAssets(ctx, w, h)) {
+            val asset = if (fromFiles) null else assetFor(ctx, w, h)
+            if (!fromFiles && asset == null) {
                 Log.i(TAG, "no ncnn model for ${w}x$h in assets or ${modelDir(ctx)}")
                 return null
             }
             val u = NcnnUpscaler()
             u.vulkan = u.nativeGpuAvailable()
-            u.handle = if (fromFiles) {
+            u.handle = if (asset == null) {
                 u.nativeInit(p.absolutePath, b.absolutePath, u.vulkan)
             } else {
-                val (ap, ab) = assetNames(w, h)
-                u.nativeInitAsset(ctx.assets, ap, ab, u.vulkan)
+                u.nativeInitAsset(ctx.assets, asset.first, asset.second, u.vulkan)
             }
             if (u.handle == 0L) {
                 Log.e(TAG, "ncnn model failed to load")
                 return null
             }
             val param = runCatching {
-                if (fromFiles) p.readText()
-                else ctx.assets.open(assetNames(w, h).first).use { it.readBytes().decodeToString() }
+                if (asset == null) p.readText()
+                else ctx.assets.open(asset.first).use { it.readBytes().decodeToString() }
             }.getOrDefault("")
             u.inChannels = ncnnParamInputChannels(param)
             u.fromFiles = fromFiles
-            Log.i(TAG, "ncnn model ${w}x$h: ${u.inChannels}-channel input")
+            Log.i(TAG, "ncnn model ${w}x$h (${asset?.first ?: p.name}): " +
+                "${u.inChannels}-channel input")
             return u
         }
     }

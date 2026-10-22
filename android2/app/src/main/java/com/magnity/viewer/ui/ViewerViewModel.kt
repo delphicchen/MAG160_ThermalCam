@@ -1387,8 +1387,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The `sr-models` package to offer for the current frame size (none installed, or a
-     *  newer one than downloaded); null when there is nothing to offer. */
+    /** The `sr-models` package to offer for the current frame size (newer than the one
+     *  downloaded, or than the built-in weights); null when there is nothing to offer. */
     var srRemote by mutableStateOf<SrModelDownloader.Package?>(null); private set
     /** Bytes done / total of the running model download; null when none runs. */
     var srDownload by mutableStateOf<Pair<Long, Long>?>(null); private set
@@ -1406,7 +1406,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 .getOrNull()?.also { srManifest = it } ?: return@launch
             srRemote = list.firstOrNull { "${fr.w}x${fr.h}" in it.sizes }?.takeIf {
                 val have = SrModelDownloader.installedVersion(NcnnUpscaler.modelDir(ctx), it.file)
-                if (have > 0) it.version > have else !NcnnUpscaler.isInstalled(ctx, fr.w, fr.h)
+                it.version > maxOf(have, SrModelDownloader.BUILTIN_VERSION)
             }
         }
     }
