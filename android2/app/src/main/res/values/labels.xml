@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- On-screen names of the palettes and upscalers. They stay English (the internal names)
+     in every language except zh-CN, whose users asked for Chinese names
+     (values-zh-rCN/labels.xml). zh-TW keeps English on purpose: there is no
+     values-zh-rTW/labels.xml, so it falls back to these. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="palette_inferno">inferno</string>
+    <string name="palette_ironbow">ironbow</string>
+    <string name="palette_jet">jet</string>
+    <string name="palette_gray">gray</string>
+    <string name="palette_hot">hot</string>
+    <string name="palette_viridis">viridis</string>
+    <string name="palette_rainbow">rainbow</string>
+    <string name="palette_nipy_spectral">nipy_spectral</string>
+
+    <string name="upscaler_anime4k">Anime4K</string>
+    <string name="upscaler_ncnn">Thermal SR</string>
+    <string name="upscaler_bicubic">Bicubic</string>
+</resources>

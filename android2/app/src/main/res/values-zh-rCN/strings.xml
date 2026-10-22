@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Keep values/, values-zh-rTW/ and values-zh-rCN/ in step: same names, same format args.
      Product and measurement terms (MIN/MAX/SPOT, FFC, ε, Anime4K, Thermal SR, Bicubic, MSX,
-     ncnn, SDK) stay in English in every language. -->
+     ncnn, SDK) stay in English in every language — except here: zh-CN users asked for
+     Chinese palette / upscaler names (labels.xml), so the sentences below use those. -->
 <resources>
     <string name="language">语言</string>
     <string name="lang_system">跟随系统</string>
@@ -19,13 +20,13 @@
     <string name="rec">录像</string>
     <string name="stop">停止</string>
     <string name="upscaler">放大算法</string>
-    <string name="sr_needs_model">Thermal SR 需要训练好的模型 —— 从下方加载模型包，或把 .param/.bin 放到\n%1$s</string>
-    <string name="load_sr_model">加载 SR 模型（.zip）…</string>
+    <string name="sr_needs_model">热成像超分需要训练好的模型 —— 从下方加载模型包，或把 .param/.bin 放到\n%1$s</string>
+    <string name="load_sr_model">加载超分模型（.zip）…</string>
     <string name="use_builtin">改用内置</string>
-    <string name="sr_model_builtin">Thermal SR 模型：内置</string>
-    <string name="sr_model_imported">Thermal SR 模型：已导入（%1$s）</string>
-    <string name="download_sr_model">下载 %1$s 的 Thermal SR 模型（%2$s MB）</string>
-    <string name="sr_downloading">正在下载 SR 模型… %1$s / %2$s MB</string>
+    <string name="sr_model_builtin">超分模型：内置</string>
+    <string name="sr_model_imported">超分模型：已导入（%1$s）</string>
+    <string name="download_sr_model">下载 %1$s 的超分模型（%2$s MB）</string>
+    <string name="sr_downloading">正在下载超分模型… %1$s / %2$s MB</string>
     <string name="display_resolution">显示分辨率</string>
     <string name="rotate">旋转</string>
     <string name="mirror">镜像 ↔</string>
@@ -88,7 +89,7 @@
     <string name="zoom_offset">缩放 ×%1$.2f · 位移 %2$+.3f / %3$+.3f</string>
     <string name="temporal_denoise">时域降噪</string>
     <string name="spatial_denoise">空间降噪</string>
-    <string name="spatial_off_sr">开启 Thermal SR 时停用 —— 模型本身会降噪</string>
+    <string name="spatial_off_sr">开启热成像超分时停用 —— 模型本身会降噪</string>
     <string name="sdk_test_title">原厂 SDK 测试（libcoresdk.so arm64）</string>
     <string name="sdk_test_interrupts">会中断实时画面</string>
     <string name="running">运行中…</string>
@@ -152,14 +153,14 @@
     <string name="n_export_failed">导出失败：%1$s</string>
     <string name="n_not_calib">不是融合校准文件</string>
     <string name="n_ncnn_loaded">ncnn 模型已加载（%1$s）</string>
-    <string name="n_no_ncnn">%1$s/ 里没有 ncnn 模型 —— 改用 Anime4K</string>
-    <string name="n_ncnn_failed">ncnn 失败，改用 Anime4K：%1$s</string>
-    <string name="n_anime4k_failed">Anime4K GPU 失败，改用 Bicubic：%1$s</string>
-    <string name="n_sr_imported">SR 模型已导入（%1$s）—— 选 Thermal SR 即可使用</string>
-    <string name="n_sr_import_failed">SR 模型导入失败：%1$s</string>
-    <string name="n_using_builtin">已改用内置 SR 模型</string>
-    <string name="n_sr_download_failed">SR 模型下载失败：%1$s</string>
-    <string name="n_sr_download_cancelled">已取消 SR 模型下载</string>
+    <string name="n_no_ncnn">%1$s/ 里没有 ncnn 模型 —— 改用通用超分</string>
+    <string name="n_ncnn_failed">ncnn 失败，改用通用超分：%1$s</string>
+    <string name="n_anime4k_failed">通用超分（GPU）失败，改用双三次插值：%1$s</string>
+    <string name="n_sr_imported">超分模型已导入（%1$s）—— 选热成像超分即可使用</string>
+    <string name="n_sr_import_failed">超分模型导入失败：%1$s</string>
+    <string name="n_using_builtin">已改用内置超分模型</string>
+    <string name="n_sr_download_failed">超分模型下载失败：%1$s</string>
+    <string name="n_sr_download_cancelled">已取消超分模型下载</string>
     <string name="n_snapshot_saved">照片已保存到 Pictures/MagViewer</string>
     <string name="n_snapshot_failed">拍照失败</string>
     <string name="n_snapshot_failed_msg">拍照失败：%1$s</string>

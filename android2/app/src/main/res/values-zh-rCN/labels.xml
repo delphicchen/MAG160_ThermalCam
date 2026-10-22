@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chinese palette / upscaler names for zh-CN only — see values/labels.xml. -->
+<resources>
+    <string name="palette_inferno">熔岩</string>
+    <string name="palette_ironbow">铁红</string>
+    <string name="palette_jet">蓝红</string>
+    <string name="palette_gray">白热</string>
+    <string name="palette_hot">热金属</string>
+    <string name="palette_viridis">翠绿</string>
+    <string name="palette_rainbow">彩虹</string>
+    <string name="palette_nipy_spectral">光谱</string>
+
+    <string name="upscaler_anime4k">通用超分</string>
+    <string name="upscaler_ncnn">热成像超分</string>
+    <string name="upscaler_bicubic">双三次插值</string>
+</resources>

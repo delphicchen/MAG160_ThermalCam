@@ -205,11 +205,11 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             Box {
                 OutlinedButton(onClick = { exp = true },
                                contentPadding = PaddingValues(horizontal = 10.dp)) {
-                    Text(vm.paletteName, fontSize = 12.sp)
+                    Text(paletteLabel(vm.paletteName), fontSize = 12.sp)
                 }
                 DropdownMenu(expanded = exp, onDismissRequest = { exp = false }) {
                     Palettes.NAMES.forEach { n ->
-                        DropdownMenuItem(text = { Text(n) }, onClick = {
+                        DropdownMenuItem(text = { Text(paletteLabel(n)) }, onClick = {
                             vm.paletteName = n; exp = false
                         })
                     }
@@ -499,11 +499,14 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
             Text(stringResource(R.string.upscaler), color = DIM, fontSize = 11.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth()) {
-                Chip("Anime4K", vm.upscaler == ViewerViewModel.Upscaler.ANIME4K,
+                Chip(stringResource(R.string.upscaler_anime4k),
+                     vm.upscaler == ViewerViewModel.Upscaler.ANIME4K,
                      Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.ANIME4K }
-                Chip("Thermal SR", vm.upscaler == ViewerViewModel.Upscaler.NCNN,
+                Chip(stringResource(R.string.upscaler_ncnn),
+                     vm.upscaler == ViewerViewModel.Upscaler.NCNN,
                      Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.NCNN }
-                Chip("Bicubic", vm.upscaler == ViewerViewModel.Upscaler.BICUBIC,
+                Chip(stringResource(R.string.upscaler_bicubic),
+                     vm.upscaler == ViewerViewModel.Upscaler.BICUBIC,
                      Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.BICUBIC }
             }
             if (!vm.ncnnModelInstalled()) {
@@ -1078,6 +1081,19 @@ private fun AlignSlider(label: String, value: Float, range: ClosedFloatingPointR
         Text(fmt.format(value), color = FG, fontSize = 11.sp, modifier = Modifier.width(52.dp))
     }
 }
+
+/** String ids of the palettes' on-screen names (values/labels.xml); the pref keeps the
+ *  internal name. */
+private val PALETTE_LABELS = mapOf(
+    "inferno" to R.string.palette_inferno, "ironbow" to R.string.palette_ironbow,
+    "jet" to R.string.palette_jet, "gray" to R.string.palette_gray,
+    "hot" to R.string.palette_hot, "viridis" to R.string.palette_viridis,
+    "rainbow" to R.string.palette_rainbow, "nipy_spectral" to R.string.palette_nipy_spectral,
+)
+
+@Composable
+private fun paletteLabel(name: String): String =
+    PALETTE_LABELS[name]?.let { stringResource(it) } ?: name
 
 @Composable
 private fun Chip(label: String, selected: Boolean, modifier: Modifier = Modifier,

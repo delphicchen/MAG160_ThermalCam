@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Keep values/, values-zh-rTW/ and values-zh-rCN/ in step: same names, same format args.
      Product and measurement terms (MIN/MAX/SPOT, FFC, ε, Anime4K, Thermal SR, Bicubic, MSX,
-     ncnn, SDK) stay in English in every language. -->
+     ncnn, SDK) stay in English in every language. Palette / upscaler names live in
+     labels.xml: Chinese for zh-CN only (asked for by its users), English elsewhere. -->
 <resources>
     <string name="language">Language</string>
     <string name="lang_system">System</string>
