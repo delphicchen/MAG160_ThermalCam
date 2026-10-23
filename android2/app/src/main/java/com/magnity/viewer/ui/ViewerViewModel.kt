@@ -37,6 +37,7 @@ import com.magnity.viewer.pipeline.ArgbImage
 import com.magnity.viewer.pipeline.Fusion
 import com.magnity.viewer.pipeline.FusionCalibration
 import com.magnity.viewer.pipeline.ImageOps
+import com.magnity.viewer.pipeline.DetailEnhance
 import com.magnity.viewer.pipeline.NcnnUpscaler
 import com.magnity.viewer.pipeline.Palettes
 import com.magnity.viewer.pipeline.SrModelDownloader
@@ -45,6 +46,7 @@ import com.magnity.viewer.usb.MagDeviceWrapper
 import com.magnity.viewer.usb.ThermalSource
 import com.magnity.viewer.usb.ThermalSources
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -118,6 +120,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         const val WIZARD_MAX_RESIDUAL_PX = 3f
         /** Consecutive frames one press of the fusion debug dump saves. */
         private const val FUSION_DUMP_FRAMES = 10
+        /** Auto range time constant: the 1–99 % range glides instead of jumping per frame. */
+        private const val RANGE_TAU_S = 0.4f
+        /** Thermal SR speed guard: frames skipped after it loads (Vulkan warm-up), frames
+         *  measured before judging, and the share of the camera's rate it must keep. */
+        private const val SR_WARMUP_FRAMES = 25
+        private const val SR_CHECK_FRAMES = 50
+        private const val SR_MIN_RATE_SHARE = 0.65f
     }
 
     enum class Upscaler { BICUBIC, ANIME4K, NCNN }
@@ -181,7 +190,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var upscale by pref("upscale", 4)               // display upscale 1/2/4 (4 → 640×480)
     var upscaler by Persisted(prefs, "upscaler", Upscaler.ANIME4K,
         { k, d -> runCatching { Upscaler.valueOf(getString(k, d.name)!!) }.getOrDefault(d) },
-        { k, v -> putString(k, v.name) })
+        { k, v -> putString(k, v.name) },
+        // picking Thermal SR again after the speed guard switched it off = keep it, slow or not
+        onSet = { if (it == Upscaler.NCNN && srSwitchedForSpeed) srKeepSlow = true })
+    /** The user chose Thermal SR over frame rate; the speed guard stays out of it. */
+    var srKeepSlow by pref("sr_keep_slow", false)
     var spatialDenoise by pref("spatial_denoise", true)
     /**
      * The thermal SR model was trained on noisy, FPN-degraded input and denoises on its
@@ -193,8 +206,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     val thermalSrActive: Boolean get() = upscaler == Upscaler.NCNN && upscale > 1
     var temporalDenoise by pref("temporal_denoise", true)   // display only — readouts stay per-frame
     var temporalStrength by pref("temporal_strength", 0.85f)
+    /** DDE on the display ([DetailEnhance]); palette no longer linear in °C while on. */
+    var detailEnhance by pref("detail_enhance", false)
     var showMaxRoi by pref("show_max", true)
     var showMinRoi by pref("show_min", true)
+    var showCenter by pref("show_center", true)
     /** Target emissivity handed to the SDK, (0, 1]; applied on connect and on change. */
     var emissivity: Float by pref("emissivity", 1.0f, onSet = { applyEmissivity() })
     /** Write the phone's location into snapshots and videos (needs precise location). */
@@ -1115,6 +1131,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             var lastSeenAt = startedAt
             var lastProcessed = -1L
             var learnChecked = false
+            rangeSnap = true
             while (isActive && connected) {
                 if (paused) { delay(50); continue }
 
@@ -1141,6 +1158,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     val res = process(temp)
                     lastFrame = res
                     val tRec = System.nanoTime()
+                    checkSrSpeed((tRec - t0) / 1e6f)
                     feedRecorder(res)
                     lap(ST_REC, tRec)
                     tickFps()
@@ -1201,16 +1219,30 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             // one histogram pass for both percentiles — the sorted version's two
             // copies + two sorts per frame were the dominant cost of this stage
             val (p1, p99) = ImageOps.percentileRange(oriented, 1f, 99f)
-            slo = p1
-            shi = if (p99 - p1 < 0.1f) p1 + 0.1f else p99
-            scaleLo = slo; scaleHi = shi
+            val tHi = if (p99 - p1 < 0.1f) p1 + 0.1f else p99
+            // glide toward it: a per-frame jump makes the whole picture pulse when
+            // something warm enters or leaves the frame
+            val now = System.nanoTime()
+            if (rangeSnap) {
+                scaleLo = p1; scaleHi = tHi; rangeSnap = false
+            } else {
+                val dt = ((now - rangeAt) / 1e9f).coerceIn(0f, 1f)
+                val k = 1f - exp(-dt / RANGE_TAU_S)
+                scaleLo += k * (p1 - scaleLo); scaleHi += k * (tHi - scaleHi)
+            }
+            rangeAt = now
+            slo = scaleLo
+            shi = maxOf(scaleHi, slo + 0.1f)
         } else {
             slo = scaleLo; shi = scaleHi
         }
+        // the readouts and the EDGES gate keep using [oriented]; only the picture changes
+        val shown = if (detailEnhance) detailFilter.apply(oriented, ow, oh, slo, shi)
+                    else oriented
 
         t = lap(ST_RNG, t)
 
-        var img = render(oriented, ow, oh, slo, shi)
+        var img = render(shown, ow, oh, slo, shi)
         t = lap(ST_UP, t)
         var inset: android.graphics.RectF? = null
         var afWindow: android.graphics.RectF? = null
@@ -1259,6 +1291,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             ncnn = null; ncnnSize = 0 to 0
         }
         val k = upscale.coerceIn(1, 4)
+        srRendered = false
         if (k > 1 && upscaler == Upscaler.NCNN) {
             try {
                 // one model per input size: the exported graph has a static shape
@@ -1270,6 +1303,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 if (u != null) {
                     val img = u.render(field, w, h, lo, hi, Palettes.lut(paletteName))
                     noteSrTimings(u)
+                    srRendered = true
                     renderPath = "Thermal SR ${img.w}×${img.h}"
                     return img
                 }
@@ -1325,6 +1359,35 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var srFrame = false
     private var srLabel = ""
     private val srMs = FloatArray(3)
+
+    // Thermal SR speed guard (processing thread)
+    private var srRendered = false             // the last frame came out of Thermal SR
+    private var srCheckFrames = 0
+    private var srFrameMs = 0f
+    @Volatile private var srSwitchedForSpeed = false
+
+    /**
+     * Thermal SR costs per input pixel, so a bigger sensor (a Tiny2C's 256×192 is 2.56×
+     * the MAG160's) can take longer than the camera's frame period — and the serial loop
+     * then runs at that rate (12–15 fps reported on a Tiny2C). When SR keeps the loop under
+     * [SR_MIN_RATE_SHARE] of the camera's rate, switch to Anime4K once and say why; picking
+     * Thermal SR again sets [srKeepSlow] and the guard stays off from then on.
+     */
+    private fun checkSrSpeed(frameMs: Float) {
+        if (!srRendered || srKeepSlow || srSwitchedForSpeed) { srCheckFrames = 0; return }
+        val camFps = sdk.fps.takeIf { it > 0 } ?: return
+        srCheckFrames++
+        if (srCheckFrames <= SR_WARMUP_FRAMES) { srFrameMs = frameMs; return }
+        srFrameMs += STAGE_EMA * (frameMs - srFrameMs)
+        if (srCheckFrames < SR_WARMUP_FRAMES + SR_CHECK_FRAMES) return
+        if (srFrameMs > 1000f / (camFps * SR_MIN_RATE_SHARE)) {
+            Log.w(TAG, "Thermal SR %.0f ms/frame vs %d fps camera — switching to Anime4K"
+                .format(srFrameMs, camFps))
+            srSwitchedForSpeed = true
+            upscaler = Upscaler.ANIME4K
+            notice = str(R.string.n_sr_too_slow, srFrameMs, 1000f / srFrameMs)
+        }
+    }
 
     private fun noteSrTimings(u: NcnnUpscaler) {
         val t = u.lastTimings()
@@ -1441,6 +1504,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         srDownloadJob?.cancel()
     }
     private val temporalFilter = TemporalDenoise()
+    private val detailFilter = DetailEnhance()
+
+    // auto range glide state (processing thread); snapped on each new stream
+    @Volatile private var rangeSnap = true
+    private var rangeAt = 0L
 
     /** Motion-adaptive temporal IIR on the display field (history resets on orientation
      *  change). The returned array is the filter's buffer — read-only. */
@@ -1469,7 +1537,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Debug overlay: the per-stage split in ms (in: convert+orient+stats · dn: denoise ·
-     *  rng: display range · up: upscale+palette · fuse: visible fusion · bmp: the frame's
+     *  rng: display range + DDE · up: upscale+palette · fuse: visible fusion · bmp: the frame's
      *  Bitmap · rec: video/.mgt while recording), plus the Thermal SR breakdown when it
      *  produced this frame. */
     private fun debugText(): String {
@@ -1518,7 +1586,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var thermalWriter: ThermalStream.Writer? = null
 
     private fun composite(fr: FrameResult) = FrameComposer.compose(
-        fr, Palettes.lut(paletteName), showMaxRoi, showMinRoi, spot, spotCelsius())
+        fr, Palettes.lut(paletteName), showMaxRoi, showMinRoi, spot, spotCelsius(),
+        if (showCenter) centerCelsius(fr) else null)
 
     fun takeScreenshot() {
         val fr = lastFrame ?: return
@@ -1655,6 +1724,17 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val (x, y) = spot ?: return null
         if (x < 0 || y < 0 || x >= fr.w || y >= fr.h) return null
         return fr.temps.getOrNull(y * fr.w + x)
+    }
+
+    /** CTR: mean of the pixels at the grid's geometric centre — the 2×2 block on an even
+     *  size, the middle pixel on an odd one. Raw °C, like SPOT. */
+    fun centerCelsius(fr: FrameResult? = lastFrame): Float? {
+        fr ?: return null
+        val t = fr.temps
+        if (t.size < fr.w * fr.h || fr.w == 0 || fr.h == 0) return null
+        val x0 = (fr.w - 1) / 2; val x1 = fr.w / 2
+        val y0 = (fr.h - 1) / 2; val y1 = fr.h / 2
+        return (t[y0 * fr.w + x0] + t[y0 * fr.w + x1] + t[y1 * fr.w + x0] + t[y1 * fr.w + x1]) / 4f
     }
 
     private var gateBuf: FloatArray? = null

@@ -134,14 +134,18 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
         }
 
         // readouts; each one is also its marker's on/off switch
-        Row(horizontalArrangement = Arrangement.spacedBy(20.dp),
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth()) {
             Readout("MIN", fr?.tempMin, COLD, vm.showMinRoi) { vm.showMinRoi = !vm.showMinRoi }
             Readout("MAX", fr?.tempMax, HOT, vm.showMaxRoi) { vm.showMaxRoi = !vm.showMaxRoi }
+            Readout("CTR", vm.centerCelsius(fr), ACCENT, vm.showCenter) { vm.showCenter = !vm.showCenter }
             Readout("SPOT", vm.spotCelsius(), Color.White, vm.spot != null) { vm.spot = null }
             Spacer(Modifier.weight(1f))
-            if (vm.fusionOn) Text(vm.fusionDistanceLabel, color = DIM, fontSize = 12.sp)
-            Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp)
+            // stacked so four readouts still fit one row on a ~390 dp phone
+            Column(horizontalAlignment = Alignment.End) {
+                if (vm.fusionOn) Text(vm.fusionDistanceLabel, color = DIM, fontSize = 12.sp)
+                Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp)
+            }
         }
 
         if (vm.fusionOn && vm.calibPromptActive && !vm.fusionAligning && vm.wizardStep == null) {
@@ -313,9 +317,7 @@ private fun ThermalImage(
         )
     }) {
         drawImage(image, dstSize = IntSize(dispW, dispH), filterQuality = FilterQuality.Low)
-        fun marker(pos: Int, color: Color, v: Float) {
-            val c = Offset(left + (pos % fr.w + 0.5f) * cellW, top + (pos / fr.w + 0.5f) * cellH)
-            drawCircle(color, 18f, c, style = Stroke(4f, cap = StrokeCap.Round))
+        fun label(c: Offset, color: Color, v: Float) {
             val label = "%.1f°C".format(v)
             labelPaint.color = color.toArgb()
             val tw = labelPaint.measureText(label)
@@ -323,8 +325,22 @@ private fun ThermalImage(
             val ty = (c.y - 20f).coerceAtLeast(38f)
             drawIntoCanvas { it.nativeCanvas.drawText(label, tx, ty, labelPaint) }
         }
+        fun marker(pos: Int, color: Color, v: Float) {
+            val c = Offset(left + (pos % fr.w + 0.5f) * cellW, top + (pos / fr.w + 0.5f) * cellH)
+            drawCircle(color, 18f, c, style = Stroke(4f, cap = StrokeCap.Round))
+            label(c, color, v)
+        }
         if (vm.showMaxRoi) marker(fr.maxPos, HOT, fr.tempMax)
         if (vm.showMinRoi) marker(fr.minPos, COLD, fr.tempMin)
+        if (vm.showCenter) vm.centerCelsius(fr)?.let { v ->
+            // gapped crosshair on the grid's geometric centre — the measured pixels stay visible
+            val c = Offset(left + fr.w * cellW / 2f, top + fr.h * cellH / 2f)
+            drawLine(ACCENT, c - Offset(24f, 0f), c - Offset(8f, 0f), 4f)
+            drawLine(ACCENT, c + Offset(8f, 0f), c + Offset(24f, 0f), 4f)
+            drawLine(ACCENT, c - Offset(0f, 24f), c - Offset(0f, 8f), 4f)
+            drawLine(ACCENT, c + Offset(0f, 8f), c + Offset(0f, 24f), 4f)
+            label(c, ACCENT, v)
+        }
         vm.spot?.let { (sx, sy) ->
             val c = Offset(left + (sx + 0.5f) * cellW, top + (sy + 0.5f) * cellH)
             drawLine(Color.White, c - Offset(18f, 0f), c + Offset(18f, 0f), 3f)
@@ -802,6 +818,13 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                     Text(stringResource(R.string.spatial_off_sr),
                          color = DIM, fontSize = 10.sp)
                 }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(vm.detailEnhance, onCheckedChange = { vm.detailEnhance = it })
+            Column {
+                Text(stringResource(R.string.detail_enhance), color = FG)
+                Text(stringResource(R.string.detail_enhance_hint), color = DIM, fontSize = 10.sp)
             }
         }
 

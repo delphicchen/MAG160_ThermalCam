@@ -38,6 +38,8 @@ object FrameComposer {
     /** Output image is always the 4× grid (640×480 or 480×640) so files are consistent
      *  whatever display upscale is selected. */
     const val SCALE = 4
+    /** CTR marker colour (the live view's ACCENT). */
+    private val CENTER = Color.rgb(0x58, 0xA6, 0xFF)
     private const val BAR_MIN = 72
 
     /**
@@ -65,6 +67,7 @@ object FrameComposer {
         fr: FrameResult, lut: IntArray,
         showMax: Boolean, showMin: Boolean,
         spot: Pair<Int, Int>?, spotC: Float?,
+        centerC: Float? = null,
     ): Bitmap {
         // paints are per call: screenshot (IO) and video (processing loop) can overlap
         val filter = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -86,16 +89,19 @@ object FrameComposer {
         val r = fr.inset
         fun px(gx: Int) = ((r?.left ?: 0f) + (gx + 0.5f) / fr.w * (r?.width() ?: 1f)) * iw
         fun py(gy: Int) = ((r?.top ?: 0f) + (gy + 0.5f) / fr.h * (r?.height() ?: 1f)) * ih
-        fun marker(pos: Int, color: Int, v: Float) {
-            val x = px(pos % fr.w); val y = py(pos / fr.w)
-            ring.color = color
-            c.drawCircle(x, y, 10f, ring)
+        fun label(x: Float, y: Float, color: Int, v: Float) {
             val label = "%.1f°C".format(v)
             val tw = text.measureText(label)
             val tx = (x + 14f).coerceAtMost(iw - tw - 2f)
             val ty = (y - 12f).coerceAtLeast(24f)
             text.color = color
             c.drawText(label, tx, ty, text)
+        }
+        fun marker(pos: Int, color: Int, v: Float) {
+            val x = px(pos % fr.w); val y = py(pos / fr.w)
+            ring.color = color
+            c.drawCircle(x, y, 10f, ring)
+            label(x, y, color, v)
         }
         if (showMax) marker(fr.maxPos, Color.rgb(0xF8, 0x51, 0x49), fr.tempMax)
         if (showMin) marker(fr.minPos, Color.rgb(0x3F, 0xB9, 0x50), fr.tempMin)
@@ -104,6 +110,15 @@ object FrameComposer {
             ring.color = Color.WHITE
             c.drawLine(x - 14f, y, x + 14f, y, ring)
             c.drawLine(x, y - 14f, x, y + 14f, ring)
+        }
+        // CTR: gapped crosshair on the grid's geometric centre
+        centerC?.let { v ->
+            val x = ((r?.left ?: 0f) + 0.5f * (r?.width() ?: 1f)) * iw
+            val y = ((r?.top ?: 0f) + 0.5f * (r?.height() ?: 1f)) * ih
+            ring.color = CENTER
+            c.drawLine(x - 14f, y, x - 5f, y, ring); c.drawLine(x + 5f, y, x + 14f, y, ring)
+            c.drawLine(x, y - 14f, x, y - 5f, ring); c.drawLine(x, y + 5f, x, y + 14f, ring)
+            label(x, y, CENTER, v)
         }
 
         // colour bar, centred in whatever strip is left after alignment padding

@@ -89,13 +89,15 @@
     <string name="zoom_offset">缩放 ×%1$.2f · 位移 %2$+.3f / %3$+.3f</string>
     <string name="temporal_denoise">时域降噪</string>
     <string name="spatial_denoise">空间降噪</string>
+    <string name="detail_enhance">细节增强（DDE）</string>
+    <string name="detail_enhance_hint">只影响画面 — 颜色不再与温度成正比</string>
     <string name="spatial_off_sr">开启热成像超分时停用 —— 模型本身会降噪</string>
     <string name="sdk_test_title">原厂 SDK 测试（libcoresdk.so arm64）</string>
     <string name="sdk_test_interrupts">会中断实时画面</string>
     <string name="running">运行中…</string>
     <string name="run_sdk_test">运行 SDK 测试</string>
     <string name="disconnect">断开连接</string>
-    <string name="help_live">点画面放置 SPOT，长按清除。\n点画面下方的 MIN / MAX / SPOT 可隐藏标记。\n红圈 = MAX，绿圈 = MIN。</string>
+    <string name="help_live">点画面放置 SPOT，长按清除。\n点画面下方的 MIN / MAX / CTR / SPOT 可隐藏标记。\n红圈 = MAX，绿圈 = MIN，蓝十字 = CTR（中心点）。</string>
     <string name="calib_outside">对焦 %1$s 超出已存的距离</string>
     <string name="align">对齐</string>
     <string name="calib_outside_align">对焦 %1$s 超出已存的距离 —— 对准中央物体后按“保存…”</string>
@@ -155,6 +157,7 @@
     <string name="n_ncnn_loaded">ncnn 模型已加载（%1$s）</string>
     <string name="n_no_ncnn">%1$s/ 里没有 ncnn 模型 —— 改用通用超分</string>
     <string name="n_ncnn_failed">ncnn 失败，改用通用超分：%1$s</string>
+    <string name="n_sr_too_slow">热成像超分在这台相机上太慢（每帧 %1$.0f ms，约 %2$.0f fps）—— 已改用通用超分。再选一次热成像超分就会保留。</string>
     <string name="n_anime4k_failed">通用超分（GPU）失败，改用双三次插值：%1$s</string>
     <string name="n_sr_imported">超分模型已导入（%1$s）—— 选热成像超分即可使用</string>
     <string name="n_sr_import_failed">超分模型导入失败：%1$s</string>

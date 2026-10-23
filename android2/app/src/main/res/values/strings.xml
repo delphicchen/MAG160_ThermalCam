@@ -89,13 +89,15 @@
     <string name="zoom_offset">zoom ×%1$.2f · offset %2$+.3f / %3$+.3f</string>
     <string name="temporal_denoise">Temporal denoise</string>
     <string name="spatial_denoise">Spatial denoise</string>
+    <string name="detail_enhance">Detail enhancement (DDE)</string>
+    <string name="detail_enhance_hint">display only — colours no longer scale linearly with °C</string>
     <string name="spatial_off_sr">off while Thermal SR is on — the model denoises itself</string>
     <string name="sdk_test_title">Factory SDK test (libcoresdk.so arm64)</string>
     <string name="sdk_test_interrupts">Interrupts the live stream</string>
     <string name="running">Running…</string>
     <string name="run_sdk_test">Run SDK smoke test</string>
     <string name="disconnect">Disconnect</string>
-    <string name="help_live">Tap the image to place SPOT, long-press to clear.\nTap MIN / MAX / SPOT under the image to hide a marker.\nRed ring = MAX, green ring = MIN.</string>
+    <string name="help_live">Tap the image to place SPOT, long-press to clear.\nTap MIN / MAX / CTR / SPOT under the image to hide a marker.\nRed ring = MAX, green ring = MIN, blue cross = CTR (centre).</string>
     <string name="calib_outside">Focus %1$s is outside the saved distances</string>
     <string name="align">Align</string>
     <string name="calib_outside_align">Focus %1$s is outside the saved distances — align on the centre object, then Save…</string>
@@ -155,6 +157,7 @@
     <string name="n_ncnn_loaded">ncnn model loaded (%1$s)</string>
     <string name="n_no_ncnn">No ncnn model in %1$s/ — using Anime4K</string>
     <string name="n_ncnn_failed">ncnn failed, using Anime4K: %1$s</string>
+    <string name="n_sr_too_slow">Thermal SR too slow on this camera (%1$.0f ms/frame, ~%2$.0f fps) — switched to Anime4K. Pick Thermal SR again to keep it.</string>
     <string name="n_anime4k_failed">Anime4K GPU failed, using bicubic: %1$s</string>
     <string name="n_sr_imported">SR model imported (%1$s) — select Thermal SR to use it</string>
     <string name="n_sr_import_failed">SR model import failed: %1$s</string>

@@ -138,6 +138,38 @@ ncnn 圖不綁尺寸（Input 無 shape、Interp 用 ×4 scale，兩方向 param/
   4. 已安裝版本比 `models.json` 舊 → 提示更新
 - 進度與錯誤走現有 `notice` / `status` 字串。
 
+## 待辦建議（2026-10-23 記錄，使用者要求先記下，尚未實作）
+
+### A. Tiny2C 開 Thermal SR 只有 12–15 fps
+
+- 原因：alpha5 起 SR 也跑 256×192（像素 2.56× MAG160），處理迴圈是串行的 → fps = 1000 / 每幀 ms。
+  alpha4 的 25 fps 是因為當時 SR 沒在跑。
+- 內建模型 = SRVGGNetCompact：1→64 conv、10 層 64→64 conv、64→16 conv、PixelShuffle ×4 + nearest ×4
+  殘差。每個**輸入**像素 ≈ 378k MAC，其中 10 層 body 佔 97%，與放大倍率無關。
+  - 256×192 ≈ 18.6 GMAC/幀；160×120 ≈ 7.3 GMAC/幀。
+  - **×2 模型只省 ~2% 網路計算**（最後一層 64→4 取代 64→16），只有後處理（調色盤＋拷貝、Bitmap）
+    從 1024×768 變 512×384 省 4×。不值得單獨做 ×2。
+  - 真正有效：**輕量模型**（num_feat 64→32 → body 計算量 ¼，約與 160×120 現況同級；或 num_conv 10→6）。
+    要用 `sr_train/` 重訓 256×192 版，放 `sr-models` release。
+- App 端（小改動）：SR 每幀耗時持續超過幀週期（例如 1.3× 1000/fps，取幾秒平均）→ 自動退回
+  Anime4K 並跳提示；使用者可再手動切回。
+- 實測（對方手機，2026-10-23，SR Vulkan 1-ch imported）：in 7.0 · dn 0.9 · rng 0.8 · **up 55.0
+  （net 47.0 / post 7.7）** · bmp 2.5 → 約 66 ms/幀 ≈ 15 fps。瓶頸是網路本身（71 %）；×2 輸出只省
+  post＋bmp 約 8 ms（→ ~17 fps），輕量模型（body ¼）估 net ~12 ms → 可達相機的 25 fps。
+  2.7 的速度保護門檻 = 1000 / (25 × 0.65) ≈ 61.5 ms，這組數字會觸發退回 Anime4K。
+- 現成替代：Anime4K 選 ×2 只跑一道 → 512×384，計算量小很多。
+
+### B. MAG160 Mx（1.25 mm 四針）`calibration download failed: -2`
+
+- 反組譯 `CNetComm::GetCaliFile`（arm64 `libcoresdk.so` 0x790ac）：回呼碼 −1 = 送指令失敗或大小不合理；
+  **−2 = EP 0x84 的 `libusb_bulk_transfer` 中途回錯**（第二參數 = 失敗時進度 %）；−4 = 寫檔例外。
+  → 不是 App 逾時，是 1.8 MB 校正檔傳到一半 USB 斷/錯。
+- 推測：裸線無屏蔽的 1.25 四針線材 > OTG 供電 > 該型韌體不從 EP 0x84 給檔（此時進度會是 0）。
+- 改法（小改動）：`MagDeviceWrapper.open` 的錯誤訊息帶上失敗時的進度 %；−2 時 dislink + 重新
+  link/prepare 自動重試 2 次。
+- 繞路：同一手機＋相機成功下載一次後就快取在 `<files>/cali/`，之後不再下載 → 換短的屏蔽線或有供電
+  的 hub 成功一次即可。
+
 ## 階段 5 — 收尾
 
 - README ×3（en / zh-CN / zh-TW）：支援機型、網路權限說明、Tiny2C SDK 列入 credits / THIRD_PARTY_NOTICES。

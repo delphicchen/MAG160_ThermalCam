@@ -44,6 +44,9 @@ class MagDeviceWrapper : ThermalSource {
         val PIDS = intArrayOf(0x0001, 0x0002)
         /** First-link calibration download (~1.8 MB over USB; seconds in practice). */
         private const val CALI_DOWNLOAD_TIMEOUT_S = 120L
+        /** Fresh links tried after a failed download, and the pause before each. */
+        private const val CALI_RETRIES = 2
+        private const val CALI_RETRY_MS = 1000L
         private const val START_RETRIES = 5
         private const val START_RETRY_MS = 400L
 
@@ -172,6 +175,29 @@ class MagDeviceWrapper : ThermalSource {
             Log.i(TAG, "MagDevice.init ok, cali dir=${context.getExternalFilesDir("")}")
         }
 
+        // A failed download is almost always the USB bulk read breaking off mid-file
+        // (−2: thin 4-pin pigtails, weak OTG power); a fresh link often gets through, and
+        // once one download lands the file is cached and never fetched again.
+        var attempt = 0
+        while (true) {
+            try {
+                linkAndPrepare(context, onCaliProgress)
+                return
+            } catch (e: CaliDownloadFailed) {
+                if (++attempt > CALI_RETRIES) {
+                    throw RuntimeException("${e.message} (${attempt} tries — USB transfer " +
+                        "broke off: try a shorter / shielded cable or a powered hub)")
+                }
+                Log.w(TAG, "${e.message} — relinking, retry $attempt/$CALI_RETRIES")
+                Thread.sleep(CALI_RETRY_MS)
+            }
+        }
+    }
+
+    /** The camera's calibration download failed — worth a fresh link (see [open]). */
+    private class CaliDownloadFailed(msg: String) : RuntimeException(msg)
+
+    private fun linkAndPrepare(context: Context, onCaliProgress: (Int) -> Unit) {
         val magDev = MagDevice()
         val enum = awaitEnumeration(context)
         Log.i(TAG, "linkCamera: name=${enum.name} id=${enum.id}")
@@ -218,13 +244,16 @@ class MagDeviceWrapper : ThermalSource {
 
         // Pulls mag_cali.bin off the camera and builds the NUC / radiometric tables.
         // Callback (from libcoresdk's CNetComm::GetCaliFile): (0, 0..100) while the file
-        // transfers, (0, 100) once it is written and closed, (<0, _) on a failed transfer.
+        // transfers, (0, 100) once it is written and closed, (<0, %) on a failed one:
+        // −1 command refused / bad size, −2 bulk read on EP 0x84 failed, −4 write failed.
         Log.i(TAG, "prepareProcessImage…")
         val caliDone = java.util.concurrent.CountDownLatch(1)
         val caliStatus = java.util.concurrent.atomic.AtomicInteger(0)
+        val caliFailedAt = java.util.concurrent.atomic.AtomicInteger(0)
         val prep = magDev.prepareProcessImage { status, progress ->
             Log.i(TAG, "prepare: status=$status progress=$progress")
             if (status < 0) {
+                caliFailedAt.set(progress)
                 caliStatus.set(status)
                 caliDone.countDown()
             } else {
@@ -251,7 +280,8 @@ class MagDeviceWrapper : ThermalSource {
             }
             if (caliStatus.get() < 0) {
                 magDev.dislinkCamera()
-                throw RuntimeException("calibration download failed: ${caliStatus.get()}")
+                throw CaliDownloadFailed("calibration download failed: ${caliStatus.get()} " +
+                    "at ${caliFailedAt.get()} %")
             }
             Log.i(TAG, "calibration file downloaded")
         }

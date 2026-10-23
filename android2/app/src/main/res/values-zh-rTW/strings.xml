@@ -88,13 +88,15 @@
     <string name="zoom_offset">縮放 ×%1$.2f · 位移 %2$+.3f / %3$+.3f</string>
     <string name="temporal_denoise">時域降噪</string>
     <string name="spatial_denoise">空間降噪</string>
+    <string name="detail_enhance">細節增強（DDE）</string>
+    <string name="detail_enhance_hint">只影響畫面 — 顏色不再與溫度成正比</string>
     <string name="spatial_off_sr">開啟 Thermal SR 時停用 —— 模型本身會降噪</string>
     <string name="sdk_test_title">原廠 SDK 測試（libcoresdk.so arm64）</string>
     <string name="sdk_test_interrupts">會中斷即時影像</string>
     <string name="running">執行中…</string>
     <string name="run_sdk_test">執行 SDK 測試</string>
     <string name="disconnect">中斷連線</string>
-    <string name="help_live">點畫面放置 SPOT，長按清除。\n點畫面下方的 MIN / MAX / SPOT 可隱藏標記。\n紅圈 = MAX，綠圈 = MIN。</string>
+    <string name="help_live">點畫面放置 SPOT，長按清除。\n點畫面下方的 MIN / MAX / CTR / SPOT 可隱藏標記。\n紅圈 = MAX，綠圈 = MIN，藍十字 = CTR（中心點）。</string>
     <string name="calib_outside">對焦 %1$s 超出已存的距離</string>
     <string name="align">對齊</string>
     <string name="calib_outside_align">對焦 %1$s 超出已存的距離 —— 對準中央物體後按「儲存…」</string>
@@ -154,6 +156,7 @@
     <string name="n_ncnn_loaded">ncnn 模型已載入（%1$s）</string>
     <string name="n_no_ncnn">%1$s/ 裡沒有 ncnn 模型 —— 改用 Anime4K</string>
     <string name="n_ncnn_failed">ncnn 失敗，改用 Anime4K：%1$s</string>
+    <string name="n_sr_too_slow">Thermal SR 在這台相機太慢（每幀 %1$.0f ms，約 %2$.0f fps）—— 已改用 Anime4K。再選一次 Thermal SR 就會保留。</string>
     <string name="n_anime4k_failed">Anime4K GPU 失敗，改用 Bicubic：%1$s</string>
     <string name="n_sr_imported">SR 模型已匯入（%1$s）—— 選 Thermal SR 即可使用</string>
     <string name="n_sr_import_failed">SR 模型匯入失敗：%1$s</string>

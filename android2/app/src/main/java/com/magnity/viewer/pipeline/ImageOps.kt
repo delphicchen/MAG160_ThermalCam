@@ -325,13 +325,18 @@ object ImageOps {
      * bilinearly interpolated between the four neighbouring tile mappings (no tile
      * seams). Returns values in [0, 1]. `clipLimit` is the multiple of the uniform
      * histogram level above which bins are clipped (2..6 typical; higher = stronger).
+     * [rangeLo]/[rangeHi] fix the histogram span (values outside are clamped into the end
+     * bins) instead of the frame's min/max, so one hot pixel doesn't reshape every map.
      */
     fun clahe(
         src: FloatArray, w: Int, h: Int,
         tilesX: Int = 8, tilesY: Int = 6, clipLimit: Float = 3f, bins: Int = 256,
+        rangeLo: Float? = null, rangeHi: Float? = null,
     ): FloatArray {
         var lo = Float.MAX_VALUE; var hi = -Float.MAX_VALUE
         for (v in src) { if (v < lo) lo = v; if (v > hi) hi = v }
+        if (rangeLo != null && rangeHi != null) { lo = rangeLo; hi = rangeHi }
+        val last = bins - 1
         val range = hi - lo
         if (range < 1e-9f) return FloatArray(src.size) { 0.5f }
         val binScale = (bins - 1) / range
@@ -351,7 +356,7 @@ object ImageOps {
                 for (y in y0 until y1) {
                     val row = y * w
                     for (x in x0 until x1) {
-                        hist[((src[row + x] - lo) * binScale).toInt()]++
+                        hist[((src[row + x] - lo) * binScale).toInt().coerceIn(0, last)]++
                         n++
                     }
                 }
@@ -393,7 +398,7 @@ object ImageOps {
                 val wx = fx - tx0
                 var tx1 = tx0 + 1
                 tx0 = tx0.coerceIn(0, tilesX - 1); tx1 = tx1.coerceIn(0, tilesX - 1)
-                val bin = ((src[row + x] - lo) * binScale).toInt()
+                val bin = ((src[row + x] - lo) * binScale).toInt().coerceIn(0, last)
                 val m00 = maps[ty0 * tilesX + tx0][bin]
                 val m01 = maps[ty0 * tilesX + tx1][bin]
                 val m10 = maps[ty1 * tilesX + tx0][bin]
