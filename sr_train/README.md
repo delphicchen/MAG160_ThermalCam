@@ -66,6 +66,9 @@ everything below, which ends at a verified `.param`/`.bin`.
 
 ```
 sr_train/
+├── colab/
+│   ├── train_thermal_sr.ipynb           the Colab run (MODEL = 'full' / 'lite')
+│   └── train_thermal_sr_lite.ipynb      same, preset to the Tiny2C lite model — Run all
 ├── options/
 │   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 + spectrum + gradient — the model
 │   ├── 02_thermal_srvgg_x4_gan.yml      stage 2, + VGG + light GAN (optional, off)
@@ -76,6 +79,7 @@ sr_train/
     ├── estimate_fpn_stats.py            measure your sensor's FPN → yml amplitudes
     ├── count_params.py                  params / MACs per candidate
     ├── export_onnx.py                   checkpoint → TorchScript + ONNX + reference output
+    ├── ncnn_to_pth.py                   exported ncnn SRVGG model → BasicSR checkpoint
     ├── convert_ncnn.sh                  pnnx (or onnx2ncnn) → .param/.bin → fp16
     ├── verify_ncnn.py                   PyTorch vs ncnn, with tolerance rationale
     └── hallucination_check.py           fake-hot-spot / energy-preservation validation
@@ -296,12 +300,13 @@ An ×2 model would not help: the body runs at input resolution whatever the scal
 the output conv shrinks (~2 % of the network). The lite model is for the Tiny2C only — the
 app picks models by file name, so a `256x192` / `192x256` package never replaces the MAG160's.
 
-1. In the Colab config cell set `MODEL = 'lite'`, and put v4's
-   `thermal_srvgg_x4_net_net_g_80000.pth` (inside `android2/thermal_cam_model_20260925-2/thermal_sr_progress.zip`)
-   in `<root>/init/`. The cell prunes it to 32 channels with
-   `truncate_pretrained.py --num-feat 32` — per layer the filters with the largest L1 norm.
-   That start is lossy (PSNR ~19 dB against v4 before training) and the 80k-iteration
-   fine-tune recovers it, as v4's depth truncation was recovered.
+1. Open `colab/train_thermal_sr_lite.ipynb` (the main notebook with `MODEL = 'lite'` set and
+   the restore cell skippable, so **Run all** goes through untouched). v4 is rebuilt from the
+   app's bundled ncnn model in the clone (`scripts/ncnn_to_pth.py`, fp16-rounded: within
+   8e-4 of the v4 checkpoint), or taken from a `.pth` in `<root>/init/` when present, then
+   pruned to 32 channels with `truncate_pretrained.py --num-feat 32` — per layer the filters
+   with the largest L1 norm. That start is lossy (PSNR ~19 dB against v4 before training) and
+   the 80k-iteration fine-tune recovers it, as v4's depth truncation was recovered.
 2. Same recipe and sensor ranges as v4 (MAG160's — the Tiny2C's noise is not measured yet).
    `RECIPE` gets a `-lite32` suffix, so a 64/10 run left on Drive is archived, not resumed.
 3. Section 9 sees the 32-channel checkpoint and exports it at 256×192 and 192×256 as
