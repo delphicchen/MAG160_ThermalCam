@@ -281,6 +281,41 @@ keeps ~10 mantissa bits, each accumulation rounds at ~5e-4 relative, and the err
 with depth. Vulkan may use fp16 storage with fp32 accumulate depending on the GPU, so the
 same file can be slightly more accurate on one device than another.
 
+## Lite 32/10 for the Tiny2C (256×192)
+
+On the Tiny2C the 64/10 model is the bottleneck: a tester's phone measured
+`net 47 ms` of a 66 ms frame (≈15 fps against the camera's 25). Compute per input pixel, as
+conv weights × output pixels:
+
+| model | params | MAC / input px | GMAC @160×120 | GMAC @256×192 |
+|---|---|---|---|---|
+| 64/10 1-ch (built in) | 380 k | 378 k | 7.3 | 18.6 |
+| **32/10 1-ch (lite)** | **98 k** | **97 k** | 1.9 | **4.8** |
+
+An ×2 model would not help: the body runs at input resolution whatever the scale, and only
+the output conv shrinks (~2 % of the network). The lite model is for the Tiny2C only — the
+app picks models by file name, so a `256x192` / `192x256` package never replaces the MAG160's.
+
+1. In the Colab config cell set `MODEL = 'lite'`, and put v4's
+   `thermal_srvgg_x4_net_net_g_80000.pth` (inside `android2/thermal_cam_model_20260925-2/thermal_sr_progress.zip`)
+   in `<root>/init/`. The cell prunes it to 32 channels with
+   `truncate_pretrained.py --num-feat 32` — per layer the filters with the largest L1 norm.
+   That start is lossy (PSNR ~19 dB against v4 before training) and the 80k-iteration
+   fine-tune recovers it, as v4's depth truncation was recovered.
+2. Same recipe and sensor ranges as v4 (MAG160's — the Tiny2C's noise is not measured yet).
+   `RECIPE` gets a `-lite32` suffix, so a 64/10 run left on Drive is archived, not resumed.
+3. Section 9 sees the 32-channel checkpoint and exports it at 256×192 and 192×256 as
+   `thermal_ncnn_L1FFT_lite32.zip` — load it on the Tiny2C with **Load SR model (.zip)…**
+   and check the Debug overlay's `net` time.
+4. Publish it as version 2 of the Tiny2C package, so the app offers the download:
+
+   ```sh
+   python scripts/make_sr_package.py --size 256x192 --version 2 \
+       export/thermal_256x192_fp16.param export/thermal_256x192_fp16.bin \
+       export/thermal_192x256_fp16.param export/thermal_192x256_fp16.bin
+   gh release upload sr-models dist/thermal_ncnn_256x192.zip dist/models.json --clobber
+   ```
+
 ## Time estimates (single RTX 3090-class GPU)
 
 | step | wall time |

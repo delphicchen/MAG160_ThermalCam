@@ -157,6 +157,12 @@ ncnn 圖不綁尺寸（Input 無 shape、Interp 用 ×4 scale，兩方向 param/
   （net 47.0 / post 7.7）** · bmp 2.5 → 約 66 ms/幀 ≈ 15 fps。瓶頸是網路本身（71 %）；×2 輸出只省
   post＋bmp 約 8 ms（→ ~17 fps），輕量模型（body ¼）估 net ~12 ms → 可達相機的 25 fps。
   2.7 的速度保護門檻 = 1000 / (25 × 0.65) ≈ 61.5 ms，這組數字會觸發退回 Anime4K。
+- 2026-10-23 訓練設定已備好（未訓練）：使用者決定**只給 Tiny2C、沿用 MAG160 雜訊設定**。Colab 設
+  `MODEL = 'lite'` → 32/10（98 k 參數、4.8 GMAC @256×192，約 64/10 的 ¼）；暖啟動 = v4 64/10
+  （`android2/thermal_cam_model_20260925-2/thermal_sr_progress.zip` 裡的 net_g_80000）用
+  `truncate_pretrained.py --num-feat 32` 依濾波器 L1 剪成 32 通道（本機實測 strict load OK，未微調前
+  對 v4 PSNR ~19 dB）；匯出 256×192 / 192×256 → `thermal_ncnn_L1FFT_lite32.zip`；發布用
+  `make_sr_package.py --size 256x192 --version 2`。步驟在 `sr_train/README.md`「Lite 32/10」。
 - 現成替代：Anime4K 選 ×2 只跑一道 → 512×384，計算量小很多。
 
 ### B. MAG160 Mx（1.25 mm 四針）`calibration download failed: -2`
