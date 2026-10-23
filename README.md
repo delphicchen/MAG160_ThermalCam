@@ -34,7 +34,9 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 |---|---|
 | 📱 **Works on Android 15+** | Runs where the factory MAG-Cx / MAG-Mx apps no longer do. |
 | 🌡️ **Real absolute temperature** | Straight from the factory SDK — fully corrected, no manual calibration. |
-| 🎯 **MIN / MAX / SPOT markers** | Find the hottest and coldest point instantly, plus a live colour bar and range. |
+| 📷 **Two cameras, one app** | Magnity MAG160 / MAG-Mx and InfiRay **Tiny2C** (256×192) — plug either in and MagViewer recognises it. |
+| 🎯 **MIN / MAX / CTR / SPOT markers** | Find the hottest and coldest point instantly, read the centre crosshair, plus a live colour bar and a smoothly tracking auto range. |
+| 🔍 **Detail enhancement (DDE)** | Optional commercial-camera look: local contrast and edges brought out, flat areas quieter — display only, readouts untouched. |
 | 🎚️ **Adjustable emissivity** | Set ε from 0.10 to 1.00, with one-tap presets for skin, matte paint and wood. |
 | 🚀 **4× AI super-resolution** | A thermal-tuned Real-ESRGAN model on the GPU via **ncnn + Vulkan** turns 160×120 into a crisp 640×480. |
 | ✨ **Anime4K GPU upscaling** | Sharp, clean display with a real-time CNN shader. |
@@ -82,6 +84,27 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.7 — 2026-10-23
+- **InfiRay Tiny2C support** (AC020 UVC, 256×192) next to the MAG160 in the same app, through
+  the vendor's AC020 Android SDK 1.1.5: temperature, FFC and emissivity. For a UVC camera
+  Android needs the **Camera** permission before USB access — allow both. Not done yet: the
+  vendor's 30 s warm-up compensation and high/low gain switching (fixed high gain, −15…150 °C).
+- **Thermal SR at any frame size** — the built-in model also runs on the Tiny2C. When it cannot
+  keep up with the camera (under ~⅔ of its frame rate), MagViewer switches to Anime4K once and
+  says why; pick Thermal SR again to keep it.
+- **Detail enhancement (DDE)** in the drawer — local contrast and edges brought out, flat areas
+  quieter. Display only; while it is on, colours no longer scale linearly with °C.
+- **CTR** — a centre crosshair with its temperature (mean of the centre pixels), as a readout and
+  in snapshots and videos. Tap CTR under the image to hide it.
+- **Steadier auto range** — the colour range glides (~0.4 s) instead of jumping every frame, so
+  the picture no longer pulses when something warm enters or leaves.
+- **MAG-Mx calibration download retries** — when the first-connection download breaks off
+  (error −2: the USB transfer failed, typical of thin 4-pin cables or weak OTG power), MagViewer
+  relinks and tries twice more, and the error says how far it got. Once a download succeeds it
+  is cached for good.
+- Debug overlay shows what drew each frame (path, size, change per frame, Tiny2C SDK counters);
+  the Simplified Chinese UI uses Chinese palette and upscaler names.
+
 ### 2.6 — 2026-10-12
 - **Calibration wizard** — a guided fusion calibration: one far point, then 1 m, 0.5 m and
   0.3 m. Enter the measured distance first and X/Y start where the fitted line predicts, so
@@ -111,7 +134,7 @@ Full notes and the APK for each version are in
 ### 2.5 — 2026-09-27
 - **Interface language** — English, 繁體中文 or 简体中文, picked in the drawer or under
   Android's per-app language settings; *System* follows the phone. Switching is instant and
-  keeps the camera connected. Measurement and product terms (MIN / MAX / SPOT, FFC, ε,
+  keeps the camera connected. Measurement and product terms (MIN / MAX / CTR / SPOT, FFC, ε,
   Thermal SR, Anime4K, MSX…) stay in English in every language.
 
 ### 2.4 — 2026-09-26
