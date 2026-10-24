@@ -293,10 +293,18 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             check(o.size >= 2) { "2038 payload too short" }
             prefs?.edit()?.putString(KEY_RESTORE_2038, hex(o, o.size, ""))?.apply()
             val picks = listOf(def) + formats.filter { it.index != def.fmt }.mapNotNull { pickOf(it) }
+            var failures = 0                      // a value the firmware chokes on: try the next
             for (v in CODING_TYPES) {
-                if (!running.get()) break
+                if (!running.get() || failures >= 3) break
                 val p = o.copyOf().also { it[0] = 1; it[1] = v.toByte() }
-                val err = simpleSet(3, 5, p)
+                val err = try {
+                    simpleSet(3, 5, p)
+                } catch (t: Throwable) {
+                    failures++
+                    say("coding=$v: ${t.message}")
+                    continue
+                }
+                failures = 0
                 val now = runCatching { hex(simpleGet(3, 5)) }.getOrElse { "read failed" }
                 say("coding=$v: set err=$err, now $now")
                 for (pk in picks) {
