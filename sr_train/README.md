@@ -287,6 +287,10 @@ same file can be slightly more accurate on one device than another.
 
 ## Lite 32/10 for the Tiny2C (256×192)
 
+**Status (2026-10-24): not finished.** The notebook, warm start and packaging below are
+ready, but the model has not been trained, exported or published yet — `sr-models` still
+holds only v1 of the Tiny2C package (the built-in v4 weights), so the Tiny2C runs the 64/10.
+
 On the Tiny2C the 64/10 model is the bottleneck: a tester's phone measured
 `net 47 ms` of a 66 ms frame (≈15 fps against the camera's 25). Compute per input pixel, as
 conv weights × output pixels:

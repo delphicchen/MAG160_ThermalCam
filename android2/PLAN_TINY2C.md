@@ -8,6 +8,18 @@ MagViewer 同一支 APK 同時支援 MAG160 與 Tiny2C（256×192，AC020 UVC）
 SDK 原檔：`../Tiny-2C/SDK/Android/ANDROID_AC020_SDK_USB_IR_UVC_1.1.5_20241022/`
 （範例 `simple/usbir/.../camera/CameraPreviewManager.java` 是主要參考）。
 
+## ⚠️ 未完成：Tiny2C 超分模型（2026-10-24 記錄）
+
+Tiny2C 專用的輕量 Thermal SR 模型（lite 32/10）**還沒完成**：
+
+- 已備好：訓練設定與 Run-all notebook（`sr_train/colab/train_thermal_sr_lite.ipynb`）、
+  從內建 v4 剪枝的暖啟動（`truncate_pretrained.py --num-feat 32`）、打包腳本。
+- 還沒做：Colab 訓練（80k iter）→ 匯出 256×192 / 192×256 → 實機看 Debug 的 `net` 時間 →
+  發成 `sr-models` 的 `thermal_ncnn_256x192.zip` **v2**（目前 release 上只有 v1 = 內建 v4 權重）。
+- 現況：Tiny2C 開 Thermal SR 跑的是內建 64/10，測試者手機約 12–15 fps，速度保護會退回
+  Anime4K（見下方待辦 A）。
+- 剩下步驟：`sr_train/README.md` 的「Lite 32/10 for the Tiny2C」第 1–4 步。
+
 ## 待確認（動手前）
 
 - [x] 對方模組是 **USB 版**（使用者確認 2026-10-18）。
