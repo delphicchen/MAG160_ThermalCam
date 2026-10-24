@@ -1,6 +1,10 @@
 # Builds the Android app (android2/) as the side-by-side "MagViewer β" test APK
 # (application id com.magnity.viewer.beta, debug-signed by the runner — it installs next
 # to a release build, not over it). Download it from the run's Artifacts.
+#
+# A commit whose message contains [prerelease] also publishes the APK as the GitHub
+# pre-release android-v<versionName>, titled and described by android2/PRERELEASE_NOTES.md
+# (first line "# title", the rest is the body). An existing tag is never overwritten.
 name: Android test APK
 
 on:
@@ -12,6 +16,8 @@ on:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: android2
@@ -47,9 +53,20 @@ jobs:
           mkdir -p out
           cp app/build/outputs/apk/beta/app-beta.apk "out/MagViewer-$v-beta.apk"
           ls -la out
+          echo "VERSION=$v" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
           name: MagViewer-beta-apk
           path: android2/out/*.apk
           if-no-files-found: error
+
+      - name: Pre-release
+        if: contains(github.event.head_commit.message, '[prerelease]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title=$(head -1 PRERELEASE_NOTES.md | sed 's/^# *//')
+          tail -n +2 PRERELEASE_NOTES.md > out/notes.md
+          gh release create "android-v$VERSION" out/*.apk --target "$GITHUB_SHA" \
+            --prerelease --latest=false --title "$title" --notes-file out/notes.md
