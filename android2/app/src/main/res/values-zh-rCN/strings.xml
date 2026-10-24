@@ -96,6 +96,11 @@
     <string name="sdk_test_interrupts">会中断实时画面</string>
     <string name="running">运行中…</string>
     <string name="run_sdk_test">运行 SDK 测试</string>
+    <string name="hik_test_title">海康 4117 诊断（测试版）</string>
+    <string name="hik_test_hint">逐一试相机的热成像串流模式和 USB 格式（约 1 分钟），记录相机送出什么；期间温度画面会暂停。完成后点“复制报告”发回来。</string>
+    <string name="run_hik_test">运行串流测试</string>
+    <string name="copy_report">复制报告</string>
+    <string name="n_report_copied">已复制报告</string>
     <string name="disconnect">断开连接</string>
     <string name="help_live">点画面放置 SPOT，长按清除。\n点画面下方的 MIN / MAX / CTR / SPOT 可隐藏标记。\n红圈 = MAX，绿圈 = MIN，蓝十字 = CTR（中心点）。</string>
     <string name="calib_outside">对焦 %1$s 超出已存的距离</string>

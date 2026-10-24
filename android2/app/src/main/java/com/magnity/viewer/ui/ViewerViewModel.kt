@@ -42,6 +42,7 @@ import com.magnity.viewer.pipeline.NcnnUpscaler
 import com.magnity.viewer.pipeline.Palettes
 import com.magnity.viewer.pipeline.SrModelDownloader
 import com.magnity.viewer.pipeline.TemporalDenoise
+import com.magnity.viewer.usb.Hik4117Source
 import com.magnity.viewer.usb.MagDeviceWrapper
 import com.magnity.viewer.usb.ThermalSource
 import com.magnity.viewer.usb.ThermalSources
@@ -305,7 +306,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var notice by mutableStateOf<String?>(null)
     /** Per-stage timing text for the debug overlay; only built while [debugOsd] is on. */
     var debugInfo by mutableStateOf(""); private set
-    /** Transcript of the last [runSdkSmokeTest]; null = never run. */
+    /** Transcript of the last [runSdkSmokeTest], or the HIK 4117 diagnostic report (kept
+     *  current while that camera is connected); null = neither. */
     var sdkLog by mutableStateOf<String?>(null); private set
     /** Open temperature capture (.mgt) being reviewed; null = live view. */
     var playback by mutableStateOf<ThermalPlayback?>(null); private set
@@ -422,8 +424,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 connected = true
                 lastDevId = devKey(device)
                 currentDevice = device
-                connectedUsb = ThermalSources.idText(device) + " · " +
-                    (if (sdk is MagDeviceWrapper) "MAG160" else "Tiny2C")
+                connectedUsb = ThermalSources.idText(device) + " · " + when (sdk) {
+                    is MagDeviceWrapper -> "MAG160"
+                    is Hik4117Source -> "HIK 4117"
+                    else -> "Tiny2C"
+                }
+                (sdk as? Hik4117Source)?.let { sdkLog = it.report() }
                 status = str(R.string.st_connected, sdk.width, sdk.height)
                 startSdkLoop()
             } catch (e: Throwable) {
@@ -1137,11 +1143,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
                 val fc = sdk.frameCount
                 val now = System.currentTimeMillis()
-                if (fc == 0L && now - startedAt > 8000) {
+                if (sdk.stallRecovery && fc == 0L && now - startedAt > 8000) {
                     Log.w(TAG, "SDK delivered no frames — recovering")
                     recover(); break
                 }
-                if (fc == lastSeen && fc > 0L && now - lastSeenAt > 6000) {
+                if (sdk.stallRecovery && fc == lastSeen && fc > 0L && now - lastSeenAt > 6000) {
                     Log.w(TAG, "SDK stream stalled — recovering")
                     recover(); break
                 }
@@ -1164,6 +1170,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                     tickFps()
                     status = frameStatus(fc, t0)
                     if (debugOsd) debugInfo = debugText()
+                    (sdk as? Hik4117Source)?.let { sdkLog = it.report() }
                 } catch (e: Throwable) {
                     Log.e(TAG, "display error", e)
                     status = "display: ${e::class.java.simpleName}: ${e.message}"
@@ -1779,6 +1786,35 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         if (mirror) dst = ImageOps.flipHorizontal(dst, cw, ch)
         return dst
     }
+
+    // ---- HIK 4117 diagnostic ------------------------------------------------------
+
+    /**
+     * The 4117 diagnostic build's stream experiment ([Hik4117Source.runStreamTest], ~1 min).
+     * The camera stays connected; its temperature snapshots pause meanwhile, and the
+     * report in [sdkLog] fills in as the test goes.
+     */
+    fun runHik4117Test() {
+        val src = sdk as? Hik4117Source ?: return
+        if (sdkBusy || !connected) return
+        sdkBusy = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val ticker = launch { while (isActive) { sdkLog = src.report(); delay(500) } }
+            try {
+                src.runStreamTest()
+            } catch (e: Throwable) {
+                Log.e(TAG, "4117 stream test failed", e)
+            } finally {
+                ticker.cancel()
+                sdkLog = src.report()
+                sdkBusy = false
+            }
+        }
+    }
+
+    /** [sdkLog] plus the camera's live diagnostics — what the Copy report button copies. */
+    fun reportText(): String =
+        listOfNotNull(sdkLog, sdk.diag()?.takeIf { connected }).joinToString("\n")
 
     // ---- factory SDK smoke test -----------------------------------------------
 

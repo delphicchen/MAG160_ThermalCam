@@ -96,6 +96,11 @@
     <string name="sdk_test_interrupts">Interrupts the live stream</string>
     <string name="running">Running…</string>
     <string name="run_sdk_test">Run SDK smoke test</string>
+    <string name="hik_test_title">HIK 4117 diagnostics (test build)</string>
+    <string name="hik_test_hint">Tries each thermal stream mode and USB format of the camera for about a minute and records what it sends; the temperature image pauses meanwhile. Then tap Copy report and send it.</string>
+    <string name="run_hik_test">Run stream test</string>
+    <string name="copy_report">Copy report</string>
+    <string name="n_report_copied">Report copied</string>
     <string name="disconnect">Disconnect</string>
     <string name="help_live">Tap the image to place SPOT, long-press to clear.\nTap MIN / MAX / CTR / SPOT under the image to hide a marker.\nRed ring = MAX, green ring = MIN, blue cross = CTR (centre).</string>
     <string name="calib_outside">Focus %1$s is outside the saved distances</string>

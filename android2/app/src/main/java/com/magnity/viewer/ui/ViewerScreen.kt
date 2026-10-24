@@ -841,6 +841,17 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                 Text(stringResource(if (vm.sdkBusy) R.string.running else R.string.run_sdk_test))
             }
         }
+        // the HIK 4117 diagnostic build's experiment (PLAN_HIK4117.md)
+        if (vm.cameraKind == "hik4117") {
+            Text(stringResource(R.string.hik_test_title), color = DIM, fontSize = 10.sp)
+            Text(stringResource(R.string.hik_test_hint), color = DIM, fontSize = 9.sp)
+            Button(onClick = { vm.runHik4117Test() }, enabled = vm.connected && !vm.sdkBusy,
+                   colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2B3D2B),
+                                                        contentColor = Color.White),
+                   modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(if (vm.sdkBusy) R.string.running else R.string.run_hik_test))
+            }
+        }
         vm.sdkLog?.let { logText ->
             Text(logText, color = Color(0xFF9DD69D), fontSize = 9.sp,
                  fontFamily = FontFamily.Monospace,
@@ -848,6 +859,12 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                      .fillMaxWidth()
                      .heightIn(max = 220.dp)
                      .verticalScroll(rememberScrollState()))
+            val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+            val copied = stringResource(R.string.n_report_copied)
+            OutlinedButton(onClick = {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(vm.reportText()))
+                vm.notice = copied
+            }) { Text(stringResource(R.string.copy_report), fontSize = 12.sp) }
         }
 
         HorizontalDivider(color = Color(0xFF30363D))
