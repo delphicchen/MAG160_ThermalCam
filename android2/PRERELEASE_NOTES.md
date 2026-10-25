@@ -1,12 +1,18 @@
-# MagViewer 2.8-alpha2 (Android 10+, HIK 4117 diagnostics)
+# MagViewer 2.8-alpha3 (Android 10+, HIK 4117 diagnostics)
 **Alpha — a diagnostic build for testing, not a stable release.** Built by GitHub Actions
 from the `ccr-1a3608d0-s97tvm` branch.
 
 **This APK is “MagViewer β”** (`com.magnity.viewer.beta`, signed by the build server): it
 installs **next to** MagViewer 2.7, not over it, with its own settings. If a β you built
-yourself is installed, uninstall that first. It installs over 2.8-alpha1.
+yourself is installed, uninstall that first. It installs over 2.8-alpha1 / alpha2.
 
-## New in 2.8-alpha2
+## New in 2.8-alpha3
+- MAG160 on Android 10–12: the USB-permission listener of the factory SDK is registered the
+  way those versions understand (it used a flag that only exists from Android 13).
+- Code clean-up from the build checks (lint now runs on every build and must pass); no
+  other change in behaviour.
+
+## From 2.8-alpha2
 - **Runs on Android 10 and later** (2.7 and 2.8-alpha1 needed Android 13). On older phones
   those showed “There was a problem parsing the package” / “解析包时出现问题”.
   Huawei phones on HarmonyOS 2–4 run Android apps and may now work too (not tested);

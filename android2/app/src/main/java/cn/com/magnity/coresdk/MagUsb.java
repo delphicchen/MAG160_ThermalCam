@@ -8,6 +8,7 @@ import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
+import androidx.core.content.ContextCompat;
 import cn.com.magnity.coresdk.MagDevice;
 import java.util.HashMap;
 import java.util.Map;
@@ -44,9 +45,10 @@ class MagUsb {
             }
             // Patched: targetSdk >= 34 requires an export flag when the filter
             // carries a non-system action (ACTION_USB_PERMISSION below), else
-            // registerReceiver throws SecurityException.
-            appCtx.registerReceiver(this.mUsbReceiver, this.mIntentFilter,
-                    Context.RECEIVER_NOT_EXPORTED);
+            // registerReceiver throws SecurityException. Through ContextCompat, which
+            // also keeps the receiver private before Android 13 (the flag is API 33).
+            ContextCompat.registerReceiver(appCtx, this.mUsbReceiver, this.mIntentFilter,
+                    ContextCompat.RECEIVER_NOT_EXPORTED);
         }
     }
 
@@ -70,7 +72,7 @@ class MagUsb {
             return -2;
         }
         Context appCtx = ctx.getApplicationContext();
-        UsbManager usbMgr = (UsbManager) appCtx.getSystemService("usb");
+        UsbManager usbMgr = (UsbManager) appCtx.getSystemService(Context.USB_SERVICE);
         UsbDevice dev = findDevice(usbMgr, id);
         if (dev == null) {
             return -2;
@@ -158,7 +160,7 @@ class MagUsb {
                                     break;
                                 }
                             } else {
-                                UsbManager usbMgr = (UsbManager) context.getSystemService("usb");
+                                UsbManager usbMgr = (UsbManager) context.getSystemService(Context.USB_SERVICE);
                                 MagUsb.this.mUsbHandle = usbMgr.openDevice(dev);
                                 if (MagUsb.this.mUsbCallback != null) {
                                     if (MagUsb.this.mUsbHandle != null) {

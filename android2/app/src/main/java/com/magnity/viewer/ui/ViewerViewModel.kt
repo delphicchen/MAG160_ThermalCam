@@ -561,7 +561,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val want = geotag && hasLocationPermission()
         if (want == locationActive) return
         if (!want) {
-            runCatching { LocationManagerCompat.removeUpdates(lm, locationListener) }
+            removeLocationUpdates(lm)
             locationActive = false
             location = null
             return
@@ -585,6 +585,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             Log.e(TAG, "location updates failed", e)
             notice = str(R.string.n_location_unavailable, e.message ?: "")
         }
+    }
+
+    /** Removing a listener needs no location permission (the platform call asks for
+     *  none); the compat wrapper is only annotated as if it did. */
+    @SuppressLint("MissingPermission")
+    private fun removeLocationUpdates(lm: LocationManager) {
+        runCatching { LocationManagerCompat.removeUpdates(lm, locationListener) }
     }
 
     /** The fix to embed in a capture: null when geo-tag is off or the fix is over 10 min old. */
@@ -1124,7 +1131,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         if (rgbCameraLazy.isInitialized()) rgbCamera.stop()
         if (locationActive) {
             getApplication<Application>().getSystemService(LocationManager::class.java)
-                ?.let { lm -> runCatching { LocationManagerCompat.removeUpdates(lm, locationListener) } }
+                ?.let { removeLocationUpdates(it) }
         }
         loop?.cancel()
         synchronized(recLock) {
