@@ -2,7 +2,7 @@
 
 # 🔥 MAG160 ThermalCam
 
-### Your Magnity thermal camera, reborn on modern Android.
+### An open-source thermal imaging app for Android phones — one app for many thermal modules.
 
 **English** · [繁體中文](README.zh-TW.md) · [简体中文](README.zh-CN.md)
 
@@ -17,16 +17,35 @@
 
 ---
 
-## 😤 The problem
+## 🎯 Goal
+
+**MAG160 ThermalCam** aims to be an **open-source thermal imaging app for phones** that works
+with as many USB thermal camera modules as possible: plug a module into the phone you already
+own, open one app, measure — with the same palettes, markers, super-resolution, recording and
+fusion whichever module it is.
+
+## 📷 Supported modules
+
+| Module | Resolution | Status |
+|---|---|---|
+| Magnity **MAG160 / MAG-Mx / MAG-Cx** | 160×120 | ✅ Supported (factory SDK) |
+| InfiRay **Tiny2C** (AC020) | 256×192 | ✅ Supported (vendor AC020 SDK) |
+| Hikvision **TB-4117-3/S** (USB) | 160×120 | 🧪 Diagnostic build (2.8 alpha) |
+
+## 🤝 Help add more modules
+
+Every module speaks its own protocol. With the vendor's **Android SDK** or its **protocol
+documentation**, support for a module can be added quickly; without them it has to be
+reverse-engineered first, which takes far longer. If you make or sell a thermal module, or
+have its SDK, documentation or a unit to test with, please [open an issue](https://github.com/delphicchen/MAG160_ThermalCam/issues) —
+it is the most direct way to get another module supported.
+
+## 😤 How it started
 
 The Magnity **MAG-Mx / MAG-Cx** USB thermal camera (VID `0x833C`) is great hardware — but its
 official apps **stopped working on Android 15+**. Plug it into a new phone and you get
-nothing.
-
-## 💡 The fix
-
-**MAG160 ThermalCam** is a brand-new Android app for this camera, rebuilt from the ground up
-by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you already own.
+nothing. So this app was rebuilt for it from the ground up by reverse-engineering the vendor
+SDK, and grew from there to other modules.
 
 ## ✨ Android app features
 
@@ -34,7 +53,7 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 |---|---|
 | 📱 **Works on Android 15+** | Runs where the factory MAG-Cx / MAG-Mx apps no longer do. |
 | 🌡️ **Real absolute temperature** | Straight from the factory SDK — fully corrected, no manual calibration. |
-| 📷 **Two cameras, one app** | Magnity MAG160 / MAG-Mx and InfiRay **Tiny2C** (256×192) — plug either in and MagViewer recognises it. |
+| 📷 **Several modules, one app** | Magnity MAG160 / MAG-Mx, InfiRay **Tiny2C** (256×192) and, in testing, Hikvision **TB-4117** — plug one in and MagViewer recognises it. |
 | 🎯 **MIN / MAX / CTR / SPOT markers** | Find the hottest and coldest point instantly, read the centre crosshair, plus a live colour bar and a smoothly tracking auto range. |
 | 🔍 **Detail enhancement (DDE)** | Optional commercial-camera look: local contrast and edges brought out, flat areas quieter — display only, readouts untouched. |
 | 🎚️ **Adjustable emissivity** | Set ε from 0.10 to 1.00, with one-tap presets for skin, matte paint and wood. |
