@@ -48,7 +48,8 @@ jobs:
         run: ./gradlew --no-daemon :app:assembleBeta
 
       # The app runs from Android 10 (minSdk 29): a call newer than that needs a version
-      # check, or it crashes there. Fail on lint's NewApi only; other findings are printed.
+      # check, or it crashes there. Fail on lint's NewApi only; every error and the API
+      # warnings are printed with their location.
       - name: Lint (API levels)
         run: |
           ./gradlew --no-daemon :app:lintBeta || true
@@ -62,7 +63,7 @@ jobs:
           print('lint:', ', '.join(f'{n}× {sev} {i}' for (sev, i), n in sorted(ids.items())))
           bad = 0
           for i in root:
-              if i.get('id') in ('NewApi', 'InlinedApi'):
+              if i.get('id') in ('NewApi', 'InlinedApi') or i.get('severity') in ('Error', 'Fatal'):
                   loc = i.find('location')
                   print(f"{i.get('id')}: {loc.get('file')}:{loc.get('line')}: {i.get('message')}")
                   bad += i.get('id') == 'NewApi'
