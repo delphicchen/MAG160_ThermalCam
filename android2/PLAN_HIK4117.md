@@ -45,7 +45,7 @@ B 可行的話：160×120 與 MAG160 同尺寸，內建 SR 模型直接可用（
 
 ### 給測試者
 
-1. 裝 `MagViewer-2.8-alpha1-beta.apk`（「MagViewer β」，與正式版並存）。
+1. 裝 `MagViewer-2.8-alpha2-beta.apk`（「MagViewer β」，與正式版並存；2.8-alpha2 起 Android 10 以上）。
 2. 插上 4117 → 允許「相機」權限 → 允許 USB。應出現溫度畫面（約 1 fps）。
 3. 按 Debug 截圖一張；開抽屜 →「執行串流測試」→ 等約 1 分鐘 →「複製報告」傳回來。
 

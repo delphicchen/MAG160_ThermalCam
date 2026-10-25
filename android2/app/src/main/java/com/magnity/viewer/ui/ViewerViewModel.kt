@@ -11,9 +11,8 @@ import android.hardware.usb.UsbManager
 import android.hardware.camera2.CameraMetadata
 import android.app.LocaleManager
 import android.location.Location
-import android.location.LocationListener
 import android.location.LocationManager
-import android.location.LocationRequest
+import android.os.Build
 import android.os.LocaleList
 import android.provider.OpenableColumns
 import android.util.Log
@@ -24,6 +23,9 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationListenerCompat
+import androidx.core.location.LocationManagerCompat
+import androidx.core.location.LocationRequestCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.magnity.viewer.R
@@ -95,6 +97,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         const val TAG = "MagViewer"
         const val ACTION_USB_PERMISSION = "com.magnity.viewer.USB_PERMISSION"
+        /** LocationManager.FUSED_PROVIDER, which the SDK only has from Android 12. */
+        private const val FUSED_PROVIDER = "fused"
         /** AUTO 1/Z smoothing factor per thermal frame (~0.3 s time constant). */
         private const val AUTO_INVZ_ALPHA = 0.15f
         /** 2 Hz ticks out of the calibrated range before the align panel opens (1.5 s). */
@@ -147,12 +151,17 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     // Per-app language (Android 13+ LocaleManager): the system stores it, shows it under
     // Settings → Apps → Language too, and applies it without restarting the activity.
-    // "" = follow the system.
-    private val localeManager = app.getSystemService(LocaleManager::class.java)
-    var appLanguage by mutableStateOf(localeManager.applicationLocales.toLanguageTags()); private set
+    // "" = follow the system — the only choice before Android 13, where the drawer hides it.
+    val languageSelectable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    var appLanguage by mutableStateOf(
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            app.getSystemService(LocaleManager::class.java).applicationLocales.toLanguageTags()
+        else ""); private set
 
     fun setLanguage(tag: String) {
-        localeManager.applicationLocales = LocaleList.forLanguageTags(tag)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        getApplication<Application>().getSystemService(LocaleManager::class.java)
+            .applicationLocales = LocaleList.forLanguageTags(tag)
         appLanguage = tag
     }
 
@@ -218,7 +227,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var geotag: Boolean by pref("geotag", false) { updateLocationUpdates() }
     /** Latest fix while [geotag] is on; null = none yet. */
     var location by mutableStateOf<Location?>(null); private set
-    private val locationListener = LocationListener { location = it }
+    // the compat listener: before Android 11 LocationListener's other callbacks are abstract,
+    // and a bare lambda dies with AbstractMethodError when the system calls one
+    private val locationListener = LocationListenerCompat { location = it }
     private var locationActive = false
 
     // ---- visible-camera fusion (beta) ----
@@ -550,22 +561,25 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val want = geotag && hasLocationPermission()
         if (want == locationActive) return
         if (!want) {
-            runCatching { lm.removeUpdates(locationListener) }
+            runCatching { LocationManagerCompat.removeUpdates(lm, locationListener) }
             locationActive = false
             location = null
             return
         }
-        val providers = if (lm.hasProvider(LocationManager.FUSED_PROVIDER))
-            listOf(LocationManager.FUSED_PROVIDER)
+        // "fused" is a platform provider from Android 12; older phones may still list one
+        val providers = if (LocationManagerCompat.hasProvider(lm, FUSED_PROVIDER))
+            listOf(FUSED_PROVIDER)
         else listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-                .filter { lm.hasProvider(it) }
-        val req = LocationRequest.Builder(10_000)
-            .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
+                .filter { LocationManagerCompat.hasProvider(lm, it) }
+        val req = LocationRequestCompat.Builder(10_000)
+            .setQuality(LocationRequestCompat.QUALITY_HIGH_ACCURACY)
             .setMinUpdateDistanceMeters(5f)
             .build()
         try {
             location = providers.mapNotNull { lm.getLastKnownLocation(it) }.maxByOrNull { it.time }
-            providers.forEach { lm.requestLocationUpdates(it, req, ctx.mainExecutor, locationListener) }
+            providers.forEach {
+                LocationManagerCompat.requestLocationUpdates(lm, it, req, ctx.mainExecutor, locationListener)
+            }
             locationActive = true
         } catch (e: Exception) {
             Log.e(TAG, "location updates failed", e)
@@ -1110,7 +1124,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         if (rgbCameraLazy.isInitialized()) rgbCamera.stop()
         if (locationActive) {
             getApplication<Application>().getSystemService(LocationManager::class.java)
-                ?.let { lm -> runCatching { lm.removeUpdates(locationListener) } }
+                ?.let { lm -> runCatching { LocationManagerCompat.removeUpdates(lm, locationListener) } }
         }
         loop?.cancel()
         synchronized(recLock) {

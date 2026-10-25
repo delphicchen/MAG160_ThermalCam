@@ -500,8 +500,9 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
     ) {
         Text("MagViewer", color = ACCENT, fontSize = 15.sp)
 
-        // language names are written in their own language, so each is findable from any
-        Column {
+        // language names are written in their own language, so each is findable from any;
+        // before Android 13 the app follows the system language (no per-app setting)
+        if (vm.languageSelectable) Column {
             Text(stringResource(R.string.language), color = DIM, fontSize = 11.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 listOf("" to stringResource(R.string.lang_system), "en" to "English",

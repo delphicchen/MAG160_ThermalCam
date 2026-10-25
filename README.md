@@ -52,7 +52,7 @@ by reverse-engineering the vendor SDK. Plug in, open, measure. On the phone you 
 
 ## 🚀 Get started
 
-1. **Download the APK** from [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases) (arm64, Android 13+), or build it yourself:
+1. **Download the APK** from [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases) (arm64, Android 10+ from 2.8; 2.7 needs Android 13+), or build it yourself:
    ```sh
    cd android2
    JAVA_HOME=/path/to/android-studio/jbr ./gradlew :app:assembleDebug

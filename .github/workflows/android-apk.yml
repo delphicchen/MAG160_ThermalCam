@@ -47,6 +47,28 @@ jobs:
       - name: Build
         run: ./gradlew --no-daemon :app:assembleBeta
 
+      # The app runs from Android 10 (minSdk 29): a call newer than that needs a version
+      # check, or it crashes there. Fail on lint's NewApi only; other findings are printed.
+      - name: Lint (API levels)
+        run: |
+          ./gradlew --no-daemon :app:lintBeta || true
+          python3 - <<'PY'
+          import collections, sys, xml.etree.ElementTree as ET
+          try:
+              root = ET.parse('app/build/reports/lint-results-beta.xml').getroot()
+          except OSError:
+              sys.exit('no lint report')
+          ids = collections.Counter((i.get('severity'), i.get('id')) for i in root)
+          print('lint:', ', '.join(f'{n}× {sev} {i}' for (sev, i), n in sorted(ids.items())))
+          bad = 0
+          for i in root:
+              if i.get('id') in ('NewApi', 'InlinedApi'):
+                  loc = i.find('location')
+                  print(f"{i.get('id')}: {loc.get('file')}:{loc.get('line')}: {i.get('message')}")
+                  bad += i.get('id') == 'NewApi'
+          sys.exit(1 if bad else 0)
+          PY
+
       - name: Name the APK
         run: |
           v=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)

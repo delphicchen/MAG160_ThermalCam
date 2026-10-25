@@ -51,7 +51,7 @@ Magnity **MAG-Mx / MAG-Cx** USB 熱像儀（VID `0x833C`）硬體很好，但原
 
 ## 🚀 開始使用
 
-1. **從 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases) 下載 APK**（arm64、Android 13 以上），或自行編譯：
+1. **從 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases) 下載 APK**（arm64；2.8 起 Android 10 以上，2.7 要 Android 13 以上），或自行編譯：
    ```sh
    cd android2
    JAVA_HOME=/path/to/android-studio/jbr ./gradlew :app:assembleDebug
