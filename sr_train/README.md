@@ -67,7 +67,7 @@ everything below, which ends at a verified `.param`/`.bin`.
 ```
 sr_train/
 ├── colab/
-│   ├── train_thermal_sr.ipynb           the Colab run (MODEL = 'full' / 'lite')
+│   ├── train_thermal_sr.ipynb           the Colab run (MODEL = 'full' / 'medium' / 'lite')
 │   └── train_thermal_sr_lite.ipynb      same, preset to the Tiny2C lite model — Run all
 ├── options/
 │   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 + spectrum + gradient — the model
@@ -285,45 +285,63 @@ keeps ~10 mantissa bits, each accumulation rounds at ~5e-4 relative, and the err
 with depth. Vulkan may use fp16 storage with fp32 accumulate depending on the GPU, so the
 same file can be slightly more accurate on one device than another.
 
-## Lite 32/10 for the Tiny2C (256×192)
+## Lite 32/10 and medium 48/10 — lighter models
 
-**Status (2026-10-24): not finished.** The notebook, warm start and packaging below are
-ready, but the model has not been trained, exported or published yet — `sr-models` still
-holds only v1 of the Tiny2C package (the built-in v4 weights), so the Tiny2C runs the 64/10.
+**Status (2026-10-25): not finished.** The notebooks, warm start and packaging below are
+ready, but neither model has been trained, exported or published yet — `sr-models` still
+holds only v1 of the Tiny2C package (the built-in v4 weights), so every camera runs the 64/10.
 
-On the Tiny2C the 64/10 model is the bottleneck: a tester's phone measured
-`net 47 ms` of a 66 ms frame (≈15 fps against the camera's 25). Compute per input pixel, as
-conv weights × output pixels:
+The app (2.8+) lets the user pick **Full / Medium / Lite** under "Thermal SR model size" in
+the drawer, on any camera; a size is greyed out until a model of it is installed. An imported
+or downloaded package is filed under its size by the model's width (the first conv's output
+channels: 64 / 48 / 32) — no naming needed — and becomes the size in use. When even the
+picked size cannot keep up, the speed guard steps to the next lighter installed size before
+it falls back to Anime4K.
+
+Why lighter: on the Tiny2C the 64/10 model is the bottleneck — a tester's phone measured
+`net 47 ms` of a 66 ms frame (≈15 fps against the camera's 25) — and on any phone less
+compute per frame means less heat and battery. Compute per input pixel, as conv weights ×
+output pixels:
 
 | model | params | MAC / input px | GMAC @160×120 | GMAC @256×192 |
 |---|---|---|---|---|
-| 64/10 1-ch (built in) | 380 k | 378 k | 7.3 | 18.6 |
+| 64/10 1-ch (full, built in) | 380 k | 378 k | 7.3 | 18.6 |
+| **48/10 1-ch (medium)** | **215 k** | **215 k** | 4.1 | **10.6** |
 | **32/10 1-ch (lite)** | **98 k** | **97 k** | 1.9 | **4.8** |
 
 An ×2 model would not help: the body runs at input resolution whatever the scale, and only
-the output conv shrinks (~2 % of the network). The lite model is for the Tiny2C only — the
-app picks models by file name, so a `256x192` / `192x256` package never replaces the MAG160's.
+the output conv shrinks (~2 % of the network).
 
-1. Open `colab/train_thermal_sr_lite.ipynb` (the main notebook with `MODEL = 'lite'` set and
-   the restore cell skippable, so **Run all** goes through untouched). v4 is rebuilt from the
-   app's bundled ncnn model in the clone (`scripts/ncnn_to_pth.py`, fp16-rounded: within
-   8e-4 of the v4 checkpoint), or taken from a `.pth` in `<root>/init/` when present, then
-   pruned to 32 channels with `truncate_pretrained.py --num-feat 32` — per layer the filters
-   with the largest L1 norm. That start is lossy (PSNR ~19 dB against v4 before training) and
-   the 80k-iteration fine-tune recovers it, as v4's depth truncation was recovered.
+1. **Lite**: open `colab/train_thermal_sr_lite.ipynb` (the main notebook with `MODEL = 'lite'`
+   set and the restore cell skippable, so **Run all** goes through untouched). **Medium**: the
+   main notebook with `MODEL = 'medium'`. v4 is rebuilt from the app's bundled ncnn model in
+   the clone (`scripts/ncnn_to_pth.py`, fp16-rounded: within 8e-4 of the v4 checkpoint), or
+   taken from a `.pth` in `<root>/init/` when present, then pruned to the width with
+   `truncate_pretrained.py --num-feat 32|48` — per layer the filters with the largest L1
+   norm. That start is lossy (lite: PSNR ~19 dB against v4 before training) and the
+   80k-iteration fine-tune recovers it, as v4's depth truncation was recovered.
 2. Same recipe and sensor ranges as v4 (MAG160's — the Tiny2C's noise is not measured yet).
-   `RECIPE` gets a `-lite32` suffix, so a 64/10 run left on Drive is archived, not resumed.
-3. Section 9 sees the 32-channel checkpoint and exports it at 256×192 and 192×256 as
-   `thermal_ncnn_L1FFT_lite32.zip` — load it on the Tiny2C with **Load SR model (.zip)…**
-   and check the Debug overlay's `net` time.
-4. Publish it as version 2 of the Tiny2C package, so the app offers the download:
+   `RECIPE` gets a `-lite32` / `-medium48` suffix, so a run of another size left on Drive is
+   archived, not resumed.
+3. Section 9 sees the checkpoint's width and exports it at 256×192 and 192×256 as
+   `thermal_ncnn_L1FFT_lite32.zip` / `…_medium48.zip` (the graph has no fixed shape, so the
+   app runs it on any camera). Load it with **Load SR model (.zip)…**, pick the size, and
+   compare the Debug overlay's `net` time with the full model's.
+4. Publish for the in-app download. Lite as version 2 of the Tiny2C package; medium as a
+   package of its own (`--size` only names the zip; use version ≥ 2 — 1 means the built-in
+   weights, which the app never offers):
 
    ```sh
    python scripts/make_sr_package.py --size 256x192 --version 2 \
        export/thermal_256x192_fp16.param export/thermal_256x192_fp16.bin \
        export/thermal_192x256_fp16.param export/thermal_192x256_fp16.bin
-   gh release upload sr-models dist/thermal_ncnn_256x192.zip dist/models.json --clobber
+   python scripts/make_sr_package.py --size medium48 --version 2 <the medium export's four files>
+   gh release upload sr-models dist/thermal_ncnn_256x192.zip dist/thermal_ncnn_medium48.zip \
+       dist/models.json --clobber
    ```
+
+   The app offers a package to a camera whose frame size is inside the zip (these: the
+   Tiny2C); on another camera, load the zip by hand — it then serves every camera.
 
 ## Time estimates (single RTX 3090-class GPU)
 

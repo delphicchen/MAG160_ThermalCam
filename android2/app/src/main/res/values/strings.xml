@@ -25,6 +25,11 @@
     <string name="use_builtin">Use built-in</string>
     <string name="sr_model_builtin">Thermal SR model: built-in</string>
     <string name="sr_model_imported">Thermal SR model: imported (%1$s)</string>
+    <string name="sr_tier">Thermal SR model size</string>
+    <string name="sr_tier_full">Full</string>
+    <string name="sr_tier_medium">Medium</string>
+    <string name="sr_tier_lite">Lite</string>
+    <string name="sr_tier_hint">A lighter model does less work per frame: the phone stays cooler and the battery lasts longer, with a little less detail. Grey = not installed yet (load or download one).</string>
     <string name="download_sr_model">Download Thermal SR model for %1$s (%2$s MB)</string>
     <string name="sr_downloading">Downloading SR model… %1$s / %2$s MB</string>
     <string name="display_resolution">Display resolution</string>
@@ -163,6 +168,7 @@
     <string name="n_no_ncnn">No ncnn model in %1$s/ — using Anime4K</string>
     <string name="n_ncnn_failed">ncnn failed, using Anime4K: %1$s</string>
     <string name="n_sr_too_slow">Thermal SR too slow on this camera (%1$.0f ms/frame, ~%2$.0f fps) — switched to Anime4K. Pick Thermal SR again to keep it.</string>
+    <string name="n_sr_tier_down">Thermal SR too slow on this camera (%1$.0f ms/frame, ~%2$.0f fps) — switched to the %3$s model. Pick a size again to keep it.</string>
     <string name="n_anime4k_failed">Anime4K GPU failed, using bicubic: %1$s</string>
     <string name="n_sr_imported">SR model imported (%1$s) — select Thermal SR to use it</string>
     <string name="n_sr_import_failed">SR model import failed: %1$s</string>

@@ -18,7 +18,10 @@ Tiny2C 專用的輕量 Thermal SR 模型（lite 32/10）**還沒完成**：
   發成 `sr-models` 的 `thermal_ncnn_256x192.zip` **v2**（目前 release 上只有 v1 = 內建 v4 權重）。
 - 現況：Tiny2C 開 Thermal SR 跑的是內建 64/10，測試者手機約 12–15 fps，速度保護會退回
   Anime4K（見下方待辦 A）。
-- 剩下步驟：`sr_train/README.md` 的「Lite 32/10 for the Tiny2C」第 1–4 步。
+- 剩下步驟：`sr_train/README.md` 的「Lite 32/10 and medium 48/10」第 1–4 步（中量 48/10 同一套流程，
+  notebook 設 `MODEL = 'medium'`）。
+- App 端（2.8，已完成）：抽屜「超分模型大小」完整 / 中量 / 輕量讓使用者選，未安裝的是灰色；
+  匯入或下載的模型依寬度自動歸檔並切過去；速度保護先降一檔，最輕仍太慢才退回 Anime4K。
 
 ## 待確認（動手前）
 
@@ -174,7 +177,7 @@ ncnn 圖不綁尺寸（Input 無 shape、Interp 用 ×4 scale，兩方向 param/
   （`android2/thermal_cam_model_20260925-2/thermal_sr_progress.zip` 裡的 net_g_80000）用
   `truncate_pretrained.py --num-feat 32` 依濾波器 L1 剪成 32 通道（本機實測 strict load OK，未微調前
   對 v4 PSNR ~19 dB）；匯出 256×192 / 192×256 → `thermal_ncnn_L1FFT_lite32.zip`；發布用
-  `make_sr_package.py --size 256x192 --version 2`。步驟在 `sr_train/README.md`「Lite 32/10」。
+  `make_sr_package.py --size 256x192 --version 2`。步驟在 `sr_train/README.md`「Lite 32/10 and medium 48/10」。
 - 現成替代：Anime4K 選 ×2 只跑一道 → 512×384，計算量小很多。
 
 ### B. MAG160 Mx（1.25 mm 四針）`calibration download failed: -2`

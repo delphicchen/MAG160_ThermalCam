@@ -43,6 +43,7 @@ import com.magnity.viewer.pipeline.DetailEnhance
 import com.magnity.viewer.pipeline.NcnnUpscaler
 import com.magnity.viewer.pipeline.Palettes
 import com.magnity.viewer.pipeline.SrModelDownloader
+import com.magnity.viewer.pipeline.SrTier
 import com.magnity.viewer.pipeline.TemporalDenoise
 import com.magnity.viewer.usb.Hik4117Source
 import com.magnity.viewer.usb.MagDeviceWrapper
@@ -205,6 +206,18 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         onSet = { if (it == Upscaler.NCNN && srSwitchedForSpeed) srKeepSlow = true })
     /** The user chose Thermal SR over frame rate; the speed guard stays out of it. */
     var srKeepSlow by pref("sr_keep_slow", false)
+    /** Thermal SR model size the user picked ([chooseSrTier]); a lighter one runs cooler.
+     *  When none of that size is installed, the full model runs. */
+    var srTier by Persisted(prefs, "sr_tier", SrTier.FULL,
+        { k, d -> runCatching { SrTier.valueOf(getString(k, d.name)!!) }.getOrDefault(d) },
+        { k, v -> putString(k, v.name) },
+        onSet = { ncnnReload = true }); private set
+
+    /** The drawer's pick; after the speed guard stepped down a size, picking again = keep it. */
+    fun chooseSrTier(t: SrTier) {
+        if (srSteppedForSpeed) srKeepSlow = true
+        srTier = t
+    }
     var spatialDenoise by pref("spatial_denoise", true)
     /**
      * The thermal SR model was trained on noisy, FPN-degraded input and denoises on its
@@ -322,6 +335,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var sdkLog by mutableStateOf<String?>(null); private set
     /** Open temperature capture (.mgt) being reviewed; null = live view. */
     var playback by mutableStateOf<ThermalPlayback?>(null); private set
+    // above init, which loads them on Dispatchers.IO (see `connecting` below)
+    /** Imported Thermal SR models: input sizes ("120x160", …) per model size; empty = only
+     *  the APK's own. */
+    var srImported by mutableStateOf<Map<SrTier, List<String>>>(emptyMap()); private set
+    /** Model sizes installed (bundled or imported) — the ones the drawer lets you pick. */
+    var srTiers by mutableStateOf(setOf(SrTier.FULL)); private set
 
     private var loop: Job? = null
 
@@ -1324,9 +1343,10 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 // one model per input size: the exported graph has a static shape
                 val u = ncnn?.takeIf { ncnnSize == w to h }
-                    ?: NcnnUpscaler.open(getApplication(), w, h)?.also {
+                    ?: openSr(w, h)?.also {
                         ncnn?.close(); ncnn = it; ncnnSize = w to h
-                        notice = str(R.string.n_ncnn_loaded, if (it.vulkan) "Vulkan" else "CPU")
+                        notice = str(R.string.n_ncnn_loaded,
+                                     (if (it.vulkan) "Vulkan" else "CPU") + " · " + str(srTierLabel(it.tier)))
                     }
                 if (u != null) {
                     val img = u.render(field, w, h, lo, hi, Palettes.lut(paletteName))
@@ -1393,13 +1413,17 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var srCheckFrames = 0
     private var srFrameMs = 0f
     @Volatile private var srSwitchedForSpeed = false
+    /** The guard picked a lighter model size (see [chooseSrTier]). */
+    @Volatile private var srSteppedForSpeed = false
 
     /**
      * Thermal SR costs per input pixel, so a bigger sensor (a Tiny2C's 256×192 is 2.56×
      * the MAG160's) can take longer than the camera's frame period — and the serial loop
      * then runs at that rate (12–15 fps reported on a Tiny2C). When SR keeps the loop under
-     * [SR_MIN_RATE_SHARE] of the camera's rate, switch to Anime4K once and say why; picking
-     * Thermal SR again sets [srKeepSlow] and the guard stays off from then on.
+     * [SR_MIN_RATE_SHARE] of the camera's rate, step to the next lighter model size that is
+     * installed (measured afresh), and past the lightest switch to Anime4K once; each time
+     * say why. Picking Thermal SR or a size again sets [srKeepSlow] and the guard stays off
+     * from then on.
      */
     private fun checkSrSpeed(frameMs: Float) {
         if (!srRendered || srKeepSlow || srSwitchedForSpeed) { srCheckFrames = 0; return }
@@ -1409,6 +1433,18 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         srFrameMs += STAGE_EMA * (frameMs - srFrameMs)
         if (srCheckFrames < SR_WARMUP_FRAMES + SR_CHECK_FRAMES) return
         if (srFrameMs > 1000f / (camFps * SR_MIN_RATE_SHARE)) {
+            val cur = ncnn?.tier ?: srTier
+            val lighter = SrTier.entries.drop(cur.ordinal + 1).firstOrNull { it in srTiers }
+            if (lighter != null) {
+                Log.w(TAG, "Thermal SR %.0f ms/frame vs %d fps camera — %s model"
+                    .format(srFrameMs, camFps, lighter.name))
+                srSteppedForSpeed = true
+                srTier = lighter
+                srCheckFrames = 0
+                notice = str(R.string.n_sr_tier_down, srFrameMs, 1000f / srFrameMs,
+                             str(srTierLabel(lighter)))
+                return
+            }
             Log.w(TAG, "Thermal SR %.0f ms/frame vs %d fps camera — switching to Anime4K"
                 .format(srFrameMs, camFps))
             srSwitchedForSpeed = true
@@ -1420,7 +1456,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private fun noteSrTimings(u: NcnnUpscaler) {
         val t = u.lastTimings()
         for (i in 0..2) srMs[i] += STAGE_EMA * (t[i] - srMs[i])
-        srLabel = "SR ${if (u.vulkan) "Vulkan" else "CPU"} · ${u.inChannels}-ch " +
+        srLabel = "SR ${if (u.vulkan) "Vulkan" else "CPU"} · ${u.tier.name.lowercase()} · ${u.inChannels}-ch " +
             (if (u.fromFiles) "imported" else "built-in")
         srFrame = true
     }
@@ -1429,38 +1465,58 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var ncnn: NcnnUpscaler? = null
     private var ncnnSize = 0 to 0
 
+    /** The picked size's model, else the full one. */
+    private fun openSr(w: Int, h: Int): NcnnUpscaler? {
+        val ctx = getApplication<Application>()
+        val tier = srTier
+        return NcnnUpscaler.open(ctx, w, h, tier)
+            ?: if (tier != SrTier.FULL) NcnnUpscaler.open(ctx, w, h, SrTier.FULL) else null
+    }
+
     /** True when a converted model for the current frame size is present on the device. */
     fun ncnnModelInstalled(): Boolean {
         val fr = lastFrame ?: return false
-        return NcnnUpscaler.isInstalled(getApplication(), fr.w, fr.h)
+        val ctx = getApplication<Application>()
+        return NcnnUpscaler.isInstalled(ctx, fr.w, fr.h, srTier) ||
+            NcnnUpscaler.isInstalled(ctx, fr.w, fr.h, SrTier.FULL)
     }
 
     /** Where to adb-push the .param/.bin — shown in the drawer. */
     fun ncnnModelDir(): String = NcnnUpscaler.modelDir(getApplication()).absolutePath
 
-    /** Sizes of the imported Thermal SR model ("120x160", …); empty = the APK's own. */
-    var srImportedSizes by mutableStateOf<List<String>>(emptyList()); private set
     /** Set from any thread; the processing loop drops its model before the next frame, so
      *  an import takes effect without closing a net that is mid-inference. */
     @Volatile private var ncnnReload = false
 
     fun refreshSrModelInfo() {
-        viewModelScope.launch(Dispatchers.IO) {
-            srImportedSizes = NcnnUpscaler.importedSizes(getApplication())
-        }
+        viewModelScope.launch(Dispatchers.IO) { loadSrModelInfo() }
     }
 
-    /** Install a model package (zip of thermal_<w>x<h>_fp16.param/.bin) picked in the drawer. */
+    /** Blocking (file listing): [srImported] and [srTiers] from what is on disk. */
+    private fun loadSrModelInfo() {
+        val ctx = getApplication<Application>()
+        srImported = SrTier.entries.associateWith { NcnnUpscaler.importedSizes(ctx, it) }
+            .filterValues { it.isNotEmpty() }
+        srTiers = NcnnUpscaler.availableTiers(ctx)
+    }
+
+    /** "Lite · 256x192, 192x256" for a notice. */
+    private fun srModelText(tier: SrTier, sizes: List<String>) =
+        str(srTierLabel(tier)) + " · " + sizes.joinToString()
+
+    /** Install a model package (zip of thermal_<w>x<h>_fp16.param/.bin) picked in the drawer;
+     *  its size ([SrTier]) becomes the one in use — it is the model you meant to try. */
     fun importSrModel(uri: android.net.Uri) {
         val ctx = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             notice = try {
-                val sizes = ctx.contentResolver.openInputStream(uri)
+                val got = ctx.contentResolver.openInputStream(uri)
                     ?.use { NcnnUpscaler.importPackage(ctx, it) }
                     ?: error("cannot open the file")
+                loadSrModelInfo()
+                srTier = got.tier
                 ncnnReload = true
-                srImportedSizes = sizes
-                str(R.string.n_sr_imported, sizes.joinToString())
+                str(R.string.n_sr_imported, srModelText(got.tier, got.sizes))
             } catch (e: Throwable) {
                 Log.e(TAG, "SR model import failed", e)
                 str(R.string.n_sr_import_failed, e.message ?: "")
@@ -1468,12 +1524,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Back to the model built into the APK. */
+    /** Back to the model built into the APK (every imported size is removed). */
     fun removeSrModel() {
         viewModelScope.launch(Dispatchers.IO) {
             NcnnUpscaler.removeImported(getApplication())
+            loadSrModelInfo()
+            srTier = SrTier.FULL
             ncnnReload = true
-            srImportedSizes = emptyList()
             notice = str(R.string.n_using_builtin)
         }
     }
@@ -1495,9 +1552,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             val list = srManifest ?: runCatching { SrModelDownloader.fetchManifest() }
                 .onFailure { Log.i(TAG, "sr-models manifest: ${it.message}") }
                 .getOrNull()?.also { srManifest = it } ?: return@launch
-            srRemote = list.firstOrNull { "${fr.w}x${fr.h}" in it.sizes }?.takeIf {
-                val have = SrModelDownloader.installedVersion(NcnnUpscaler.modelDir(ctx), it.file)
-                it.version > maxOf(have, SrModelDownloader.BUILTIN_VERSION)
+            srRemote = list.filter { "${fr.w}x${fr.h}" in it.sizes }.firstOrNull { pkg ->
+                val have = SrTier.entries.maxOf {
+                    SrModelDownloader.installedVersion(NcnnUpscaler.modelDir(ctx, it), pkg.file)
+                }
+                pkg.version > maxOf(have, SrModelDownloader.BUILTIN_VERSION)
             }
         }
     }
@@ -1509,14 +1568,16 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         srDownload = 0L to pkg.bytes
         srDownloadJob = viewModelScope.launch(Dispatchers.IO) {
             notice = try {
-                val sizes = SrModelDownloader.download(
-                    NcnnUpscaler.modelDir(ctx), ctx.cacheDir, pkg,
+                val got = SrModelDownloader.download(
+                    ctx.cacheDir, pkg,
                     onProgress = { done, total -> srDownload = done to total },
-                    isCancelled = { !isActive })
+                    isCancelled = { !isActive },
+                    dirFor = { NcnnUpscaler.modelDir(ctx, it) })
+                loadSrModelInfo()
+                srTier = got.tier
                 ncnnReload = true
-                srImportedSizes = NcnnUpscaler.importedSizes(ctx)
                 srRemote = null
-                str(R.string.n_sr_imported, sizes.joinToString())
+                str(R.string.n_sr_imported, srModelText(got.tier, got.sizes))
             } catch (e: java.util.concurrent.CancellationException) {
                 str(R.string.n_sr_download_cancelled)
             } catch (e: Throwable) {
@@ -1930,4 +1991,12 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+}
+
+/** The drawer's name for a Thermal SR model size. */
+@StringRes
+fun srTierLabel(t: SrTier): Int = when (t) {
+    SrTier.FULL -> R.string.sr_tier_full
+    SrTier.MEDIUM -> R.string.sr_tier_medium
+    SrTier.LITE -> R.string.sr_tier_lite
 }

@@ -24,6 +24,11 @@
     <string name="use_builtin">改用內建</string>
     <string name="sr_model_builtin">Thermal SR 模型：內建</string>
     <string name="sr_model_imported">Thermal SR 模型：已匯入（%1$s）</string>
+    <string name="sr_tier">超分模型大小</string>
+    <string name="sr_tier_full">完整</string>
+    <string name="sr_tier_medium">中量</string>
+    <string name="sr_tier_lite">輕量</string>
+    <string name="sr_tier_hint">越輕的模型每幀運算越少：手機比較不燙、比較省電，細節略少。灰色＝尚未安裝（可載入或下載）。</string>
     <string name="download_sr_model">下載 %1$s 的 Thermal SR 模型（%2$s MB）</string>
     <string name="sr_downloading">正在下載 SR 模型… %1$s / %2$s MB</string>
     <string name="display_resolution">顯示解析度</string>
@@ -162,6 +167,7 @@
     <string name="n_no_ncnn">%1$s/ 裡沒有 ncnn 模型 —— 改用 Anime4K</string>
     <string name="n_ncnn_failed">ncnn 失敗，改用 Anime4K：%1$s</string>
     <string name="n_sr_too_slow">Thermal SR 在這台相機太慢（每幀 %1$.0f ms，約 %2$.0f fps）—— 已改用 Anime4K。再選一次 Thermal SR 就會保留。</string>
+    <string name="n_sr_tier_down">Thermal SR 在這台相機太慢（每幀 %1$.0f ms，約 %2$.0f fps）—— 已改用%3$s模型。再選一次大小就會保留。</string>
     <string name="n_anime4k_failed">Anime4K GPU 失敗，改用 Bicubic：%1$s</string>
     <string name="n_sr_imported">SR 模型已匯入（%1$s）—— 選 Thermal SR 即可使用</string>
     <string name="n_sr_import_failed">SR 模型匯入失敗：%1$s</string>

@@ -25,6 +25,11 @@
     <string name="use_builtin">改用内置</string>
     <string name="sr_model_builtin">超分模型：内置</string>
     <string name="sr_model_imported">超分模型：已导入（%1$s）</string>
+    <string name="sr_tier">超分模型大小</string>
+    <string name="sr_tier_full">完整</string>
+    <string name="sr_tier_medium">中量</string>
+    <string name="sr_tier_lite">轻量</string>
+    <string name="sr_tier_hint">越轻的模型每帧运算越少：手机更不容易发烫、更省电，细节略少。灰色＝尚未安装（可加载或下载）。</string>
     <string name="download_sr_model">下载 %1$s 的超分模型（%2$s MB）</string>
     <string name="sr_downloading">正在下载超分模型… %1$s / %2$s MB</string>
     <string name="display_resolution">显示分辨率</string>
@@ -163,6 +168,7 @@
     <string name="n_no_ncnn">%1$s/ 里没有 ncnn 模型 —— 改用通用超分</string>
     <string name="n_ncnn_failed">ncnn 失败，改用通用超分：%1$s</string>
     <string name="n_sr_too_slow">热成像超分在这台相机上太慢（每帧 %1$.0f ms，约 %2$.0f fps）—— 已改用通用超分。再选一次热成像超分就会保留。</string>
+    <string name="n_sr_tier_down">热成像超分在这台相机上太慢（每帧 %1$.0f ms，约 %2$.0f fps）—— 已改用%3$s模型。再选一次大小就会保留。</string>
     <string name="n_anime4k_failed">通用超分（GPU）失败，改用双三次插值：%1$s</string>
     <string name="n_sr_imported">超分模型已导入（%1$s）—— 选热成像超分即可使用</string>
     <string name="n_sr_import_failed">超分模型导入失败：%1$s</string>
