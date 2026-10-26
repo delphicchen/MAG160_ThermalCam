@@ -29,7 +29,7 @@
     <string name="sr_tier_full">完整</string>
     <string name="sr_tier_medium">中量</string>
     <string name="sr_tier_lite">轻量</string>
-    <string name="sr_tier_hint">越轻的模型每帧运算越少：手机更不容易发烫、更省电，细节略少。灰色＝尚未安装（可加载或下载）。</string>
+    <string name="sr_tier_hint">越轻的模型每帧运算越少：手机更不容易发烫、更省电，细节略少。</string>
     <string name="download_sr_model">下载 %1$s 的超分模型（%2$s MB）</string>
     <string name="sr_downloading">正在下载超分模型… %1$s / %2$s MB</string>
     <string name="display_resolution">显示分辨率</string>
@@ -92,6 +92,8 @@
     <string name="n_wizard_done">标定已保存，物距改为自动对焦</string>
     <string name="n_focus_dropped">%1$s 的镜头对焦读数与其他点矛盾，不用于自动对焦</string>
     <string name="zoom_offset">缩放 ×%1$.2f · 位移 %2$+.3f / %3$+.3f</string>
+    <string name="min_span">最小温宽（自动范围）</string>
+    <string name="min_span_hint">自动范围会把色板拉伸到画面中的温度范围。整个画面温差不到一度时，这样拉伸会把传感器本身的噪声画成斑块和假纹理（超分还会把它锐化）。自动范围不会窄于这个温宽；更平坦的场景会落在色板中段。想看非常细微的温差就调低；平坦的场景看起来斑驳就调高。手动范围不受此限制。</string>
     <string name="temporal_denoise">时域降噪</string>
     <string name="spatial_denoise">空间降噪</string>
     <string name="detail_enhance">细节增强（DDE）</string>

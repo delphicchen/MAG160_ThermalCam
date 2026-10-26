@@ -60,7 +60,7 @@ class ThermalPlayback(private val reader: ThermalStream.Reader, val name: String
     fun step(d: Int) = seekTo(index + d)
 
     /** Decode and render frame [i]; file and pixel work stay off the main thread. */
-    suspend fun show(i: Int, palette: String) {
+    suspend fun show(i: Int, palette: String, minSpan: Float) {
         val idx = i.coerceIn(0, frameCount - 1)
         val r = withContext(Dispatchers.IO) {
             val f = reader.frame(idx)
@@ -73,9 +73,7 @@ class ThermalPlayback(private val reader: ThermalStream.Reader, val name: String
                 if (v > mx) { mx = v; mxI = p }
             }
             // same auto range as the live view, so a capture looks like what was on screen
-            val (p1, p99) = ImageOps.percentileRange(t, 1f, 99f)
-            val lo = p1
-            val hi = if (p99 - p1 < 0.1f) p1 + 0.1f else p99
+            val (lo, hi) = ImageOps.autoRange(t, minSpan)
             val src = ImageOps.resizeBicubic(t, w, h, w * SCALE, h * SCALE)
             val lut = Palettes.lut(palette)
             val px = IntArray(src.size)

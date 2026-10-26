@@ -12,8 +12,9 @@ SDK 原檔：`../Tiny-2C/SDK/Android/ANDROID_AC020_SDK_USB_IR_UVC_1.1.5_20241022
 
 **2026-10-26：輕量 32/10 已訓練完成並內建**（`app/src/main/assets/model-lite/`，2.8-alpha4 起），
 抽屜「超分模型大小」選「輕量」即可，Tiny2C 開完整版太慢時速度保護也會自動降到輕量。
-在 200 張未參與訓練的 CIDIS 熱像上：PSNR 比完整版低 0.4 dB、假熱點數相當、CPU 上 27 vs 48 ms
-（細節見該資料夾 README）。**還沒做**：在 Tiny2C 實機量 Debug 的 `net` 時間與發熱；中量 48/10 尚未訓練。
+在 200 張未參與訓練的 CIDIS 熱像上：PSNR 比完整版低 0.45 dB、假熱點數相當、CPU 上約 21 vs 32 ms
+（細節見該資料夾 README）。**還沒做**：在 Tiny2C 實機量 Debug 的 `net` 時間與發熱；中量 48/10 尚未訓練
+（10-26 那次用到合併前的 notebook，練出來是 64 寬、跟 v4 一樣，沒採用）。
 
 以下為 10-24 時的紀錄：
 

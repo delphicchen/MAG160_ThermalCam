@@ -21,11 +21,14 @@ Checked against the bundled full 64/10 on the 200 held-out CIDIS thermal val fra
 
 | | full 64/10 | lite 32/10 |
 |---|---|---|
-| PSNR vs ground truth | 29.79 dB | 29.37 dB |
+| PSNR vs ground truth | 30.10 dB | 29.65 dB |
 | lite vs full output | — | 37.0 dB |
-| energy error (8-bit levels) | 3.64 | 3.96 |
-| invented peaks / frame (clean · σ 0.01 input) | 32.7 · 22.1 | 35.4 · 22.8 |
-| CPU net time (4 threads, x86) | 48 ms | 27 ms |
+| energy error (8-bit levels) | 3.01 | 3.33 |
+| invented peaks / frame (clean · σ 0.01 input) | 32.8 · 22.0 | 35.8 · 22.7 |
+| CPU net time (4 threads, x86) | ~32 ms | ~21 ms |
+
+(Corrected 2026-10-26: the first run of the comparison script handed ncnn a temporary numpy
+buffer, which made some frames' input garbage; these are the reproducible numbers.)
 
 So: a slightly softer copy of the full model with the same hallucination profile. On a
 phone GPU the speed-up should be larger than on CPU (¼ of the convolution work); measure it

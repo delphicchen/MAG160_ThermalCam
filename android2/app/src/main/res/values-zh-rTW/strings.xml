@@ -28,7 +28,7 @@
     <string name="sr_tier_full">完整</string>
     <string name="sr_tier_medium">中量</string>
     <string name="sr_tier_lite">輕量</string>
-    <string name="sr_tier_hint">越輕的模型每幀運算越少：手機比較不燙、比較省電，細節略少。灰色＝尚未安裝（可載入或下載）。</string>
+    <string name="sr_tier_hint">越輕的模型每幀運算越少：手機比較不燙、比較省電，細節略少。</string>
     <string name="download_sr_model">下載 %1$s 的 Thermal SR 模型（%2$s MB）</string>
     <string name="sr_downloading">正在下載 SR 模型… %1$s / %2$s MB</string>
     <string name="display_resolution">顯示解析度</string>
@@ -91,6 +91,8 @@
     <string name="n_wizard_done">校正已儲存，物距改為自動對焦</string>
     <string name="n_focus_dropped">%1$s 的鏡頭對焦讀值和其他點矛盾，不用於自動對焦</string>
     <string name="zoom_offset">縮放 ×%1$.2f · 位移 %2$+.3f / %3$+.3f</string>
+    <string name="min_span">最小溫寬（自動範圍）</string>
+    <string name="min_span_hint">自動範圍會把色盤拉伸到畫面中的溫度範圍。整個畫面溫差不到一度時，這樣拉伸會把感測器本身的雜訊畫成斑塊和假紋理（超分還會把它銳化）。自動範圍不會窄於這個溫寬；更平坦的場景會落在色盤中段。想看非常細微的溫差就調低；平坦的場景看起來斑駁就調高。手動範圍不受此限制。</string>
     <string name="temporal_denoise">時域降噪</string>
     <string name="spatial_denoise">空間降噪</string>
     <string name="detail_enhance">細節增強（DDE）</string>
