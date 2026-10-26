@@ -29,7 +29,7 @@
     <string name="sr_tier_full">Full</string>
     <string name="sr_tier_medium">Medium</string>
     <string name="sr_tier_lite">Lite</string>
-    <string name="sr_tier_hint">A lighter model does less work per frame: the phone stays cooler and the battery lasts longer, with a little less detail. Grey = not installed yet (load or download one).</string>
+    <string name="sr_tier_hint">A lighter model does less work per frame: the phone stays cooler and the battery lasts longer, with a little less detail.</string>
     <string name="download_sr_model">Download Thermal SR model for %1$s (%2$s MB)</string>
     <string name="sr_downloading">Downloading SR model… %1$s / %2$s MB</string>
     <string name="display_resolution">Display resolution</string>
@@ -92,6 +92,8 @@
     <string name="n_wizard_done">Calibration saved — object distance now follows autofocus</string>
     <string name="n_focus_dropped">The lens focus reading at %1$s contradicts the other points — not used for autofocus</string>
     <string name="zoom_offset">zoom ×%1$.2f · offset %2$+.3f / %3$+.3f</string>
+    <string name="min_span">Minimum span (auto range)</string>
+    <string name="min_span_hint">Auto range stretches the colours over the temperatures in view. When the whole scene lies within a fraction of a degree, that stretch paints the sensor\'s own noise as blotches and false texture (which Thermal SR then sharpens). The auto range never gets narrower than this; a flatter scene sits in the middle of the palette. Lower it to see very small differences; raise it if flat scenes look blotchy. Manual range is not limited.</string>
     <string name="temporal_denoise">Temporal denoise</string>
     <string name="spatial_denoise">Spatial denoise</string>
     <string name="detail_enhance">Detail enhancement (DDE)</string>

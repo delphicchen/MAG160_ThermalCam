@@ -128,6 +128,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         private const val FUSION_DUMP_FRAMES = 10
         /** Auto range time constant: the 1–99 % range glides instead of jumping per frame. */
         private const val RANGE_TAU_S = 0.4f
+        /** Default [minSpan], °C: a few times an uncooled core's noise (~50 mK), still
+         *  narrow enough to show half-degree differences in the middle of the palette. */
+        const val DEFAULT_MIN_SPAN = 1.0f
         /** Thermal SR speed guard: frames skipped after it loads (Vulkan warm-up), frames
          *  measured before judging, and the share of the camera's rate it must keep. */
         private const val SR_WARMUP_FRAMES = 25
@@ -195,6 +198,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     val tempMaxC = 150f
     var scaleLo: Float by pref("scale_lo", 0f, skipWrite = { autoScale })   // manual display range, °C
     var scaleHi: Float by pref("scale_hi", 100f, skipWrite = { autoScale })
+    /** Auto range is never narrower than this (°C); see [ImageOps.autoRange]. */
+    var minSpan: Float by pref("min_span", DEFAULT_MIN_SPAN)
     // default = camera plugged straight into the phone's USB-C port, portrait UI
     var rotation by pref("rotation", 90)            // 0/90/180/270 clockwise
     var mirror by pref("mirror", true)
@@ -1264,9 +1269,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val slo: Float; val shi: Float
         if (autoScale) {
             // one histogram pass for both percentiles — the sorted version's two
-            // copies + two sorts per frame were the dominant cost of this stage
-            val (p1, p99) = ImageOps.percentileRange(oriented, 1f, 99f)
-            val tHi = if (p99 - p1 < 0.1f) p1 + 0.1f else p99
+            // copies + two sorts per frame were the dominant cost of this stage;
+            // no narrower than [minSpan], or a flat scene shows the sensor's noise
+            val (p1, tHi) = ImageOps.autoRange(oriented, minSpan)
             // glide toward it: a per-frame jump makes the whole picture pulse when
             // something warm enters or leaves the frame
             val now = System.nanoTime()

@@ -528,15 +528,17 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                      Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.BICUBIC }
             }
             val tierNames = SrTier.entries.associateWith { stringResource(srTierLabel(it)) }
-            // model size: lighter = less work per frame, cooler; grey = not installed
-            if (vm.upscaler == ViewerViewModel.Upscaler.NCNN) {
+            // model size: lighter = less work per frame, cooler; only installed sizes
+            // show (a greyed-out size read as broken)
+            if (vm.upscaler == ViewerViewModel.Upscaler.NCNN && vm.srTiers.size > 1) {
                 Text(stringResource(R.string.sr_tier), color = DIM, fontSize = 11.sp,
                      modifier = Modifier.padding(top = 4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()) {
-                    SrTier.entries.forEach { t ->
-                        Chip(tierNames.getValue(t), vm.srTier == t, Modifier.weight(1f),
-                             enabled = t in vm.srTiers) { vm.chooseSrTier(t) }
+                    SrTier.entries.filter { it in vm.srTiers }.forEach { t ->
+                        Chip(tierNames.getValue(t), vm.srTier == t, Modifier.weight(1f)) {
+                            vm.chooseSrTier(t)
+                        }
                     }
                 }
                 Text(stringResource(R.string.sr_tier_hint), color = DIM, fontSize = 9.sp)
@@ -815,6 +817,15 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
         }
 
         HorizontalDivider(color = Color(0xFF30363D))
+
+        // auto range floor: what it is and which way to turn it, right under the slider
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.min_span), color = FG, modifier = Modifier.weight(1f))
+            Text("%.1f °C".format(vm.minSpan), color = DIM, fontSize = 11.sp)
+        }
+        Slider(vm.minSpan, onValueChange = { vm.minSpan = (it * 10f).roundToInt() / 10f },
+               valueRange = 0.2f..3f, steps = 27)
+        Text(stringResource(R.string.min_span_hint), color = DIM, fontSize = 10.sp)
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.temporalDenoise, onCheckedChange = { vm.temporalDenoise = it })

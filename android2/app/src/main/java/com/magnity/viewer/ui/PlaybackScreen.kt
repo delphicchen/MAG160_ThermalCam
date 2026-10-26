@@ -46,7 +46,7 @@ import kotlin.math.roundToInt
 fun PlaybackPane(vm: ViewerViewModel, pb: ThermalPlayback) {
     val palette = vm.paletteName
     // decoding and palette-mapping happen in show(); this only asks for a frame
-    LaunchedEffect(pb, pb.index, palette) { pb.show(pb.index, palette) }
+    LaunchedEffect(pb, pb.index, palette, vm.minSpan) { pb.show(pb.index, palette, vm.minSpan) }
     BackHandler { vm.closePlayback() }      // back returns to the live view, not out
 
     Column(

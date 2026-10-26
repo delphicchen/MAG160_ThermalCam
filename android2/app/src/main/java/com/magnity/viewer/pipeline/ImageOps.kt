@@ -522,4 +522,17 @@ object ImageOps {
         }
         return vLo to vHi
     }
+
+    /**
+     * The auto display range: the 1st..99th percentile, never narrower than [minSpan] °C.
+     * A scene flatter than that is shown at [minSpan], centred on its median, instead of
+     * stretching the sensor's own noise (tens of mK) over the whole palette — what makes a
+     * near-uniform scene look blotchy, and what an upscaler then sharpens into texture.
+     */
+    fun autoRange(a: FloatArray, minSpan: Float): Pair<Float, Float> {
+        val (p1, p99) = percentileRange(a, 1f, 99f)
+        if (p99 - p1 >= minSpan) return p1 to p99
+        val mid = percentileRange(a, 50f, 50f).first
+        return (mid - minSpan / 2) to (mid + minSpan / 2)
+    }
 }
