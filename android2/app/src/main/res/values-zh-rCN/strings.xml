@@ -25,6 +25,11 @@
     <string name="use_builtin">改用内置</string>
     <string name="sr_model_builtin">超分模型：内置</string>
     <string name="sr_model_imported">超分模型：已导入（%1$s）</string>
+    <string name="sr_tier">超分模型大小</string>
+    <string name="sr_tier_full">完整</string>
+    <string name="sr_tier_medium">中量</string>
+    <string name="sr_tier_lite">轻量</string>
+    <string name="sr_tier_hint">越轻的模型每帧运算越少：手机更不容易发烫、更省电，细节略少。灰色＝尚未安装（可加载或下载）。</string>
     <string name="download_sr_model">下载 %1$s 的超分模型（%2$s MB）</string>
     <string name="sr_downloading">正在下载超分模型… %1$s / %2$s MB</string>
     <string name="display_resolution">显示分辨率</string>
@@ -96,6 +101,11 @@
     <string name="sdk_test_interrupts">会中断实时画面</string>
     <string name="running">运行中…</string>
     <string name="run_sdk_test">运行 SDK 测试</string>
+    <string name="hik_test_title">海康 4117 诊断（测试版）</string>
+    <string name="hik_test_hint">逐一试相机的热成像串流模式和 USB 格式（约 1 分钟），记录相机送出什么；期间温度画面会暂停。完成后点“复制报告”发回来。</string>
+    <string name="run_hik_test">运行串流测试</string>
+    <string name="copy_report">复制报告</string>
+    <string name="n_report_copied">已复制报告</string>
     <string name="disconnect">断开连接</string>
     <string name="help_live">点画面放置 SPOT，长按清除。\n点画面下方的 MIN / MAX / CTR / SPOT 可隐藏标记。\n红圈 = MAX，绿圈 = MIN，蓝十字 = CTR（中心点）。</string>
     <string name="calib_outside">对焦 %1$s 超出已存的距离</string>
@@ -158,6 +168,7 @@
     <string name="n_no_ncnn">%1$s/ 里没有 ncnn 模型 —— 改用通用超分</string>
     <string name="n_ncnn_failed">ncnn 失败，改用通用超分：%1$s</string>
     <string name="n_sr_too_slow">热成像超分在这台相机上太慢（每帧 %1$.0f ms，约 %2$.0f fps）—— 已改用通用超分。再选一次热成像超分就会保留。</string>
+    <string name="n_sr_tier_down">热成像超分在这台相机上太慢（每帧 %1$.0f ms，约 %2$.0f fps）—— 已改用%3$s模型。再选一次大小就会保留。</string>
     <string name="n_anime4k_failed">通用超分（GPU）失败，改用双三次插值：%1$s</string>
     <string name="n_sr_imported">超分模型已导入（%1$s）—— 选热成像超分即可使用</string>
     <string name="n_sr_import_failed">超分模型导入失败：%1$s</string>

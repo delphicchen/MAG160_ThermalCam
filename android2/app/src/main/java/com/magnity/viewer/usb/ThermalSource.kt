@@ -6,8 +6,9 @@ import android.hardware.usb.UsbDevice
 /**
  * A thermal camera on USB, as the viewer sees it: a stream of per-pixel temperature frames
  * in milli-Celsius ([getTemperatureData], row-major [width]×[height]) plus the few controls
- * the UI drives. [MagDeviceWrapper] (MAG160) and [Tiny2cSource] (InfiRay AC020) implement
- * it; [ThermalSources] picks one for an attached device.
+ * the UI drives. [MagDeviceWrapper] (MAG160), [Tiny2cSource] (InfiRay AC020) and
+ * [Hik4117Source] (Hikvision TB-4117, diagnostic) implement it; [ThermalSources] picks one
+ * for an attached device.
  *
  * Threading is the implementation's business — frames arrive on an SDK thread and
  * [getTemperatureData] hands the newest one to the processing loop.
@@ -17,12 +18,15 @@ interface ThermalSource {
     val width: Int
     val height: Int
     val fps: Int
-    /** Short id keeping per-camera settings apart ("mag160", "tiny2c"). */
+    /** Short id keeping per-camera settings apart ("mag160", "tiny2c", "hik4117"). */
     val kind: String
     /** Thermal lens focal length in native pixels — fusion's starting zoom. */
     val focalPx: Float
     /** Frames delivered since [start]; the loop watches it to spot a stalled stream. */
     val frameCount: Long
+    /** False when frames may pause for long stretches (snapshot-rate sources, their own
+     *  tests): the loop then never takes a quiet stream for a dead camera. */
+    val stallRecovery: Boolean get() = true
 
     /** Link and prepare the camera; [onCaliProgress] gets 0..100 when a download runs. */
     fun open(context: Context, onCaliProgress: (Int) -> Unit = {})
@@ -48,8 +52,8 @@ object ThermalSources {
 
     /** A camera the viewer connects to without asking first (known VID/PID). */
     fun isKnown(device: UsbDevice): Boolean =
-        MagDeviceWrapper.isMagnity(device) || Tiny2cSource.isKnown(device) ||
-            (device.vendorId to device.productId) in learned
+        MagDeviceWrapper.isMagnity(device) || Hik4117Source.isKnown(device) ||
+            Tiny2cSource.isKnown(device) || (device.vendorId to device.productId) in learned
 
     /** [isKnown], or a UVC device that may be a Tiny2C under another id — Android's USB
      *  permission dialog is the user's say before it is opened. */
@@ -61,6 +65,7 @@ object ThermalSources {
     /** What the viewer takes [device] for, for the device list; null = not a camera. */
     fun label(device: UsbDevice): String? = when {
         MagDeviceWrapper.isMagnity(device) -> "MAG160"
+        Hik4117Source.isKnown(device) -> "HIK 4117"
         isKnown(device) -> "Tiny2C"
         Tiny2cSource.isUvc(device) -> "UVC"
         else -> null
@@ -69,6 +74,8 @@ object ThermalSources {
     /** The source for [device], reusing [current] when it is already the right kind. */
     fun forDevice(device: UsbDevice, current: ThermalSource?): ThermalSource = when {
         MagDeviceWrapper.isMagnity(device) -> current as? MagDeviceWrapper ?: MagDeviceWrapper()
+        Hik4117Source.isKnown(device) ->
+            (current as? Hik4117Source)?.takeIf { it.device == device } ?: Hik4117Source(device)
         else -> (current as? Tiny2cSource)?.takeIf { it.device == device } ?: Tiny2cSource(device)
     }
 }

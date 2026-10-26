@@ -39,7 +39,7 @@ public class MagService {
         if (n1 >= num) {
             n1 = num;
         }
-        if (ctx != null && (usbMgr = (UsbManager) ctx.getSystemService("usb")) != null) {
+        if (ctx != null && (usbMgr = (UsbManager) ctx.getSystemService(Context.USB_SERVICE)) != null) {
             int i = n1;
             HashMap<String, UsbDevice> devices = usbMgr.getDeviceList();
             Iterator<Map.Entry<String, UsbDevice>> it = devices.entrySet().iterator();

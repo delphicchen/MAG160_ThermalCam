@@ -26,6 +26,9 @@ import java.util.zip.ZipInputStream
  * into R=G=B, the outputs averaged), the v2 recipe 1-channel. Which one is read from the
  * `.param` when the model loads ([ncnnParamInputChannels]).
  *
+ * Models come in sizes ([SrTier]: full 64/10, medium 48/10, lite 32/10), each with its own
+ * files dir; the user picks one, and a lighter one runs cooler on any phone.
+ *
  * Like [Anime4kGpu], inference runs on whatever thread calls [render]; ncnn has no
  * per-thread context of its own, and the processing loop is the only caller.
  */
@@ -37,6 +40,8 @@ class NcnnUpscaler private constructor() : AutoCloseable {
     var inChannels = 3; private set
     /** Loaded from the external files dir (an imported or pushed model), not the APK. */
     var fromFiles = false; private set
+    /** The size of the loaded model, read from its `.param`. */
+    var tier = SrTier.FULL; private set
     private val timings = FloatArray(3)
     private var out = IntArray(0)
 
@@ -47,55 +52,77 @@ class NcnnUpscaler private constructor() : AutoCloseable {
             System.loadLibrary("magviewer_ncnn")
         }
 
-        fun modelDir(ctx: Context): File = File(ctx.getExternalFilesDir(null), "model")
+        /** `<files>/model` for the full model (as before tiers), `<files>/model-lite` … */
+        fun modelDir(ctx: Context, tier: SrTier = SrTier.FULL): File =
+            File(ctx.getExternalFilesDir(null), tier.dir)
 
-        /** Input sizes ("120x160", …) with a complete model in the files dir. */
-        fun importedSizes(ctx: Context): List<String> = SrModelFiles.importedSizes(modelDir(ctx))
+        /** Input sizes ("120x160", …) with a complete model of [tier] in the files dir. */
+        fun importedSizes(ctx: Context, tier: SrTier): List<String> =
+            SrModelFiles.importedSizes(modelDir(ctx, tier))
 
-        /** Install a model package into [modelDir]; see [SrModelFiles.install]. */
-        fun importPackage(ctx: Context, input: InputStream): List<String> =
-            SrModelFiles.install(modelDir(ctx), input)
+        /** Install a model package into its tier's dir; see [SrModelFiles.install]. */
+        fun importPackage(ctx: Context, input: InputStream): SrModelFiles.Installed =
+            SrModelFiles.install(input) { modelDir(ctx, it) }
 
-        /** Drop the imported model; the APK's own takes over again. */
+        /** Drop every imported model; the APK's own takes over again. */
         fun removeImported(ctx: Context) {
-            modelDir(ctx).deleteRecursively()
+            SrTier.entries.forEach { modelDir(ctx, it).deleteRecursively() }
         }
 
-        /** `<files>/model/thermal_<w>x<h>_fp16.{param,bin}` for this input size. */
-        fun modelFiles(ctx: Context, w: Int, h: Int): Pair<File, File> {
-            val dir = modelDir(ctx)
+        /** `<files>/<tier dir>/thermal_<w>x<h>_fp16.{param,bin}` for this input size. */
+        fun modelFiles(ctx: Context, w: Int, h: Int, tier: SrTier = SrTier.FULL): Pair<File, File> {
+            val dir = modelDir(ctx, tier)
             return File(dir, "thermal_${w}x${h}_fp16.param") to
                 File(dir, "thermal_${w}x${h}_fp16.bin")
         }
 
-        private fun assetNames(w: Int, h: Int) =
-            "model/thermal_${w}x${h}_fp16.param" to "model/thermal_${w}x${h}_fp16.bin"
+        private fun assetNames(tier: SrTier, w: Int, h: Int) =
+            "${tier.dir}/thermal_${w}x${h}_fp16.param" to "${tier.dir}/thermal_${w}x${h}_fp16.bin"
 
         private fun inAssets(ctx: Context, names: Pair<String, String>): Boolean =
             runCatching { ctx.assets.open(names.first).close() }.isSuccess
 
         /** The bundled model for this size, else the bundled 160×120 one (size-agnostic). */
-        private fun assetFor(ctx: Context, w: Int, h: Int): Pair<String, String>? =
-            assetNames(w, h).takeIf { inAssets(ctx, it) }
-                ?: assetNames(160, 120).takeIf { inAssets(ctx, it) }
+        private fun assetFor(ctx: Context, tier: SrTier, w: Int, h: Int): Pair<String, String>? =
+            assetNames(tier, w, h).takeIf { inAssets(ctx, it) }
+                ?: assetNames(tier, 160, 120).takeIf { inAssets(ctx, it) }
 
-        fun isInstalled(ctx: Context, w: Int, h: Int): Boolean {
-            val (p, b) = modelFiles(ctx, w, h)
-            return (p.isFile && b.isFile) || assetFor(ctx, w, h) != null
+        /** An imported model of [tier] for another frame size — the graph has no fixed
+         *  shape, so it runs on this one too. */
+        private fun anyFiles(ctx: Context, tier: SrTier): Pair<File, File>? =
+            importedSizes(ctx, tier).firstOrNull()?.let { sz ->
+                val (w, h) = sz.split('x').map { it.toInt() }
+                modelFiles(ctx, w, h, tier)
+            }
+
+        fun isInstalled(ctx: Context, w: Int, h: Int, tier: SrTier = SrTier.FULL): Boolean {
+            val (p, b) = modelFiles(ctx, w, h, tier)
+            return (p.isFile && b.isFile) || assetFor(ctx, tier, w, h) != null ||
+                anyFiles(ctx, tier) != null
         }
 
+        /** Sizes the user can pick: bundled or imported, for any frame size. */
+        fun availableTiers(ctx: Context): Set<SrTier> = SrTier.entries.filter { t ->
+            importedSizes(ctx, t).isNotEmpty() || assetFor(ctx, t, 160, 120) != null
+        }.toSet()
+
         /**
-         * Null when no model is installed (not even the bundled one). A file pushed into
-         * the external dir wins over a bundled asset, so a bundled model can be overridden
-         * for testing without rebuilding.
+         * Null when no model of [tier] is installed (not even a bundled one). A file pushed
+         * into the external dir wins over a bundled asset, so a bundled model can be
+         * overridden for testing without rebuilding; an imported model for another frame
+         * size comes last.
          */
-        fun open(ctx: Context, w: Int, h: Int): NcnnUpscaler? {
-            val (p, b) = modelFiles(ctx, w, h)
-            val fromFiles = p.isFile && b.isFile
-            val asset = if (fromFiles) null else assetFor(ctx, w, h)
+        fun open(ctx: Context, w: Int, h: Int, tier: SrTier = SrTier.FULL): NcnnUpscaler? {
+            var (p, b) = modelFiles(ctx, w, h, tier)
+            var fromFiles = p.isFile && b.isFile
+            val asset = if (fromFiles) null else assetFor(ctx, tier, w, h)
             if (!fromFiles && asset == null) {
-                Log.i(TAG, "no ncnn model for ${w}x$h in assets or ${modelDir(ctx)}")
-                return null
+                val any = anyFiles(ctx, tier)
+                if (any == null) {
+                    Log.i(TAG, "no ${tier.name} ncnn model for ${w}x$h in assets or ${modelDir(ctx, tier)}")
+                    return null
+                }
+                p = any.first; b = any.second; fromFiles = true
             }
             val u = NcnnUpscaler()
             u.vulkan = u.nativeGpuAvailable()
@@ -113,9 +140,10 @@ class NcnnUpscaler private constructor() : AutoCloseable {
                 else ctx.assets.open(asset.first).use { it.readBytes().decodeToString() }
             }.getOrDefault("")
             u.inChannels = ncnnParamInputChannels(param)
+            u.tier = SrTier.of(ncnnParamFeat(param))
             u.fromFiles = fromFiles
             Log.i(TAG, "ncnn model ${w}x$h (${asset?.first ?: p.name}): " +
-                "${u.inChannels}-channel input")
+                "${u.inChannels}-channel input, ${u.tier.name}")
             return u
         }
     }
@@ -163,16 +191,42 @@ class NcnnUpscaler private constructor() : AutoCloseable {
  * v2 recipe. Anything unreadable counts as 3, the original contract.
  */
 internal fun ncnnParamInputChannels(param: String): Int {
-    val line = param.lineSequence().firstOrNull { it.startsWith("Convolution") } ?: return 3
-    val kv = line.split(Regex("\\s+"))
-        .mapNotNull { t -> t.split('=').takeIf { it.size == 2 }?.let { it[0] to it[1] } }
-        .toMap()
+    val kv = firstConvolution(param) ?: return 3
     val outCh = kv["0"]?.toIntOrNull()?.takeIf { it > 0 } ?: return 3
     val kw = kv["1"]?.toIntOrNull()?.takeIf { it > 0 } ?: 1
     val kh = kv["11"]?.toIntOrNull()?.takeIf { it > 0 } ?: kw
     val weights = kv["6"]?.toIntOrNull() ?: return 3
     val c = weights / (outCh * kw * kh)
     return if (c == 1 || c == 3) c else 3
+}
+
+/** SRVGGNetCompact's width (num_feat): the first Convolution's output channels; null if
+ *  unreadable. */
+internal fun ncnnParamFeat(param: String): Int? =
+    firstConvolution(param)?.get("0")?.toIntOrNull()?.takeIf { it > 0 }
+
+/** `key=value` options of the first Convolution layer in an ncnn `.param`. */
+private fun firstConvolution(param: String): Map<String, String>? {
+    val line = param.lineSequence().firstOrNull { it.startsWith("Convolution") } ?: return null
+    return line.split(Regex("\\s+"))
+        .mapNotNull { t -> t.split('=').takeIf { it.size == 2 }?.let { it[0] to it[1] } }
+        .toMap()
+}
+
+/**
+ * Thermal SR model sizes, by SRVGGNetCompact width (num_feat; all three are 10 convs deep).
+ * Compute per frame goes with the width squared: medium ≈ 57 %, lite ≈ 26 % of full — less
+ * heat and battery on any phone, and the only way a weak one keeps up. A model's tier is
+ * read from its own `.param`, so a package lands in the right [dir] whatever its name; the
+ * full model keeps the original `model/` (imported files, and the APK's assets).
+ */
+enum class SrTier(val feat: Int, val dir: String) {
+    FULL(64, "model"), MEDIUM(48, "model-medium"), LITE(32, "model-lite");
+
+    companion object {
+        /** The tier of a model [feat] channels wide; any other width counts as full. */
+        fun of(feat: Int?): SrTier = entries.firstOrNull { it.feat == feat } ?: FULL
+    }
 }
 
 /**
@@ -194,17 +248,22 @@ object SrModelFiles {
             .sorted()
     }
 
+    /** What [install] put where: the package's model size, its dir and input sizes. */
+    data class Installed(val tier: SrTier, val dir: File, val sizes: List<String>)
+
     /**
      * Install a model package — a zip of `thermal_<w>x<h>_fp16.param/.bin` pairs — into
-     * [dir] (staged next to it), replacing whatever was imported before — or, with
-     * [merge], only the sizes the package carries (a downloaded model). Folders inside
-     * the zip are ignored (entries are matched by file name only, so nothing lands
-     * outside [dir]), and nothing is replaced unless every size in the package has both
-     * files and a real ncnn .param. Returns the sizes installed; throws with a readable
-     * message. Blocking I/O — call off the main thread.
+     * the dir [dirFor] gives its [SrTier] (read from the models' width, all sizes in a
+     * package alike), staged next to it, replacing whatever that tier had imported
+     * before — or, with [merge], only the sizes the package carries (a downloaded model).
+     * Folders inside the zip are ignored (entries are matched by file name only, so
+     * nothing lands outside the dir), and nothing is replaced unless every size in the
+     * package has both files and a real ncnn .param. Throws with a readable message.
+     * Blocking I/O — call off the main thread.
      */
-    fun install(dir: File, input: InputStream, merge: Boolean = false): List<String> {
-        val staging = File(dir.parentFile, "model.import").apply { deleteRecursively(); mkdirs() }
+    fun install(input: InputStream, merge: Boolean = false, dirFor: (SrTier) -> File): Installed {
+        val root = dirFor(SrTier.FULL).parentFile
+        val staging = File(root, "model.import").apply { deleteRecursively(); mkdirs() }
         try {
             var total = 0L
             val buf = ByteArray(1 shl 16)
@@ -228,6 +287,7 @@ object SrModelFiles {
             val sizes = files.mapNotNull { MODEL_FILE.matchEntire(it) }
                 .map { "${it.groupValues[1]}x${it.groupValues[2]}" }.distinct().sorted()
             require(sizes.isNotEmpty()) { "no thermal_<w>x<h>_fp16.param/.bin in the package" }
+            val tiers = mutableSetOf<SrTier>()
             for (sz in sizes) {
                 val p = File(staging, "thermal_${sz}_fp16.param")
                 require(p.isFile && File(staging, "thermal_${sz}_fp16.bin").isFile) {
@@ -236,7 +296,11 @@ object SrModelFiles {
                 require(p.bufferedReader().use { it.readLine()?.trim() } == NCNN_PARAM_MAGIC) {
                     "thermal_${sz}_fp16.param is not an ncnn model"
                 }
+                tiers += SrTier.of(ncnnParamFeat(p.readText()))
             }
+            require(tiers.size == 1) { "the package mixes model sizes (${tiers.joinToString()})" }
+            val tier = tiers.single()
+            val dir = dirFor(tier)
             if (merge && dir.isDirectory) {
                 for (f in staging.listFiles().orEmpty()) {
                     val dst = File(dir, f.name)
@@ -247,7 +311,7 @@ object SrModelFiles {
                 dir.deleteRecursively()
                 check(staging.renameTo(dir)) { "could not install into $dir" }
             }
-            return sizes
+            return Installed(tier, dir, sizes)
         } finally {
             staging.deleteRecursively()          // no-op after a successful rename
         }

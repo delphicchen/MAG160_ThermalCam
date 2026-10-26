@@ -34,6 +34,21 @@ One model per input size, because the exported graph has a static shape:
 
 Selecting "Thermal SR" with no matching file falls back to Anime4K and says so.
 
+## Model sizes
+
+The drawer's "Thermal SR model size" picks **Full / Medium / Lite** — SRVGGNetCompact 64/10,
+48/10 and 32/10 (≈ 100 / 57 / 26 % of the compute per frame: a lighter one runs cooler and
+keeps up on a weaker phone). Each size has its own dir: `model/` (full — the bundled assets
+and the paths above), `model-medium/`, `model-lite/`, under both `assets/` and the external
+files dir. **Load SR model** reads a package's width from its `.param` (the first
+Convolution's `0=`) and files it under that size, so the zip needs no special names; a size
+with no model is greyed out, and a picked size that is missing falls back to the full model.
+The graph has no fixed shape, so a model exported at one frame size also runs on the others.
+
+Bundled: full (`assets/model/`) and, from 2.8-alpha4, lite (`assets/model-lite/`, one
+`thermal_160x120_fp16` pair for every camera — its README has the recipe and a comparison).
+Medium is not trained yet.
+
 ## Expected blob names
 
 `data` in, `output` out — what `sr_train/scripts/export_onnx.py` produces. A model

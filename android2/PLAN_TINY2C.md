@@ -8,6 +8,26 @@ MagViewer 同一支 APK 同時支援 MAG160 與 Tiny2C（256×192，AC020 UVC）
 SDK 原檔：`../Tiny-2C/SDK/Android/ANDROID_AC020_SDK_USB_IR_UVC_1.1.5_20241022/`
 （範例 `simple/usbir/.../camera/CameraPreviewManager.java` 是主要參考）。
 
+## Tiny2C 超分模型（2026-10-24 記錄，10-26 更新）
+
+**2026-10-26：輕量 32/10 已訓練完成並內建**（`app/src/main/assets/model-lite/`，2.8-alpha4 起），
+抽屜「超分模型大小」選「輕量」即可，Tiny2C 開完整版太慢時速度保護也會自動降到輕量。
+在 200 張未參與訓練的 CIDIS 熱像上：PSNR 比完整版低 0.4 dB、假熱點數相當、CPU 上 27 vs 48 ms
+（細節見該資料夾 README）。**還沒做**：在 Tiny2C 實機量 Debug 的 `net` 時間與發熱；中量 48/10 尚未訓練。
+
+以下為 10-24 時的紀錄：
+
+- 已備好：訓練設定與 Run-all notebook（`sr_train/colab/train_thermal_sr_lite.ipynb`）、
+  從內建 v4 剪枝的暖啟動（`truncate_pretrained.py --num-feat 32`）、打包腳本。
+- 還沒做：Colab 訓練（80k iter）→ 匯出 256×192 / 192×256 → 實機看 Debug 的 `net` 時間 →
+  發成 `sr-models` 的 `thermal_ncnn_256x192.zip` **v2**（目前 release 上只有 v1 = 內建 v4 權重）。
+- 現況：Tiny2C 開 Thermal SR 跑的是內建 64/10，測試者手機約 12–15 fps，速度保護會退回
+  Anime4K（見下方待辦 A）。
+- 剩下步驟：`sr_train/README.md` 的「Lite 32/10 and medium 48/10」第 1–4 步（中量 48/10 同一套流程，
+  notebook 設 `MODEL = 'medium'`）。
+- App 端（2.8，已完成）：抽屜「超分模型大小」完整 / 中量 / 輕量讓使用者選，未安裝的是灰色；
+  匯入或下載的模型依寬度自動歸檔並切過去；速度保護先降一檔，最輕仍太慢才退回 Anime4K。
+
 ## 待確認（動手前）
 
 - [x] 對方模組是 **USB 版**（使用者確認 2026-10-18）。
@@ -162,7 +182,7 @@ ncnn 圖不綁尺寸（Input 無 shape、Interp 用 ×4 scale，兩方向 param/
   （`android2/thermal_cam_model_20260925-2/thermal_sr_progress.zip` 裡的 net_g_80000）用
   `truncate_pretrained.py --num-feat 32` 依濾波器 L1 剪成 32 通道（本機實測 strict load OK，未微調前
   對 v4 PSNR ~19 dB）；匯出 256×192 / 192×256 → `thermal_ncnn_L1FFT_lite32.zip`；發布用
-  `make_sr_package.py --size 256x192 --version 2`。步驟在 `sr_train/README.md`「Lite 32/10」。
+  `make_sr_package.py --size 256x192 --version 2`。步驟在 `sr_train/README.md`「Lite 32/10 and medium 48/10」。
 - 現成替代：Anime4K 選 ×2 只跑一道 → 512×384，計算量小很多。
 
 ### B. MAG160 Mx（1.25 mm 四針）`calibration download failed: -2`

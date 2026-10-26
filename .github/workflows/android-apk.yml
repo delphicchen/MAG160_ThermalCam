@@ -1,0 +1,95 @@
+# Builds the Android app (android2/) as the side-by-side "MagViewer β" test APK
+# (application id com.magnity.viewer.beta, debug-signed by the runner — it installs next
+# to a release build, not over it). Download it from the run's Artifacts.
+#
+# A commit whose message contains [prerelease] also publishes the APK as the GitHub
+# pre-release android-v<versionName>, titled and described by android2/PRERELEASE_NOTES.md
+# (first line "# title", the rest is the body). An existing tag is never overwritten.
+name: Android test APK
+
+on:
+  push:
+    branches: [ccr-1a3608d0-s97tvm]
+    paths: ['android2/**', '.github/workflows/android-apk.yml']
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: android2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # *.so is git-ignored repo-wide; the MAG SDK's arm64 build ships inside the tracked AAR
+      # (lib/README.md, "Build setup")
+      - name: MAG SDK native library
+        run: |
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          unzip -j -o lib/thermallib-release.aar jni/arm64-v8a/libcoresdk.so \
+            -d app/src/main/jniLibs/arm64-v8a/
+
+      - name: NDK and CMake the build pins
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.0.12077973" "cmake;3.22.1" > /dev/null
+
+      - name: Build
+        run: ./gradlew --no-daemon :app:assembleBeta
+
+      # The app runs from Android 10 (minSdk 29): a call newer than that needs a version
+      # check, or it crashes there. Fail on NewApi and on any lint error; errors and the
+      # API warnings are printed with their location.
+      - name: Lint (API levels)
+        run: |
+          ./gradlew --no-daemon :app:lintBeta || true
+          python3 - <<'PY'
+          import collections, sys, xml.etree.ElementTree as ET
+          try:
+              root = ET.parse('app/build/reports/lint-results-beta.xml').getroot()
+          except OSError:
+              sys.exit('no lint report')
+          ids = collections.Counter((i.get('severity'), i.get('id')) for i in root)
+          print('lint:', ', '.join(f'{n}× {sev} {i}' for (sev, i), n in sorted(ids.items())))
+          bad = 0
+          for i in root:
+              if i.get('id') in ('NewApi', 'InlinedApi') or i.get('severity') in ('Error', 'Fatal'):
+                  loc = i.find('location')
+                  print(f"{i.get('id')}: {loc.get('file')}:{loc.get('line')}: {i.get('message')}")
+                  bad += i.get('id') == 'NewApi' or i.get('severity') in ('Error', 'Fatal')
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Name the APK
+        run: |
+          v=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)
+          mkdir -p out
+          cp app/build/outputs/apk/beta/app-beta.apk "out/MagViewer-$v-beta.apk"
+          ls -la out
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MagViewer-beta-apk
+          path: android2/out/*.apk
+          if-no-files-found: error
+
+      - name: Pre-release
+        if: contains(github.event.head_commit.message, '[prerelease]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title=$(head -1 PRERELEASE_NOTES.md | sed 's/^# *//')
+          tail -n +2 PRERELEASE_NOTES.md > out/notes.md
+          gh release create "android-v$VERSION" out/*.apk --target "$GITHUB_SHA" \
+            --prerelease --latest=false --title "$title" --notes-file out/notes.md

@@ -46,6 +46,7 @@ import com.magnity.viewer.R
 import com.magnity.viewer.pipeline.Fusion
 import com.magnity.viewer.pipeline.FusionCalibration
 import com.magnity.viewer.pipeline.Palettes
+import com.magnity.viewer.pipeline.SrTier
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
@@ -500,8 +501,9 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
     ) {
         Text("MagViewer", color = ACCENT, fontSize = 15.sp)
 
-        // language names are written in their own language, so each is findable from any
-        Column {
+        // language names are written in their own language, so each is findable from any;
+        // before Android 13 the app follows the system language (no per-app setting)
+        if (vm.languageSelectable) Column {
             Text(stringResource(R.string.language), color = DIM, fontSize = 11.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 listOf("" to stringResource(R.string.lang_system), "en" to "English",
@@ -525,6 +527,20 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                      vm.upscaler == ViewerViewModel.Upscaler.BICUBIC,
                      Modifier.weight(1f)) { vm.upscaler = ViewerViewModel.Upscaler.BICUBIC }
             }
+            val tierNames = SrTier.entries.associateWith { stringResource(srTierLabel(it)) }
+            // model size: lighter = less work per frame, cooler; grey = not installed
+            if (vm.upscaler == ViewerViewModel.Upscaler.NCNN) {
+                Text(stringResource(R.string.sr_tier), color = DIM, fontSize = 11.sp,
+                     modifier = Modifier.padding(top = 4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()) {
+                    SrTier.entries.forEach { t ->
+                        Chip(tierNames.getValue(t), vm.srTier == t, Modifier.weight(1f),
+                             enabled = t in vm.srTiers) { vm.chooseSrTier(t) }
+                    }
+                }
+                Text(stringResource(R.string.sr_tier_hint), color = DIM, fontSize = 9.sp)
+            }
             if (!vm.ncnnModelInstalled()) {
                 Text(stringResource(R.string.sr_needs_model, vm.ncnnModelDir()),
                      color = DIM, fontSize = 9.sp)
@@ -532,7 +548,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
             // a model for this frame size on the `sr-models` release (another camera's
             // sensor, or a newer download): offered here, fetched only on a tap
             val frameSize = vm.lastFrame?.let { it.w to it.h }
-            LaunchedEffect(frameSize, vm.srImportedSizes) { vm.checkSrRemote() }
+            LaunchedEffect(frameSize, vm.srImported) { vm.checkSrRemote() }
             val dl = vm.srDownload
             val pkg = vm.srRemote
             if (dl != null) {
@@ -568,15 +584,16 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                                contentPadding = PaddingValues(horizontal = 8.dp)) {
                     Text(stringResource(R.string.load_sr_model), fontSize = 12.sp)
                 }
-                if (vm.srImportedSizes.isNotEmpty()) {
+                if (vm.srImported.isNotEmpty()) {
                     OutlinedButton(onClick = { vm.removeSrModel() },
                                    contentPadding = PaddingValues(horizontal = 8.dp)) {
                         Text(stringResource(R.string.use_builtin), fontSize = 12.sp)
                     }
                 }
             }
-            Text(if (vm.srImportedSizes.isEmpty()) stringResource(R.string.sr_model_builtin)
-                 else stringResource(R.string.sr_model_imported, vm.srImportedSizes.joinToString()),
+            Text(if (vm.srImported.isEmpty()) stringResource(R.string.sr_model_builtin)
+                 else stringResource(R.string.sr_model_imported, vm.srImported.entries.joinToString("; ") {
+                     (t, sizes) -> tierNames.getValue(t) + " " + sizes.joinToString() }),
                  color = DIM, fontSize = 9.sp)
         }
 
@@ -841,6 +858,17 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                 Text(stringResource(if (vm.sdkBusy) R.string.running else R.string.run_sdk_test))
             }
         }
+        // the HIK 4117 diagnostic build's experiment (PLAN_HIK4117.md)
+        if (vm.cameraKind == "hik4117") {
+            Text(stringResource(R.string.hik_test_title), color = DIM, fontSize = 10.sp)
+            Text(stringResource(R.string.hik_test_hint), color = DIM, fontSize = 9.sp)
+            Button(onClick = { vm.runHik4117Test() }, enabled = vm.connected && !vm.sdkBusy,
+                   colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2B3D2B),
+                                                        contentColor = Color.White),
+                   modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(if (vm.sdkBusy) R.string.running else R.string.run_hik_test))
+            }
+        }
         vm.sdkLog?.let { logText ->
             Text(logText, color = Color(0xFF9DD69D), fontSize = 9.sp,
                  fontFamily = FontFamily.Monospace,
@@ -848,6 +876,12 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                      .fillMaxWidth()
                      .heightIn(max = 220.dp)
                      .verticalScroll(rememberScrollState()))
+            val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+            val copied = stringResource(R.string.n_report_copied)
+            OutlinedButton(onClick = {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(vm.reportText()))
+                vm.notice = copied
+            }) { Text(stringResource(R.string.copy_report), fontSize = 12.sp) }
         }
 
         HorizontalDivider(color = Color(0xFF30363D))

@@ -2,7 +2,7 @@
 
 # 🔥 MAG160 ThermalCam
 
-### 讓你的 Magnity 熱像儀，在新版 Android 上重獲新生。
+### 開源的手機熱成像程式——一個 App 支援多款熱成像模組。
 
 [English](README.md) · **繁體中文** · [简体中文](README.zh-CN.md)
 
@@ -17,15 +17,32 @@
 
 ---
 
-## 😤 痛點
+## 🎯 目標
+
+**MAG160 ThermalCam** 的目標是成為**開源的手機熱成像程式**，盡可能支援多款 USB 熱成像
+模組：把模組插上你現有的手機，打開同一個 App 就能量測——不論哪款模組，都有一樣的色盤、
+標記、超解析、錄影與融合功能。
+
+## 📷 支援的模組
+
+| 模組 | 解析度 | 狀態 |
+|---|---|---|
+| Magnity **MAG160 / MAG-Mx / MAG-Cx** | 160×120 | ✅ 支援（原廠 SDK） |
+| InfiRay **Tiny2C**（AC020） | 256×192 | ✅ 支援（原廠 AC020 SDK） |
+| 海康 **TB-4117-3/S**（USB） | 160×120 | 🧪 診斷測試版（2.8 alpha） |
+
+## 🤝 一起支援更多模組
+
+每款模組的通訊協定都不一樣。有原廠的 **Android SDK** 或**協定文件**，就能很快加上支援；
+沒有的話得先逆向分析，要花上很多倍的時間。如果你是模組廠商或經銷商，或手上有某款模組的
+SDK、文件或可供測試的實機，歡迎[開 issue](https://github.com/delphicchen/MAG160_ThermalCam/issues) 聯繫——這是讓更多模組獲得支援最直接
+的方式。
+
+## 😤 緣起
 
 Magnity **MAG-Mx / MAG-Cx** USB 熱像儀（VID `0x833C`）硬體很好，但原廠 App
-**在 Android 15 以上已經無法使用**。插上新手機，什麼都沒有。
-
-## 💡 解法
-
-**MAG160 ThermalCam** 是專為這台熱像儀全新打造的 Android App，透過逆向工程原廠 SDK
-從零重寫。插上、打開、量測——用你手上現有的手機就行。
+**在 Android 15 以上已經無法使用**。插上新手機，什麼都沒有。於是透過逆向工程原廠 SDK，
+為它從零重寫了這個 App，之後再擴展到其他模組。
 
 ## ✨ Android App 功能
 
@@ -33,7 +50,7 @@ Magnity **MAG-Mx / MAG-Cx** USB 熱像儀（VID `0x833C`）硬體很好，但原
 |---|---|
 | 📱 **支援 Android 15+** | 原廠 MAG-Cx / MAG-Mx 跑不動的地方，它可以。 |
 | 🌡️ **真實絕對溫度** | 直接取自原廠 SDK，已完整校正，免手動校準。 |
-| 📷 **一個 App 兩台相機** | Magnity MAG160 / MAG-Mx 與 InfiRay **Tiny2C**（256×192）— 插哪台都會自動辨識。 |
+| 📷 **一個 App 多款模組** | Magnity MAG160 / MAG-Mx、InfiRay **Tiny2C**（256×192），以及測試中的海康 **TB-4117** — 插哪台都會自動辨識。 |
 | 🎯 **MIN / MAX / CTR / SPOT 標記** | 一眼找出最熱、最冷點，中心十字直接讀溫，搭配即時色條與平滑跟隨的自動範圍。 |
 | 🔍 **細節增強（DDE）** | 可選的商用熱像儀風格：帶出局部對比與邊緣、平坦區更乾淨 — 只影響畫面，不影響讀值。 |
 | 🎚️ **發射率可調** | ε 0.10–1.00 自由設定，皮膚、霧面塗漆、木材一鍵套用。 |
@@ -51,7 +68,7 @@ Magnity **MAG-Mx / MAG-Cx** USB 熱像儀（VID `0x833C`）硬體很好，但原
 
 ## 🚀 開始使用
 
-1. **從 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases) 下載 APK**（arm64、Android 13 以上），或自行編譯：
+1. **從 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases) 下載 APK**（arm64；2.8 起 Android 10 以上，2.7 要 Android 13 以上），或自行編譯：
    ```sh
    cd android2
    JAVA_HOME=/path/to/android-studio/jbr ./gradlew :app:assembleDebug

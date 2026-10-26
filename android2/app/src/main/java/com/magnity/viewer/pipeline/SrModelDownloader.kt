@@ -53,14 +53,16 @@ object SrModelDownloader {
         runCatching { JSONObject(File(dir, VERSIONS).readText()).optInt(file, 0) }.getOrDefault(0)
 
     /**
-     * Download [pkg] (via [cacheDir]), check its sha256 and install it into [dir].
-     * [onProgress] gets (bytes done, bytes total — 0 when unknown), throttled; returns
-     * the sizes installed. Throws [CancellationException] once [isCancelled] turns true.
+     * Download [pkg] (via [cacheDir]), check its sha256 and install it into the dir
+     * [dirFor] gives its model size (see [SrModelFiles.install]). [onProgress] gets (bytes
+     * done, bytes total — 0 when unknown), throttled. Throws [CancellationException] once
+     * [isCancelled] turns true.
      */
     fun download(
-        dir: File, cacheDir: File, pkg: Package,
+        cacheDir: File, pkg: Package,
         onProgress: (Long, Long) -> Unit, isCancelled: () -> Boolean,
-    ): List<String> {
+        dirFor: (SrTier) -> File,
+    ): SrModelFiles.Installed {
         val tmp = File(cacheDir, "${pkg.file}.part")
         try {
             val conn = get(BASE + pkg.file)
@@ -89,11 +91,11 @@ object SrModelDownloader {
             onProgress(done, total)
             val sum = md.digest().joinToString("") { "%02x".format(it) }
             require(sum == pkg.sha256) { "checksum mismatch — download again" }
-            val sizes = tmp.inputStream().use { SrModelFiles.install(dir, it, merge = true) }
-            val versions = runCatching { JSONObject(File(dir, VERSIONS).readText()) }
+            val got = tmp.inputStream().use { SrModelFiles.install(it, merge = true, dirFor = dirFor) }
+            val versions = runCatching { JSONObject(File(got.dir, VERSIONS).readText()) }
                 .getOrDefault(JSONObject())
-            File(dir, VERSIONS).writeText(versions.put(pkg.file, pkg.version).toString())
-            return sizes
+            File(got.dir, VERSIONS).writeText(versions.put(pkg.file, pkg.version).toString())
+            return got
         } finally {
             tmp.delete()
         }

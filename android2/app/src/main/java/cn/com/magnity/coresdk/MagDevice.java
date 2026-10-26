@@ -239,7 +239,7 @@ public class MagDevice implements MagUsb.IUSBCallback {
 
     public static void getDevices(Context ctx, int vendorId, int productId, ArrayList<EnumInfo> devices) {
         UsbManager usbMgr;
-        if (ctx != null && devices != null && (usbMgr = (UsbManager) ctx.getSystemService("usb")) != null) {
+        if (ctx != null && devices != null && (usbMgr = (UsbManager) ctx.getSystemService(Context.USB_SERVICE)) != null) {
             if (!devices.isEmpty()) {
                 devices.clear();
             }
