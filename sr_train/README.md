@@ -68,7 +68,8 @@ everything below, which ends at a verified `.param`/`.bin`.
 sr_train/
 ├── colab/
 │   ├── train_thermal_sr.ipynb           the Colab run (MODEL = 'full' / 'medium' / 'lite')
-│   └── train_thermal_sr_lite.ipynb      same, preset to the Tiny2C lite model — Run all
+│   ├── train_thermal_sr_lite.ipynb      same, preset to the lite 32/10 model — Run all
+│   └── train_thermal_sr_medium.ipynb    same, preset to the medium 48/10 model — Run all
 ├── options/
 │   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 + spectrum + gradient — the model
 │   ├── 02_thermal_srvgg_x4_gan.yml      stage 2, + VGG + light GAN (optional, off)
@@ -318,9 +319,9 @@ output pixels:
 An ×2 model would not help: the body runs at input resolution whatever the scale, and only
 the output conv shrinks (~2 % of the network).
 
-1. **Lite**: open `colab/train_thermal_sr_lite.ipynb` (the main notebook with `MODEL = 'lite'`
-   set and the restore cell skippable, so **Run all** goes through untouched). **Medium**: the
-   main notebook with `MODEL = 'medium'`. v4 is rebuilt from the app's bundled ncnn model in
+1. Open `colab/train_thermal_sr_lite.ipynb` or `colab/train_thermal_sr_medium.ipynb` (the main
+   notebook with `MODEL = 'lite'` / `'medium'` set and the restore cell skippable, so **Run all**
+   goes through untouched) — from GitHub's `main`, so it is the current version. v4 is rebuilt from the app's bundled ncnn model in
    the clone (`scripts/ncnn_to_pth.py`, fp16-rounded: within 8e-4 of the v4 checkpoint), or
    taken from a `.pth` in `<root>/init/` when present, then pruned to the width with
    `truncate_pretrained.py --num-feat 32|48` — per layer the filters with the largest L1
