@@ -287,9 +287,11 @@ same file can be slightly more accurate on one device than another.
 
 ## Lite 32/10 and medium 48/10 — lighter models
 
-**Status (2026-10-25): not finished.** The notebooks, warm start and packaging below are
-ready, but neither model has been trained, exported or published yet — `sr-models` still
-holds only v1 of the Tiny2C package (the built-in v4 weights), so every camera runs the 64/10.
+**Status (2026-10-26):** **lite is trained and bundled** in the APK
+(`android2/app/src/main/assets/model-lite/`, from 2.8-alpha4) — its README has the recipe and
+a comparison with the full model on held-out frames (−0.4 dB, same hallucination profile).
+**Medium is not trained yet.** Nothing new is on `sr-models` (still only v1 of the Tiny2C
+package, the built-in v4 weights): a bundled model needs no download.
 
 The app (2.8+) lets the user pick **Full / Medium / Lite** under "Thermal SR model size" in
 the drawer, on any camera; a size is greyed out until a model of it is installed. An imported
@@ -327,9 +329,12 @@ the output conv shrinks (~2 % of the network).
    `thermal_ncnn_L1FFT_lite32.zip` / `…_medium48.zip` (the graph has no fixed shape, so the
    app runs it on any camera). Load it with **Load SR model (.zip)…**, pick the size, and
    compare the Debug overlay's `net` time with the full model's.
-4. Publish for the in-app download. Lite as version 2 of the Tiny2C package; medium as a
-   package of its own (`--size` only names the zip; use version ≥ 2 — 1 means the built-in
-   weights, which the app never offers):
+4. Ship it: copy one `.param`/`.bin` pair into `android2/app/src/main/assets/model-lite/`
+   (or `model-medium/`) named `thermal_160x120_fp16.*` — the graph has no fixed shape, so
+   one pair serves every camera — and add the folder's `*.bin` to `.gitignore`'s exceptions.
+   Or publish it for the in-app download instead (a newer lite later, or medium): lite as
+   version 2 of the Tiny2C package, medium as a package of its own (`--size` only names
+   the zip; use version ≥ 2 — 1 means the built-in weights, which the app never offers):
 
    ```sh
    python scripts/make_sr_package.py --size 256x192 --version 2 \

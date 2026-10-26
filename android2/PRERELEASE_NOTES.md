@@ -1,12 +1,23 @@
-# MagViewer 2.8-alpha3 (Android 10+, HIK 4117 diagnostics)
+# MagViewer 2.8-alpha4 (Lite Thermal SR model, Android 10+, HIK 4117 diagnostics)
 **Alpha — a diagnostic build for testing, not a stable release.** Built by GitHub Actions
 from the `ccr-1a3608d0-s97tvm` branch.
 
 **This APK is “MagViewer β”** (`com.magnity.viewer.beta`, signed by the build server): it
 installs **next to** MagViewer 2.7, not over it, with its own settings. If a β you built
-yourself is installed, uninstall that first. It installs over 2.8-alpha1 / alpha2.
+yourself is installed, uninstall that first. It installs over 2.8-alpha1 … alpha3.
 
-## New in 2.8-alpha3
+## New in 2.8-alpha4
+- **Thermal SR model size: Full / Lite** — choose it under Thermal SR in the menu. Lite does
+  about a quarter of the network work per frame: the phone stays cooler and the battery
+  lasts longer, with a slightly softer picture (on 200 held-out thermal frames: 0.4 dB
+  below Full, the same rate of invented hot spots). It is built in — nothing to download.
+  (Medium is greyed out until that model is trained.)
+- When Thermal SR cannot keep up with the camera (a Tiny2C on a mid-range phone), the app
+  switches to Lite first and to Anime4K only if even Lite is too slow; pick a size again to
+  keep it.
+- **Load SR model (.zip)** files a model under its size by itself and switches to it.
+
+## From 2.8-alpha3
 - MAG160 on Android 10–12: the USB-permission listener of the factory SDK is registered the
   way those versions understand (it used a flag that only exists from Android 13).
 - Code clean-up from the build checks (lint now runs on every build and must pass); no
