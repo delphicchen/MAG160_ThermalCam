@@ -5,6 +5,16 @@
 # A commit whose message contains [prerelease] also publishes the APK as the GitHub
 # pre-release android-v<versionName>, titled and described by android2/PRERELEASE_NOTES.md
 # (first line "# title", the rest is the body). An existing tag is never overwritten.
+#
+# Run by hand with "release" ticked (Actions → Android test APK → Run workflow, on main), it
+# instead builds the real app (com.magnity.viewer, the debug variant every release so far
+# has been), signs it with the release key from the repository secrets and publishes
+# android-v<versionName> as the latest release, notes from android2/RELEASE_NOTES.md — but
+# only if its certificate matches the previous release's, so it installs over it.
+#   SIGNING_KEYSTORE_B64    the keystore, base64
+#   SIGNING_STORE_PASSWORD  its password      (Android's debug.keystore: android)
+#   SIGNING_KEY_ALIAS       the key's alias   (debug.keystore: androiddebugkey)
+#   SIGNING_KEY_PASSWORD    the key password  (debug.keystore: android)
 name: Android test APK
 
 on:
@@ -12,9 +22,15 @@ on:
     branches: [ccr-1a3608d0-s97tvm]
     paths: ['android2/**', '.github/workflows/android-apk.yml']
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish android-v<versionName> as the latest release, signed with the release key'
+        type: boolean
+        default: false
 
 jobs:
   apk:
+    if: ${{ !inputs.release }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -93,3 +109,86 @@ jobs:
           tail -n +2 PRERELEASE_NOTES.md > out/notes.md
           gh release create "android-v$VERSION" out/*.apk --target "$GITHUB_SHA" \
             --prerelease --latest=false --title "$title" --notes-file out/notes.md
+
+  release:
+    if: ${{ inputs.release }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: android2
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: MAG SDK native library
+        run: |
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          unzip -j -o lib/thermallib-release.aar jni/arm64-v8a/libcoresdk.so \
+            -d app/src/main/jniLibs/arm64-v8a/
+
+      - name: NDK and CMake the build pins
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.0.12077973" "cmake;3.22.1" > /dev/null
+
+      - name: The tag is new
+        run: |
+          v=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          if gh release view "android-v$v" > /dev/null 2>&1; then
+            echo "::error::android-v$v already exists — bump versionName first"; exit 1
+          fi
+
+      - name: Build
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Sign with the release key
+        env:
+          SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_KEYSTORE_B64" ]; then
+            echo "::error::the SIGNING_* repository secrets are not set"; exit 1
+          fi
+          ks="$RUNNER_TEMP/release.keystore"
+          echo "$SIGNING_KEYSTORE_B64" | base64 -d > "$ks"
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "BT=$bt" >> "$GITHUB_ENV"
+          mkdir -p out
+          "$bt/apksigner" sign --ks "$ks" --ks-pass env:SIGNING_STORE_PASSWORD \
+            --ks-key-alias "$SIGNING_KEY_ALIAS" --key-pass env:SIGNING_KEY_PASSWORD \
+            --out "out/MagViewer-$VERSION.apk" app/build/outputs/apk/debug/app-debug.apk
+          rm -f "$ks"
+          "$bt/apksigner" verify --print-certs "out/MagViewer-$VERSION.apk" | tee out/certs.txt
+
+      # a different key = an app that cannot install over the last release: stop here
+      - name: Same key as the previous release
+        run: |
+          prev=$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 \
+                 --json tagName --jq '.[0].tagName')
+          echo "previous release: $prev"
+          gh release download "$prev" --pattern '*.apk' --dir prev
+          "$BT/apksigner" verify --print-certs "$(ls prev/*.apk | head -1)" \
+            | grep 'SHA-256 digest' > prev.txt
+          grep 'SHA-256 digest' out/certs.txt > new.txt
+          cat prev.txt new.txt
+          if ! diff -q prev.txt new.txt; then
+            echo "::error::the signing key differs from $prev — users could not upgrade"; exit 1
+          fi
+
+      - name: Release
+        run: |
+          gh release create "android-v$VERSION" "out/MagViewer-$VERSION.apk" --target "$GITHUB_SHA" \
+            --title "MagViewer for Android v$VERSION" --notes-file RELEASE_NOTES.md --latest
