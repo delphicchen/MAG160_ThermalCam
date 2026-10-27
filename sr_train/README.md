@@ -68,7 +68,8 @@ everything below, which ends at a verified `.param`/`.bin`.
 sr_train/
 ├── colab/
 │   ├── train_thermal_sr.ipynb           the Colab run (MODEL = 'full' / 'medium' / 'lite')
-│   └── train_thermal_sr_lite.ipynb      same, preset to the Tiny2C lite model — Run all
+│   ├── train_thermal_sr_lite.ipynb      same, preset to the lite 32/10 model — Run all
+│   └── train_thermal_sr_medium.ipynb    same, preset to the medium 48/10 model — Run all
 ├── options/
 │   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 + spectrum + gradient — the model
 │   ├── 02_thermal_srvgg_x4_gan.yml      stage 2, + VGG + light GAN (optional, off)
@@ -287,15 +288,14 @@ same file can be slightly more accurate on one device than another.
 
 ## Lite 32/10 and medium 48/10 — lighter models
 
-**Status (2026-10-26):** **lite is trained and bundled** in the APK
-(`android2/app/src/main/assets/model-lite/`, from 2.8-alpha4) — its README has the recipe and
-a comparison with the full model on held-out frames (−0.45 dB, same hallucination profile).
-**Medium is not trained yet**: a 2026-10-26 run meant as medium came out 64 wide — the
-notebook from before the merge did not know `MODEL = 'medium'` and trained the full recipe —
-and matched v4 (outputs 43.5 dB apart, +0.01 dB, a few more invented peaks), so it was not
-bundled. Run the current notebook and check the export is `…_medium48.zip` (`0=48` in the
-`.param`). Nothing new is on `sr-models` (still only v1 of the Tiny2C package, the built-in
-v4 weights): a bundled model needs no download.
+**Status (2026-10-27):** **lite and medium are trained and bundled** in the APK
+(`android2/app/src/main/assets/model-lite/` from 2.8-alpha4, `model-medium/` from 2.8) —
+their READMEs have the recipe and a comparison with the full model on held-out frames (lite
+−0.45 dB with the same hallucination profile; medium −0.17 dB with ~20 % more invented
+peaks). A first 2026-10-26 run meant as medium came out 64 wide — the notebook from before
+the merge did not know `MODEL = 'medium'` — so check the export is `…_medium48.zip` (`0=48`
+in the `.param`). Nothing new is on `sr-models` (still only v1 of the Tiny2C package, the
+built-in v4 weights): a bundled model needs no download.
 
 The app (2.8+) lets the user pick **Full / Medium / Lite** under "Thermal SR model size" in
 the drawer, on any camera; a size is greyed out until a model of it is installed. An imported
@@ -318,9 +318,9 @@ output pixels:
 An ×2 model would not help: the body runs at input resolution whatever the scale, and only
 the output conv shrinks (~2 % of the network).
 
-1. **Lite**: open `colab/train_thermal_sr_lite.ipynb` (the main notebook with `MODEL = 'lite'`
-   set and the restore cell skippable, so **Run all** goes through untouched). **Medium**: the
-   main notebook with `MODEL = 'medium'`. v4 is rebuilt from the app's bundled ncnn model in
+1. Open `colab/train_thermal_sr_lite.ipynb` or `colab/train_thermal_sr_medium.ipynb` (the main
+   notebook with `MODEL = 'lite'` / `'medium'` set and the restore cell skippable, so **Run all**
+   goes through untouched) — from GitHub's `main`, so it is the current version. v4 is rebuilt from the app's bundled ncnn model in
    the clone (`scripts/ncnn_to_pth.py`, fp16-rounded: within 8e-4 of the v4 checkpoint), or
    taken from a `.pth` in `<root>/init/` when present, then pruned to the width with
    `truncate_pretrained.py --num-feat 32|48` — per layer the filters with the largest L1

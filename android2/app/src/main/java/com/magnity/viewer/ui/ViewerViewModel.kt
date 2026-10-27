@@ -1404,6 +1404,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     // debug overlay: which path drew the frame, and the mean per-pixel change since the
     // previous one (processing thread)
     private var renderPath = ""
+    /** CPU / GPU load for the debug overlay (sampled ≤ 1/s, processing thread only). */
+    private val systemLoad = SystemLoad()
     private var prevRaw: FloatArray? = null
     private var frameDiffC = 0f
 
@@ -1645,6 +1647,15 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             sb.append("\n").append(srLabel)
                 .append("\nnet %.1f · pre %.1f · post %.1f ms".format(srMs[1], srMs[0], srMs[2]))
         }
+        sb.append("\n").append(systemLoad.text())
+        // this app's GPU share, from its own GPU stage time × frame rate: there whatever the
+        // phone lets an app read (Vulkan SR: the net time; Anime4K: the upscale stage)
+        val gpuMs = when {
+            srFrame && ncnn?.vulkan == true -> srMs[1]
+            renderPath.startsWith("Anime4K") -> stageMs[ST_UP]
+            else -> null
+        }
+        gpuMs?.let { sb.append(" · app GPU ≈%.0f%%".format(minOf(100f, it * fps / 10f))) }
         srFrame = false
         // what the frame is made of: enough to tell a frozen or flat stream from a
         // display problem in a user's screenshot

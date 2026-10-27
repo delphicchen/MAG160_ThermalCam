@@ -13,8 +13,9 @@ SDK 原檔：`../Tiny-2C/SDK/Android/ANDROID_AC020_SDK_USB_IR_UVC_1.1.5_20241022
 **2026-10-26：輕量 32/10 已訓練完成並內建**（`app/src/main/assets/model-lite/`，2.8-alpha4 起），
 抽屜「超分模型大小」選「輕量」即可，Tiny2C 開完整版太慢時速度保護也會自動降到輕量。
 在 200 張未參與訓練的 CIDIS 熱像上：PSNR 比完整版低 0.45 dB、假熱點數相當、CPU 上約 21 vs 32 ms
-（細節見該資料夾 README）。**還沒做**：在 Tiny2C 實機量 Debug 的 `net` 時間與發熱；中量 48/10 尚未訓練
-（10-26 那次用到合併前的 notebook，練出來是 64 寬、跟 v4 一樣，沒採用）。
+（細節見該資料夾 README）。**2026-10-27：中量 48/10 也已內建**（`assets/model-medium/`，2.8 起）：
+PSNR 比完整版低 0.17 dB、CPU 約完整版的 0.68 倍，但假熱點約多 20%（10-26 第一次用到合併前的
+notebook，練出來是 64 寬，沒採用）。**還沒做**：在 Tiny2C 實機量 Debug 的 `net` 時間與發熱。
 
 以下為 10-24 時的紀錄：
 
@@ -25,7 +26,7 @@ SDK 原檔：`../Tiny-2C/SDK/Android/ANDROID_AC020_SDK_USB_IR_UVC_1.1.5_20241022
 - 現況：Tiny2C 開 Thermal SR 跑的是內建 64/10，測試者手機約 12–15 fps，速度保護會退回
   Anime4K（見下方待辦 A）。
 - 剩下步驟：`sr_train/README.md` 的「Lite 32/10 and medium 48/10」第 1–4 步（中量 48/10 同一套流程，
-  notebook 設 `MODEL = 'medium'`）。
+  notebook 設 `MODEL = 'medium'`）。→ 10-26 輕量、10-27 中量皆已完成並內建。
 - App 端（2.8，已完成）：抽屜「超分模型大小」完整 / 中量 / 輕量讓使用者選，未安裝的是灰色；
   匯入或下載的模型依寬度自動歸檔並切過去；速度保護先降一檔，最輕仍太慢才退回 Anime4K。
 
