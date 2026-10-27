@@ -41,10 +41,15 @@ import kotlin.math.roundToInt
  * and each advertised UVC format, and record what the bulk stream turns into — a
  * per-frame temperature stream there would make the 4117 a live camera like the others.
  *
+ * The vendor's HCUSBSDK V2.4.0.3 (Android) adds, from its `HCUsbSDK.h` and manual: coding
+ * types 1–11, the "FRMI" header such a stream starts with, and — from the command table in
+ * its `libHCUSBSDK.so` — 2025 manual correct (FFC, group 2 sub 4) and 2031 basic parameter
+ * (emissivity, group 3 sub 1). The SDK itself is not used.
+ *
  * Writes to the module: body-temperature compensation (2044/2045, which lifts skin by
- * ~3 °C) is off while connected and restored on [stop]; the stream test restores the
- * stream parameter, and keeps the original in prefs until it is back, so a crash mid-test
- * is undone on the next connect. Emissivity and FFC are not wired up in this build.
+ * ~3 °C) is off while connected and emissivity is the viewer's; both are restored on
+ * [stop]. The stream test restores the stream parameter, and keeps the original in prefs
+ * until it is back, so a crash mid-test is undone on the next connect.
  */
 class Hik4117Source(val device: UsbDevice) : ThermalSource {
 
@@ -70,10 +75,22 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         private const val MAX_DOUBLE_GET = 2 shl 20
         private const val DEFAULT_INTERVAL = 333_333   // 30 fps in 100 ns units
 
-        /** Stream test: byVideoCodingType values tried, and the time each format gets. */
-        private val CODING_TYPES = 0..8
+        /** Stream test: byVideoCodingType values tried, and the time each format gets.
+         *  HCUsbSDK.h: 1 raw · 2 full-screen temperature · 3 real-time raw · 4 heat map ·
+         *  5 thermal live · 6 YUV · 7 PS MJPEG · 8 temperature + YUV · 9 YUV + raw ·
+         *  10 YUV without header · 11 header + YUV + raw. */
+        private val CODING_TYPES = 1..11
         private const val SETTLE_MS = 400L
         private const val MEASURE_MS = 1500L
+
+        /** The stream header's magic, "FRMI": HCUsbSDK.h writes it 0x70827773 (the letters'
+         *  decimal ASCII), so both readings in both byte orders are looked for. */
+        private val FRMI_MAGICS = listOf(
+            byteArrayOf(0x46, 0x52, 0x4D, 0x49), byteArrayOf(0x49, 0x4D, 0x52, 0x46),
+            byteArrayOf(0x73, 0x77, 0x82.toByte(), 0x70), byteArrayOf(0x70, 0x82.toByte(), 0x77, 0x73),
+        )
+        /** sizeof(USB_THERMAL_STREAM_TEMP_S); the heat-map header (…_TEMP_HOT) is longer. */
+        private const val FRMI_TEMP_HEAD = 132
 
         private const val PREFS = "hik4117"
         private const val KEY_RESTORE_2038 = "restore_2038"
@@ -119,6 +136,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     private val tempLock = ReentrantLock()
     private var latestTemp: IntArray? = null
     private var compRestore: ByteArray? = null
+    private var epsRestore: ByteArray? = null
 
     private val report = StringBuilder()
 
@@ -236,6 +254,11 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             Log.i(TAG, "body-temperature compensation restored (err=$err)")
         }
         compRestore = null
+        epsRestore?.let { b ->
+            val err = runCatching { simpleSet(3, 1, b) }.getOrDefault(-1)
+            Log.i(TAG, "emissivity restored (err=$err)")
+        }
+        epsRestore = null
         running.set(false)
         reader?.join(1500); reader = null
     }
@@ -254,7 +277,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     override fun getTemperatureData(): IntArray? = tempLock.withLock { latestTemp }
 
     override fun diag(): String = buildString {
-        append("HIK $speed · video %.1f fps · %s · %d B".format(videoFps, lastFrameKind, lastFrameLen))
+        append("HIK $speed · video %.1f fps · %s · %d B"
+            .format(videoFps, lastFrameKind.substringBefore(" · "), lastFrameLen))
         append("\n2046 %.0f ms/frame · ok=%d err=%d".format(snapMs, frameCount, snapErrors))
         snapError?.let { append(" · ").append(it.take(60)) }
         append("\nbulk pl=$payloads bad=$badHeaders full=$fullReads err=$bulkErrors · ε(dev) $devEmissivity")
@@ -263,11 +287,38 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
 
     override fun sensorTemp(): Int? = null
 
-    /** Not in the diagnostic build: the module keeps its own ε (shown in [diag]). */
-    override fun setEmissivity(e: Float): Boolean = false
+    /**
+     * 2031 (group 3 sub 1): the 2030 basic parameter read back with dwEmissivity (byte 16)
+     * set to ε × 100, [0.01, 1.00]. The module's own value is put back on [stop].
+     */
+    override fun setEmissivity(e: Float): Boolean = runCatching {
+        val v = (e * 100f).roundToInt().coerceIn(1, 100)
+        val err = ep0.withLock {
+            val b = simpleGet(3, 1)
+            check(b.size >= 20) { "2030: ${b.size} B" }
+            if (epsRestore == null) epsRestore = b.copyOf().also { it[0] = 1 }
+            simpleSet(3, 1, b.copyOf().also { it[0] = 1; put32(it, 16, v) })
+        }
+        val now = runCatching { le32(simpleGet(3, 1), 16) }.getOrDefault(-1)
+        if (now > 0) devEmissivity = "%.2f".format(now / 100f)
+        say("2031 emissivity $v/100: err=$err, now $now")
+        err == 0
+    }.getOrElse { say("2031: ${it.message}"); false }
 
-    /** No shutter command known on the USB firmware; the module runs FFC on its own. */
-    override fun triggerFfc(): Boolean = false
+    /**
+     * 2025 manual correct (group 2 sub 4), the shutter FFC. The SDK sends it without a
+     * parameter: the payload here is the channel byte, padded to what GET_LEN asks for.
+     */
+    override fun triggerFfc(): Boolean = runCatching {
+        val (len, err) = ep0.withLock {
+            select(2, 4)
+            val len = xuLen(2)
+            val p = ByteArray(if (len in 1..CHUNK) len else 1).also { it[0] = 1 }
+            len to if (xuSet(2, p)) lastError() else -1
+        }
+        say("2025 FFC: GET_LEN $len, err=$err")
+        err == 0
+    }.getOrElse { say("2025 FFC: ${it.message}"); false }
 
     // ---- the experiment ---------------------------------------------------------------
 
@@ -629,44 +680,92 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         }
     }
 
-    /** JPEG, H.264, or raw with its 16-bit and (if plausible) float value ranges. */
+    /** JPEG, H.264, a "FRMI" thermal stream frame, or raw with its 16-bit and (if
+     *  plausible) float value ranges. */
     private fun classify(b: ByteArray, n: Int): String {
-        if (n >= 4 && b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte()) {
-            return if (b[n - 2] == 0xFF.toByte() && b[n - 1] == 0xD9.toByte()) "JPEG" else "JPEG(no EOI)"
-        }
+        val jpeg = n >= 4 && b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte()
+        if (jpeg && b[n - 2] == 0xFF.toByte() && b[n - 1] == 0xD9.toByte()) return "JPEG"
+        findFrmi(b, n).takeIf { it >= 0 }?.let { return frmi(b, n, it) }
+        if (jpeg) return "JPEG(no EOI)"
         if (n >= 4 && b[0].toInt() == 0 && b[1].toInt() == 0 &&
             (b[2].toInt() == 1 || (b[2].toInt() == 0 && b[3].toInt() == 1))) return "H264?"
-        val sb = StringBuilder("raw")
+        return "raw" + u16Range(b, 0, n) + f32Range(b, 0, n)
+    }
+
+    /** Where the magic starts, followed by a plausible head length (not a chance match in
+     *  image data); −1 if nowhere. */
+    private fun findFrmi(b: ByteArray, n: Int): Int {
+        for (i in 0..n - 8) {
+            for (m in FRMI_MAGICS) {
+                if (b[i] == m[0] && b[i + 1] == m[1] && b[i + 2] == m[2] && b[i + 3] == m[3] &&
+                    le32(b, i + 4) in 16..65536) return i
+            }
+        }
+        return -1
+    }
+
+    /**
+     * A thermal stream frame at [k] (HCUsbSDK.h): USB_THERMAL_STREAM_TEMP_S — magic, head
+     * length, type, data length, STREAM_RT_DATA_INFO_S, STREAM_FS_SUPPLE_INFO_TEMP — or the
+     * longer USB_THERMAL_STREAM_TEMP_HOT with a JPEG flag before the RT info and the JPEG's
+     * info after it. Then the temperature data's range: f32 (mode 0) or u16 (mode 1).
+     */
+    private fun frmi(b: ByteArray, n: Int, k: Int): String {
+        if (k + 16 > n) return "FRMI@$k (cut)"
+        val head = le32(b, k + 4)
+        val len = le32(b, k + 12)
+        val hot = head > FRMI_TEMP_HEAD
+        val sb = StringBuilder("FRMI@$k head $head type ${le32(b, k + 8)} data $len")
+        if (hot && k + 20 <= n) sb.append(" jpg ${le32(b, k + 16)}")
+        val rt = k + if (hot) 20 else 16
+        var mode = -1
+        if (rt + 64 <= n) {
+            sb.append(" · rt ${le32(b, rt)} ${le32(b, rt + 28)}×${le32(b, rt + 32)} len ${le32(b, rt + 36)}")
+            sb.append(" fps ${le32(b, rt + 40)} #${le32(b, rt + 4)}")
+            mode = le32(b, rt + 48)
+            sb.append(" · mode $mode scale ${le32(b, rt + 52)} off ${le32(b, rt + 56)} frz ${le32(b, rt + 60)}")
+        }
+        if (hot && k + 100 <= n) sb.append(" · jpeg ${le32(b, k + 88)}×${le32(b, k + 92)} ${le32(b, k + 96)} B")
+        val d = k + head
+        if (head < 16 || d >= n || len <= 0) return sb.append(" · ${hex(b.copyOfRange(k, minOf(n, k + 64)), 64)}").toString()
+        val dl = minOf(len, n - d)
+        sb.append(" ·").append(if (mode == 1) u16Range(b, d, dl) else u16Range(b, d, dl) + f32Range(b, d, dl))
+        return sb.toString()
+    }
+
+    private fun u16Range(b: ByteArray, off: Int, len: Int): String {
         var lo = 0xffff; var hi = 0
-        var i = 0
-        while (i + 1 < n) {
+        var i = off
+        while (i + 1 < off + len) {
             val v = (b[i].toInt() and 0xff) or ((b[i + 1].toInt() and 0xff) shl 8)
             if (v < lo) lo = v
             if (v > hi) hi = v
             i += 2
         }
-        sb.append(" u16 $lo..$hi")
-        if (n % 4 == 0) {
-            val bb = ByteBuffer.wrap(b, 0, n).order(ByteOrder.LITTLE_ENDIAN)
-            val count = n / 4
-            val step = maxOf(1, count / 20000)
-            var ok = 0; var seen = 0
-            var flo = Float.MAX_VALUE; var fhi = -Float.MAX_VALUE
-            var k = 0
-            while (k < count) {
-                val f = bb.getFloat(k * 4)
-                seen++
-                // °C-like: in range, and not the denormal crumbs 16-bit data reads as
-                if (f.isFinite() && f > -60f && f < 1000f && (f == 0f || abs(f) >= 1e-3f)) {
-                    ok++
-                    if (f < flo) flo = f
-                    if (f > fhi) fhi = f
-                }
-                k += step
+        return " u16 $lo..$hi"
+    }
+
+    /** " f32 lo..hi" when nearly every float of the data reads as a °C value, else "". */
+    private fun f32Range(b: ByteArray, off: Int, len: Int): String {
+        if (len < 4 || len % 4 != 0) return ""
+        val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN)
+        val count = len / 4
+        val step = maxOf(1, count / 20000)
+        var ok = 0; var seen = 0
+        var flo = Float.MAX_VALUE; var fhi = -Float.MAX_VALUE
+        var k = 0
+        while (k < count) {
+            val f = bb.getFloat(off + k * 4)
+            seen++
+            // °C-like: in range, and not the denormal crumbs 16-bit data reads as
+            if (f.isFinite() && f > -60f && f < 1000f && (f == 0f || abs(f) >= 1e-3f)) {
+                ok++
+                if (f < flo) flo = f
+                if (f > fhi) fhi = f
             }
-            if (ok * 100 >= seen * 99) sb.append(" f32 %.1f..%.1f".format(flo, fhi))
+            k += step
         }
-        return sb.toString()
+        return if (ok * 100 >= seen * 99) " f32 %.1f..%.1f".format(flo, fhi) else ""
     }
 
     // ---- descriptors ------------------------------------------------------------------
