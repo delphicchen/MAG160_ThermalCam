@@ -30,7 +30,7 @@ fusion whichever module it is.
 |---|---|---|
 | Magnity **MAG160 / MAG-Mx / MAG-Cx** | 160×120 | ✅ Supported (factory SDK) |
 | InfiRay **Tiny2C** (AC020) | 256×192 | ✅ Supported (vendor AC020 SDK) |
-| Hikvision **TB-4117-3/S** (USB) | 160×120 | 🧪 Diagnostic build (2.8 alpha) |
+| Hikvision **TB-4117-3/S** (USB) | 160×120 | 🧪 Diagnostic support (2.8) |
 
 ## 🤝 Help add more modules
 
@@ -102,6 +102,24 @@ SDK, and grew from there to other modules.
 
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
+
+### 2.8 — 2026-10-27
+- **Runs on Android 10 and later** (2.7 needed Android 13). HarmonyOS 2–4 may work (not
+  tested); HarmonyOS NEXT / 5 does not install APKs. Before Android 13 the app follows the
+  system language.
+- **Thermal SR model size: Full / Medium / Lite** in the menu — Medium and Lite are built in
+  and do a little over half / about a quarter of the network work per frame: a cooler phone
+  and longer battery for a slightly softer picture. When Thermal SR cannot keep up, the app
+  steps down one size at a time, then to Anime4K. **Load SR model (.zip)** files a model under
+  its size by itself.
+- **Minimum span (auto range)**, 1.0 °C by default, adjustable 0.2–3 °C in the menu with an
+  explanation: a nearly uniform scene no longer stretches sensor noise into blotches and false
+  texture. Recorded `.mgt` captures play back with the same range.
+- **Hikvision TB-4117-3/S (USB) — diagnostic support**: a temperature image from the module's
+  radiometric snapshot (a few frames per second) and a **Run stream test** report to send back.
+- MAG160 USB permission on Android 10–12 fixed; geo-tag on Android 10 no longer crashes when
+  location is toggled. The Debug overlay shows the app's CPU load and, where the phone exposes
+  it, the GPU load.
 
 ### 2.7 — 2026-10-23
 - **InfiRay Tiny2C support** (AC020 UVC, 256×192) next to the MAG160 in the same app, through
