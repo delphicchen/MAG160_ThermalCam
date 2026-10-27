@@ -45,9 +45,9 @@ Convolution's `0=`) and files it under that size, so the zip needs no special na
 with no model is greyed out, and a picked size that is missing falls back to the full model.
 The graph has no fixed shape, so a model exported at one frame size also runs on the others.
 
-Bundled: full (`assets/model/`) and, from 2.8-alpha4, lite (`assets/model-lite/`, one
-`thermal_160x120_fp16` pair for every camera — its README has the recipe and a comparison).
-Medium is not trained yet.
+Bundled: full (`assets/model/`), lite (`assets/model-lite/`, from 2.8-alpha4) and medium
+(`assets/model-medium/`, from 2.8) — one `thermal_160x120_fp16` pair per size for every
+camera; each README has the recipe and a comparison.
 
 ## Expected blob names
 

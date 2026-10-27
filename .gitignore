@@ -49,6 +49,7 @@ sr_train/checkpoints/
 # the bundled thermal SR models ship inside the APK
 !android2/app/src/main/assets/model/*.bin
 !android2/app/src/main/assets/model-lite/*.bin
+!android2/app/src/main/assets/model-medium/*.bin
 
 # built / vendor APKs — never commit (vendor apps are proprietary)
 *.apk
