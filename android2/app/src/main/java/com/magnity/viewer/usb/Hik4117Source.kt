@@ -46,6 +46,11 @@ import kotlin.math.roundToInt
  * its `libHCUSBSDK.so` — 2025 manual correct (FFC, group 2 sub 4) and 2031 basic parameter
  * (emissivity, group 3 sub 1). The SDK itself is not used.
  *
+ * Not every 4117 answers "2.0" to the version probe (issue #4: all zeros, yet the vendor
+ * app works). The SDK then switches to an older protocol, ProtocolStrategyUvc10, decoded
+ * from its disassembly: [legacyGet] / [legacyDoubleGet]. Reads and 2046 only; writes
+ * (compensation, ε, FFC, 2039) wait until a report shows the reads work.
+ *
  * Writes to the module: body-temperature compensation (2044/2045, which lifts skin by
  * ~3 °C) is off while connected and emissivity is the viewer's; both are restored on
  * [stop]. The stream test restores the stream parameter, and keeps the original in prefs
@@ -92,6 +97,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         /** sizeof(USB_THERMAL_STREAM_TEMP_S); the heat-map header (…_TEMP_HOT) is longer. */
         private const val FRMI_TEMP_HEAD = 132
 
+        private const val LEGACY_NO_WRITE = "legacy protocol: writes not decoded yet"
+
         private const val PREFS = "hik4117"
         private const val KEY_RESTORE_2038 = "restore_2038"
 
@@ -125,6 +132,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     private val formats = mutableListOf<UvcFormat>()
     private val xuUnits = mutableListOf<Int>()
     private var xuUnit = XU_UNIT
+    /** Older firmware without the "2.0" version string: see [versionProbe], [legacyGet]. */
+    @Volatile private var legacy = false
 
     private val running = AtomicBoolean(false)
     private val snapping = AtomicBoolean(false)
@@ -237,9 +246,9 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             else "video: no frame in 3 s (payloads=$payloads bad=$badHeaders err=$bulkErrors)")
 
         if (versionProbe()) {
-            restorePending2038()
+            if (!legacy) restorePending2038()
             readInfo()
-            compensationOff()
+            if (!legacy) compensationOff()        // legacy writes: format not decoded yet
         }
         snapping.set(true)
         snapper = thread(name = "hik4117-2046", isDaemon = true) { snapLoop() }
@@ -310,6 +319,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
      * parameter: the payload here is the channel byte, padded to what GET_LEN asks for.
      */
     override fun triggerFfc(): Boolean = runCatching {
+        check(!legacy) { LEGACY_NO_WRITE }
         val (len, err) = ep0.withLock {
             select(2, 4)
             val len = xuLen(2)
@@ -338,6 +348,17 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             ep0.withLock { }                      // a 2046 in flight finishes first
             say("— stream test")
             say("baseline: ${measure(2000)}")
+            if (legacy) {
+                say("legacy protocol: 2038/2039 not decoded yet — UVC formats only")
+                for (f in formats.filter { it.index != def.fmt }) {
+                    val pk = pickOf(f) ?: continue
+                    if (!running.get()) break
+                    val pr = commit(pk)
+                    Thread.sleep(SETTLE_MS)
+                    say("  ${pk.label}: ${probeText(pr)} → ${measure(MEASURE_MS)}")
+                }
+                return
+            }
             val o = simpleGet(3, 5)
             orig = o
             say("2038 stream param: ${hex(o)}")
@@ -416,13 +437,24 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
 
     // ---- start-up reads ---------------------------------------------------------------
 
-    /** GET_LEN + GET_CUR on selector 4 ("2.0"): unlocks the command channel. */
+    /**
+     * GET_LEN + GET_CUR on selector 4, the SDK's DetectDeviceVersion. "2.0" unlocks the
+     * selector-5 protocol (SDK ProtocolStrategyUvc20). Any other answer is older firmware:
+     * the SDK then sends {00 05} to selector 3 and speaks ProtocolStrategyUvc10 ([legacy]).
+     */
     private fun versionProbe(): Boolean {
+        legacy = false
         repeat(3) { attempt ->
             val (len, v) = ep0.withLock { xuLen(4) to xuGet(4, 4) }
             val ok = v != null && v.size >= 3 && v[0] == '2'.code.toByte() && v[1] == '.'.code.toByte()
             say("XU $xuUnit version probe: GET_LEN=$len → ${v?.let { "'${ascii(it)}' ${hex(it)}" } ?: "failed"}")
             if (ok) return true
+            if (v != null && v.size >= 4) {
+                val sent = ep0.withLock { xuSet(3, byteArrayOf(0, 5)) }
+                legacy = true
+                say("not \"2.0\" → legacy protocol (SDK Uvc10): sel3 {00 05} ${if (sent) "sent" else "FAILED"}")
+                return true
+            }
             if (attempt < 2) Thread.sleep(300)
         }
         say("FAIL command channel locked — no temperature without it")
@@ -441,8 +473,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             runCatching { simpleGet(g, s) }.fold(
                 onSuccess = { b ->
                     val text = strings(b)
-                    say("$name: ${b.size} B ${hex(b, 24)}" + if (text.isNotEmpty()) " | $text" else "")
-                    if (g == 3 && s == 1 && b.size >= 25) {
+                    say("$name: ${b.size} B ${hex(b, if (legacy) 40 else 24)}" + if (text.isNotEmpty()) " | $text" else "")
+                    if (!legacy && g == 3 && s == 1 && b.size >= 25) {
                         devEmissivity = "%.2f".format(le32(b, 16) / 100f)
                         say("  emissivity ${le32(b, 16)}/100 · distance ${le32(b, 21)}")
                     }
@@ -498,15 +530,27 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         req[0] = 1                                         // byChannelID (2 stalls the pipe)
         val year = Calendar.getInstance().get(Calendar.YEAR)
         req[8] = year.toByte(); req[9] = (year shr 8).toByte()
-        val b = doubleGet(3, 9, req)
-        check(b.size >= 27) { "2046: ${b.size} B" }
-        val jl = le32(b, 1); val w = le32(b, 5); val h = le32(b, 9); val tb = le32(b, 13)
+        val b = if (legacy) legacyDoubleGet(3, 9) else doubleGet(3, 9, req)
+        // the layout as on "2.0" firmware ({01, jpegLen, w, h, bytes, 10 reserved, JPEG,
+        // f32 °C}); on legacy firmware where it starts is unknown, so find w, h, bytes
+        val base = if (!legacy) 0 else findSizes(b)?.minus(5)
+            ?: error("legacy 2046: ${b.size} B, no 120×160 sizes · ${hex(b, 32)}")
+        check(base >= 0 && b.size >= base + 27) { "2046: ${b.size} B" }
+        val jl = le32(b, base + 1); val w = le32(b, base + 5); val h = le32(b, base + 9)
+        val tb = le32(b, base + 13)
         check(w == W && h == H && tb == w * h * 4) { "2046: ${w}x$h, $tb B of temperature" }
-        val o = 27 + jl
+        if (legacy && frameCount == 0L) say("legacy 2046: $base B before the head · ${hex(b, 32)}")
+        val o = base + 27 + jl
         check(jl >= 0 && b.size >= o + tb) { "2046 truncated: ${b.size} < ${o + tb}" }
         val bb = ByteBuffer.wrap(b, o, tb).order(ByteOrder.LITTLE_ENDIAN)
         return IntArray(W * H) { (bb.float * 1000f).roundToInt() }
     }
+
+    /** Offset of LE u32 {W, H, W·H·4} in the first 64 bytes, or null. */
+    private fun findSizes(b: ByteArray): Int? =
+        (0..minOf(64, b.size - 12)).firstOrNull {
+            le32(b, it) == W && le32(b, it + 4) == H && le32(b, it + 8) == W * H * 4
+        }
 
     // ---- XU transactions --------------------------------------------------------------
 
@@ -542,6 +586,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         check(xuSet(5, byteArrayOf(group.toByte(), sub.toByte()))) { "select $group/$sub failed" }
 
     private fun simpleGet(group: Int, sub: Int): ByteArray = ep0.withLock {
+        if (legacy) return legacyGet(group, sub)
         select(group, sub)
         val len = xuLen(group)
         check(len in 1..CHUNK) { "GET_LEN $len (err ${lastError()})" }
@@ -551,6 +596,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     /** SET with a payload whose byte 0 is the channel (1); returns selector 6 (0 = OK),
      *  or −1 when the transfer itself failed. */
     private fun simpleSet(group: Int, sub: Int, payload: ByteArray): Int = ep0.withLock {
+        check(!legacy) { LEGACY_NO_WRITE }
         select(group, sub)
         if (!xuSet(group, payload)) -1 else lastError()
     }
@@ -575,6 +621,52 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             val off = if (n > 5 && chunk[0].toInt() == 2) 5 else 0
             val m = minOf(n - off, total - have)
             System.arraycopy(chunk, off, out, have, m)
+            have += m
+        }
+        out
+    }
+
+    // Legacy firmware (SDK ProtocolStrategyUvc10, from libHCUSBSDK 2.4.0.3 disassembly;
+    // untested on hardware). No selector 5, no GET_LEN: each read is an OUT on the group's
+    // selector carrying {group, sub, 0, channel}, then an IN on the same selector — both
+    // with the request code of the phase (0x81, or 0x85 for a DoubleGet's length), the
+    // OUT one included. Each IN starts with a 3-byte head.
+
+    /** The 4-byte command the SDK sends ahead of every legacy IN. */
+    private fun legacyCmd(group: Int, sub: Int, req: Int): Boolean =
+        ctl(REQ_OUT, req, group shl 8, xuIndex,
+            byteArrayOf(group.toByte(), sub.toByte(), 0, 1)) >= 0
+
+    /** Raw answer, 3-byte head included (its meaning is one of the things to learn). */
+    private fun legacyGet(group: Int, sub: Int): ByteArray = ep0.withLock {
+        check(legacyCmd(group, sub, GET_CUR)) { "legacy cmd $group/$sub failed" }
+        val b = ByteArray(CHUNK)
+        val n = ctl(REQ_IN, GET_CUR, group shl 8, xuIndex, b, CHUNK)
+        check(n > 0) { "legacy GET $group/$sub: $n" }
+        b.copyOf(n)
+    }
+
+    /** Phase A (0x85): 3-byte head + u32 total. Phase B (0x81): command + IN per chunk,
+     *  each 3-byte head + ≤509 B, until total − 3 bytes. Returns the joined data. */
+    private fun legacyDoubleGet(group: Int, sub: Int): ByteArray = ep0.withLock {
+        check(legacyCmd(group, sub, GET_LEN)) { "legacy length cmd failed" }
+        val head = ByteArray(7)
+        val hn = ctl(REQ_IN, GET_LEN, group shl 8, xuIndex, head, 7)
+        check(hn >= 7) { "legacy head $hn B ${hex(head.copyOf(maxOf(hn, 0)))}" }
+        val total = le32(head, 3)
+        check(total in 4..MAX_DOUBLE_GET) { "legacy length $total, head ${hex(head)}" }
+        if (frameCount == 0L) say("legacy 2046 head ${hex(head)} → $total B")
+        val out = ByteArray(total - 3)
+        val chunk = ByteArray(CHUNK)
+        var have = 0
+        while (have < out.size) {
+            check(legacyCmd(group, sub, GET_CUR)) { "legacy chunk cmd failed at $have" }
+            val want = minOf(CHUNK, out.size - have + 3)
+            val n = ctl(REQ_IN, GET_CUR, group shl 8, xuIndex, chunk, want)
+            check(n > 3) { "legacy truncated at $have/${out.size} (n=$n)" }
+            if (have == 0 && frameCount == 0L) say("legacy 2046 chunk head ${hex(chunk, 8)}")
+            val m = minOf(n - 3, out.size - have)
+            System.arraycopy(chunk, 3, out, have, m)
             have += m
         }
         out

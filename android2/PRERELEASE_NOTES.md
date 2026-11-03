@@ -1,10 +1,25 @@
-# MagViewer 2.9-alpha1 (HIK 4117: FFC, emissivity, all 11 stream modes)
+# MagViewer 2.9-alpha2 (HIK 4117: older firmware without the “2.0” version)
 **Alpha — a diagnostic build for testing, not a stable release.** Built by GitHub Actions
 from the `ccr-1a3608d0-s97tvm` branch.
 
 **This APK is “MagViewer β”** (`com.magnity.viewer.beta`, signed by the build server): it
 installs **next to** MagViewer 2.8, not over it, with its own settings. If a β you built
-yourself is installed, uninstall that first. It installs over 2.8-alpha1 … alpha4.
+yourself is installed, uninstall that first. It installs over 2.8-alpha1 … 2.9-alpha1.
+
+## New in 2.9-alpha2 — Hikvision TB-4117 (issue #4)
+Some 4117 modules answer the version probe with zeros instead of “2.0”: 2.9-alpha1 then
+reported “command channel locked” and showed no temperature, while Hikvision's own app
+worked. Hikvision's SDK (in the APK attached to issue #4) switches such modules to an older
+command protocol. 2.9-alpha2 does the same — decoded from the SDK, not yet tried on a module:
+- the report says `legacy protocol (SDK Uvc10)` after the version probe;
+- device info, algorithm version and the other read-only queries use the older protocol,
+  their raw answers go into the report;
+- the temperature frame (2046) is read with the older protocol;
+- FFC, emissivity, body-temperature compensation and the 11 stream modes are **off** on
+  such modules for now (writing needs a format we have not seen yet); the stream test only
+  measures the UVC formats.
+
+Modules that answer “2.0” work as in 2.9-alpha1.
 
 ## New in 2.9-alpha1 — Hikvision TB-4117
 From Hikvision's own USB SDK (HCUSBSDK V2.4.0.3 for Android — its header, manual and

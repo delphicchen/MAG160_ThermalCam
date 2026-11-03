@@ -75,6 +75,25 @@ B 可行的話：160×120 與 MAG160 同尺寸，內建 SR 模型直接可用（
 3. 按 Debug 截圖一張；按一次 FFC；抽屜裡把發射率調到 0.90 再調回 1.00。
 4. 開抽屜 →「執行串流測試」→ 等約 1 分鐘 →「複製報告」傳回來。
 
+## 第 1c 步 — 2.9-alpha2（issue #4：舊韌體，版本探測回全 0）
+
+issue #4 的 TB-4117-3/S：sel4 回 `00 00 00 00`、所有 GET_LEN 為 0，但原廠 App 正常。
+拆它附的 APK（`com.example.hikmicroviewerr`，內含同一份 libHCUSBSDK 2.4.0.3）：
+`CUsbDeviceThermalV2::Open` → `DetectDeviceVersion`，"2.0" → `ProtocolStrategyUvc20`
+（hik-tb4117 文件描述、我們原本實作的那套）；**不符 → 對 sel3 SET_CUR `{00 05}`，改用
+`ProtocolStrategyUvc10`**。Uvc10 由反組譯得出（未上機）：
+
+- 無 sel5 選命令、無 GET_LEN。wValue = 組號 << 8、wIndex = 0x0a00。
+- 簡單 GET：OUT（bmRequestType 0x21，**bRequest 0x81**）資料 `{組, sub, 0, 通道=1}`
+  → IN（0xA1/0x81）≤512 B，前 3 byte 是頭。
+- 2046：A 段 OUT 0x21/**0x85** `{03 09 00 01}` → IN 0xA1/0x85 7 B（3 byte 頭 + u32 總長 N）；
+  B 段每片先重送 OUT 0x21/0x81 同命令，再 IN ≤512 B（3 byte 頭 + ≤509 B），收到 N − 3。
+  請求結構（時間戳）不送，只有通道位元組。資料內 {w,h,bytes} 的位置未知 → 用搜尋定位。
+- 寫入（Uvc10 WriteDataStrategy）未解，legacy 模式下補償 / ε / FFC / 2039 全關。
+
+報告要看：`legacy protocol` 行、各查詢的原始 hex、`legacy 2046 head` / `chunk head`、
+第一幀溫度範圍或錯誤訊息。
+
 ## 下一步（看報告決定）
 
 - 某個 coding 值出現 `FRMI` 頭、溫度範圍合理、fps 接近 25 → 做方案 B（解析該格式；mode 8 最理想：溫度 + YUV）。
