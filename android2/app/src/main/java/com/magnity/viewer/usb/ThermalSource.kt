@@ -41,6 +41,13 @@ interface ThermalSource {
     fun setEmissivity(e: Float): Boolean
     fun triggerFfc(): Boolean
 
+    /** Pictures of the camera's own video so far, while it has no temperatures for us
+     *  (0 = temperatures, or no such fallback): the viewer then shows [videoFrame]. */
+    val videoSeq: Long get() = 0L
+    /** The camera's own, already coloured picture (HIK 4117 without its command channel):
+     *  shown without readouts while [getTemperatureData] stays null. */
+    fun videoFrame(): android.graphics.Bitmap? = null
+
     /** Camera-specific lines for the debug overlay (what the SDK delivers), if any. */
     fun diag(): String? = null
 }

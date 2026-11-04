@@ -83,6 +83,9 @@ data class FrameResult(
     /** AF regions the HAL reports using, in the same coordinates as [afBox]
      *  (diagnostics). Null = not reported, fusion off or the crosshair is off. */
     val afHalBoxes: List<android.graphics.RectF>? = null,
+    /** The camera's own picture ([ThermalSource.videoFrame]): no temperatures — [temps]
+     *  is empty, min/max are NaN, readouts, markers and the colour bar stay off. */
+    val videoOnly: Boolean = false,
 )
 
 /**
@@ -1185,6 +1188,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             var lastSeen = 0L
             var lastSeenAt = startedAt
             var lastProcessed = -1L
+            var lastVideo = 0L
             var learnChecked = false
             rangeSnap = true
             while (isActive && connected) {
@@ -1203,6 +1207,21 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 if (fc != lastSeen) { lastSeen = fc; lastSeenAt = now }
                 if (fc > 0L && !learnChecked) { learnChecked = true; learnTiny2c() }
 
+                // no temperatures from this camera: show its own picture instead
+                val vs = sdk.videoSeq
+                if (fc == 0L && vs > 0L) {
+                    if (vs == lastVideo) { delay(4); continue }
+                    lastVideo = vs
+                    val t0 = System.nanoTime()
+                    val bmp = sdk.videoFrame()
+                    if (bmp == null) { delay(20); continue }
+                    lastFrame = videoResult(bmp)
+                    tickFps()
+                    status = frameStatus(vs, t0) + " · video only"
+                    if (debugOsd) debugInfo = debugText()
+                    (sdk as? Hik4117Source)?.let { sdkLog = it.report() }
+                    continue
+                }
                 // process each SDK frame once, as soon as it lands (no fixed period)
                 if (fc == lastProcessed) { delay(4); continue }
                 val temp = sdk.getTemperatureData()
@@ -1332,6 +1351,21 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             afBox = afWindow,
             afHalBoxes = afHal,
         )
+    }
+
+    /** [ThermalSource.videoFrame] turned the way the thermal grid would be (rotation, then
+     *  mirror, as [orient]); the grid size stays the camera's, for taps and the layout. */
+    private fun videoResult(src: android.graphics.Bitmap): FrameResult {
+        val m = android.graphics.Matrix()
+        if (rotation != 0) m.postRotate(rotation.toFloat())
+        if (mirror) m.postScale(-1f, 1f)
+        val bmp = if (m.isIdentity) src
+                  else android.graphics.Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
+        val (ow, oh) = if (rotation % 180 == 0) sdk.width to sdk.height else sdk.height to sdk.width
+        return FrameResult(bitmap = bmp, w = ow, h = oh, tempMin = Float.NaN, tempMax = Float.NaN,
+                           minPos = 0, maxPos = 0, fpa = null, scaleLoC = Float.NaN,
+                           scaleHiC = Float.NaN, emissivity = emissivity, temps = FloatArray(0),
+                           videoOnly = true)
     }
 
     /**
@@ -1718,7 +1752,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Companion .mgt for a snapshot, when the option is on: the field behind the PNG. */
     private fun thermalSuffix(fr: FrameResult): String {
-        if (!saveThermalData) return ""
+        if (!saveThermalData || fr.videoOnly) return ""
         val name = ThermalStream.writeSingle(getApplication(), fr.temps, fr.w, fr.h,
                                              fr.emissivity)
         return if (name != null) " + $name" else " " + str(R.string.n_temp_file_failed)
@@ -1785,7 +1819,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             if (w != r.width || h != r.height) return     // rotated mid-recording: skip
             try {
                 r.addFrame(composite(fr))
-                thermalWriter?.takeIf { it.width == fr.w && it.height == fr.h }
+                thermalWriter?.takeIf { !fr.videoOnly && it.width == fr.w && it.height == fr.h }
                     ?.addFrame(fr.temps)
                 return
             } catch (e: Throwable) {

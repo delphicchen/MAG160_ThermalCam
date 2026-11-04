@@ -1,10 +1,22 @@
-# MagViewer 2.9-alpha3 (contrast gamma; HIK 4117 older firmware)
+# MagViewer 2.9-alpha4 (HIK 4117 older firmware: picture, second try at temperatures)
 **Alpha — a diagnostic build for testing, not a stable release.** Built by GitHub Actions
 from the `ccr-1a3608d0-s97tvm` branch.
 
 **This APK is “MagViewer β”** (`com.magnity.viewer.beta`, signed by the build server): it
 installs **next to** MagViewer 2.8, not over it, with its own settings. If a β you built
-yourself is installed, uninstall that first. It installs over 2.8-alpha1 … 2.9-alpha2.
+yourself is installed, uninstall that first. It installs over 2.8-alpha1 … 2.9-alpha3.
+
+## New in 2.9-alpha4 — Hikvision TB-4117 older firmware (issue #4)
+In 2.9-alpha2 the module answered every older-protocol query with the query itself, so
+there was no temperature and no picture.
+- **A picture now**: when the 4117 gives no temperatures, MagViewer shows the module's own
+  video (about 25 fps), without readouts, markers or colour bar. The palette, gamma, DDE and
+  SR settings do not apply to it.
+- **Second try at temperatures**: Hikvision's SDK puts the bytes of the query in a different
+  order than alpha2 did ({group, 0, sub, channel}). The 4117 is now asked in that order and
+  in four variants (without the channel byte, with a pause, reading twice, alpha2's order
+  with a pause); the report lists each answer (`legacy try …`) and the first that is not an
+  echo is used from then on.
 
 ## New in 2.9-alpha3 — contrast (gamma), all cameras
 - ☰ → **Contrast (gamma)**, under Minimum span: bends the palette without changing the
@@ -46,7 +58,8 @@ The MAG160 and Tiny2C work as in 2.8.
 
 ## For testers
 1. Install, plug in the 4117, allow **Camera** and then **USB** access. The temperature
-   image appears (about 1 frame per second).
+   image appears (about 1 frame per second) — or, on the older firmware of issue #4, the
+   module's own video, until a temperature read works.
 2. Tap **Debug** and take a screenshot.
 3. Tap **FFC** once (the module's shutter should click). Open ☰ and set **Emissivity ε** to
    0.90, then back to 1.00.
@@ -54,7 +67,7 @@ The MAG160 and Tiny2C work as in 2.8.
 
 ## 测试步骤（简体中文）
 1. 需要 Android 10 或以上。安装后插上 4117，先允许“相机”权限，再允许 USB 访问。
-   应出现温度画面（约每秒 1 帧）。
+   应出现温度画面（约每秒 1 帧）；issue #4 那种旧固件则先显示模组自己的画面（没有温度）。
 2. 点 **Debug**，截一张全屏图。
 3. 点一次 **FFC**（模组快门应会“咔”一声）。打开 ☰ 菜单，把 **发射率 ε** 调到 0.90，再调回 1.00。
 4. ☰ →“运行串流测试”→ 等约 1 分钟 →“复制报告”，把文字发回来。

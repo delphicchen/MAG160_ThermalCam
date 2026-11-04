@@ -103,8 +103,8 @@ object FrameComposer {
             c.drawCircle(x, y, 10f, ring)
             label(x, y, color, v)
         }
-        if (showMax) marker(fr.maxPos, Color.rgb(0xF8, 0x51, 0x49), fr.tempMax)
-        if (showMin) marker(fr.minPos, Color.rgb(0x3F, 0xB9, 0x50), fr.tempMin)
+        if (showMax && !fr.videoOnly) marker(fr.maxPos, Color.rgb(0xF8, 0x51, 0x49), fr.tempMax)
+        if (showMin && !fr.videoOnly) marker(fr.minPos, Color.rgb(0x3F, 0xB9, 0x50), fr.tempMin)
         spot?.let { (sx, sy) ->
             val x = px(sx); val y = py(sy)
             ring.color = Color.WHITE
@@ -123,6 +123,12 @@ object FrameComposer {
 
         // colour bar, centred in whatever strip is left after alignment padding
         val barTop = ih + (oh - ih - 56f) / 2f
+        if (fr.videoOnly) {                      // the camera's own picture: no scale
+            text.color = Color.WHITE
+            val note = "camera video · no temperature"
+            c.drawText(note, (ow - text.measureText(note)) / 2f, barTop + 42f, text)
+            return out
+        }
         val lutBmp = Bitmap.createBitmap(lut, 256, 1, Bitmap.Config.ARGB_8888)
         c.drawBitmap(lutBmp, null, RectF(8f, barTop, ow - 8f, barTop + 16f), filter)
         text.color = Color.WHITE

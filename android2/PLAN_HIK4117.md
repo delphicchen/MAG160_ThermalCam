@@ -94,6 +94,19 @@ issue #4 的 TB-4117-3/S：sel4 回 `00 00 00 00`、所有 GET_LEN 為 0，但�
 報告要看：`legacy protocol` 行、各查詢的原始 hex、`legacy 2046 head` / `chunk head`、
 第一幀溫度範圍或錯誤訊息。
 
+## 第 1d 步 — 2.9-alpha4（issue #4 第二份報告）
+
+alpha2 報告：sel3 `{00 05}` 送出成功，但每個查詢都回我們送的 4 byte + 0（回音），2046 長度讀成 1。
+再看 SDK：命令組包（`CUsbControlTransfer::Excute()+0x650`）寫的是 `{組, 旗標, sub}`
+（旗標 0 = 讀、0x88 = 寫，2030 的 Excute 看得到），有通道的命令再加通道位元組；
+Uvc10 的 OUT 就把這段原樣送出、IN 用同一個 bRequest。alpha2 送的是 `{組, sub, 0, 1}`，順序反了。
+
+- 連線時用 2011 試五種：SDK 順序（含 / 不含通道）、+20 ms、讀兩次、alpha2 順序 +50 ms；
+  每種寫一行 `legacy try …`，第一個不是回音的就沿用（全回音則用 SDK 順序）。
+- 沒有溫度（通道鎖住，或 2046 連 3 次失敗且一張都沒成功）→ 顯示相機自己的 MJPEG
+  （`ThermalSource.videoSeq` / `videoFrame`；`FrameResult.videoOnly`：無讀數、標記、色條，
+  不存 .mgt）。
+
 ## 下一步（看報告決定）
 
 - 某個 coding 值出現 `FRMI` 頭、溫度範圍合理、fps 接近 25 → 做方案 B（解析該格式；mode 8 最理想：溫度 + YUV）。

@@ -129,7 +129,11 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                         }
                     }
                     Spacer(Modifier.height(6.dp))
-                    ColorBar(vm.paletteName, vm.displayGamma, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
+                    if (fr.videoOnly) {
+                        Text(stringResource(R.string.video_only), color = DIM, fontSize = 11.sp)
+                    } else {
+                        ColorBar(vm.paletteName, vm.displayGamma, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
+                    }
                 }
             } else {
                 UsbDevicePanel(vm)
@@ -139,8 +143,9 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
         // readouts; each one is also its marker's on/off switch
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth()) {
-            Readout("MIN", fr?.tempMin, COLD, vm.showMinRoi) { vm.showMinRoi = !vm.showMinRoi }
-            Readout("MAX", fr?.tempMax, HOT, vm.showMaxRoi) { vm.showMaxRoi = !vm.showMaxRoi }
+            val measured = fr?.takeUnless { it.videoOnly }
+            Readout("MIN", measured?.tempMin, COLD, vm.showMinRoi) { vm.showMinRoi = !vm.showMinRoi }
+            Readout("MAX", measured?.tempMax, HOT, vm.showMaxRoi) { vm.showMaxRoi = !vm.showMaxRoi }
             Readout("CTR", vm.centerCelsius(fr), ACCENT, vm.showCenter) { vm.showCenter = !vm.showCenter }
             Readout("SPOT", vm.spotCelsius(), Color.White, vm.spot != null) { vm.spot = null }
             Spacer(Modifier.weight(1f))
@@ -333,8 +338,8 @@ private fun ThermalImage(
             drawCircle(color, 18f, c, style = Stroke(4f, cap = StrokeCap.Round))
             label(c, color, v)
         }
-        if (vm.showMaxRoi) marker(fr.maxPos, HOT, fr.tempMax)
-        if (vm.showMinRoi) marker(fr.minPos, COLD, fr.tempMin)
+        if (vm.showMaxRoi && !fr.videoOnly) marker(fr.maxPos, HOT, fr.tempMax)
+        if (vm.showMinRoi && !fr.videoOnly) marker(fr.minPos, COLD, fr.tempMin)
         if (vm.showCenter) vm.centerCelsius(fr)?.let { v ->
             // gapped crosshair on the grid's geometric centre — the measured pixels stay visible
             val c = Offset(left + fr.w * cellW / 2f, top + fr.h * cellH / 2f)

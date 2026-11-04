@@ -49,7 +49,12 @@ import kotlin.math.roundToInt
  * Not every 4117 answers "2.0" to the version probe (issue #4: all zeros, yet the vendor
  * app works). The SDK then switches to an older protocol, ProtocolStrategyUvc10, decoded
  * from its disassembly: [legacyGet] / [legacyDoubleGet]. Reads and 2046 only; writes
- * (compensation, ε, FFC, 2039) wait until a report shows the reads work.
+ * (compensation, ε, FFC, 2039) wait until a report shows the reads work. 2.9-alpha2's
+ * reads came back as an echo of the command; [legacyProbe] now tries the SDK's byte order
+ * and a few timings, and keeps the first the module answers.
+ *
+ * Without temperatures (channel locked, or 2046 keeps failing) the module's own MJPEG is
+ * handed to the viewer as [videoFrame], so there is a picture, without readouts.
  *
  * Writes to the module: body-temperature compensation (2044/2045, which lifts skin by
  * ~3 °C) is off while connected and emissivity is the viewer's; both are restored on
@@ -99,6 +104,21 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
 
         private const val LEGACY_NO_WRITE = "legacy protocol: writes not decoded yet"
 
+        /** Legacy reads: how the OUT command is framed and timed ([legacyProbe]). The
+         *  SDK's builder writes {group, flags (0 = read, 0x88 = write), sub} and, for
+         *  commands with a channel, the channel byte; alpha2 sent {group, sub, 0, 1}. */
+        private class LegacyWay(val label: String, val sdkOrder: Boolean, val channel: Boolean,
+                                val gapMs: Long, val twice: Boolean)
+        private val LEGACY_WAYS = listOf(
+            LegacyWay("SDK {g 0 s ch}", true, true, 0, false),
+            LegacyWay("SDK {g 0 s}", true, false, 0, false),
+            LegacyWay("SDK {g 0 s ch} +20 ms", true, true, 20, false),
+            LegacyWay("SDK {g 0 s ch} read twice", true, true, 0, true),
+            LegacyWay("alpha2 {g s 0 ch} +50 ms", false, true, 50, false),
+        )
+        /** 2046 failures before the module's own video stands in for temperatures. */
+        private const val VIDEO_ONLY_AFTER = 3
+
         private const val PREFS = "hik4117"
         private const val KEY_RESTORE_2038 = "restore_2038"
 
@@ -134,6 +154,11 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     private var xuUnit = XU_UNIT
     /** Older firmware without the "2.0" version string: see [versionProbe], [legacyGet]. */
     @Volatile private var legacy = false
+    @Volatile private var way = LEGACY_WAYS[0]
+    /** No temperatures from this module: [videoSeq] / [videoFrame] stand in. */
+    @Volatile private var tempsDead = false
+    @Volatile private var lastJpeg: ByteArray? = null
+    @Volatile private var jpegSeq = 0L
 
     private val running = AtomicBoolean(false)
     private val snapping = AtomicBoolean(false)
@@ -197,6 +222,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         payloads = 0; bytesIn = 0; badHeaders = 0; fullReads = 0; bulkErrors = 0
         videoFrames = 0; lastFrameLen = 0; lastFrameKind = "—"; videoFps = 0f
         frameCount = 0; snapErrors = 0; snapError = null; snapMs = 0f
+        tempsDead = false; lastJpeg = null; jpegSeq = 0; way = LEGACY_WAYS[0]
 
         say("HIK 4117 diagnostic · ${ThermalSources.idText(device)} · " +
             listOfNotNull(runCatching { device.manufacturerName }.getOrNull(),
@@ -246,9 +272,12 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             else "video: no frame in 3 s (payloads=$payloads bad=$badHeaders err=$bulkErrors)")
 
         if (versionProbe()) {
-            if (!legacy) restorePending2038()
+            if (!legacy) restorePending2038() else legacyProbe()
             readInfo()
             if (!legacy) compensationOff()        // legacy writes: format not decoded yet
+        } else {
+            tempsDead = true
+            say("showing the module's own video (no temperature)")
         }
         snapping.set(true)
         snapper = thread(name = "hik4117-2046", isDaemon = true) { snapLoop() }
@@ -284,6 +313,11 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     }
 
     override fun getTemperatureData(): IntArray? = tempLock.withLock { latestTemp }
+
+    override val videoSeq: Long get() = if (tempsDead && frameCount == 0L) jpegSeq else 0L
+
+    override fun videoFrame(): android.graphics.Bitmap? =
+        lastJpeg?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
 
     override fun diag(): String = buildString {
         append("HIK $speed · video %.1f fps · %s · %d B"
@@ -518,6 +552,10 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
                 snapErrors++
                 snapError = t.message
                 if (snapErrors <= 3) say("2046 failed: ${t.message}")
+                if (frameCount == 0L && snapErrors == VIDEO_ONLY_AFTER.toLong() && !tempsDead) {
+                    tempsDead = true
+                    say("showing the module's own video (no temperature)")
+                }
                 fails++
                 Thread.sleep(if (fails > 3) 1000L else 200L)
             }
@@ -632,18 +670,61 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     // with the request code of the phase (0x81, or 0x85 for a DoubleGet's length), the
     // OUT one included. Each IN starts with a 3-byte head.
 
-    /** The 4-byte command the SDK sends ahead of every legacy IN. */
-    private fun legacyCmd(group: Int, sub: Int, req: Int): Boolean =
-        ctl(REQ_OUT, req, group shl 8, xuIndex,
-            byteArrayOf(group.toByte(), sub.toByte(), 0, 1)) >= 0
+    /** The command the SDK sends ahead of every legacy IN, framed as [way] says. */
+    private fun legacyCmdBytes(group: Int, sub: Int): ByteArray {
+        val w = way
+        val head = if (w.sdkOrder) byteArrayOf(group.toByte(), 0, sub.toByte())
+                   else byteArrayOf(group.toByte(), sub.toByte(), 0)
+        return if (w.channel) head + 1.toByte() else head
+    }
+
+    private fun legacyCmd(group: Int, sub: Int, req: Int): Boolean {
+        val ok = ctl(REQ_OUT, req, group shl 8, xuIndex, legacyCmdBytes(group, sub)) >= 0
+        if (way.gapMs > 0) Thread.sleep(way.gapMs)
+        return ok
+    }
+
+    /** One IN on the group's selector ([way].twice: a second one, which is kept). */
+    private fun legacyIn(group: Int, req: Int, b: ByteArray, len: Int): Int {
+        var n = ctl(REQ_IN, req, group shl 8, xuIndex, b, len)
+        if (way.twice && n > 0) n = ctl(REQ_IN, req, group shl 8, xuIndex, b, len)
+        return n
+    }
 
     /** Raw answer, 3-byte head included (its meaning is one of the things to learn). */
     private fun legacyGet(group: Int, sub: Int): ByteArray = ep0.withLock {
         check(legacyCmd(group, sub, GET_CUR)) { "legacy cmd $group/$sub failed" }
         val b = ByteArray(CHUNK)
-        val n = ctl(REQ_IN, GET_CUR, group shl 8, xuIndex, b, CHUNK)
+        val n = legacyIn(group, GET_CUR, b, CHUNK)
         check(n > 0) { "legacy GET $group/$sub: $n" }
         b.copyOf(n)
+    }
+
+    /** The answer is our own command back, zero-padded: the module did not run it. */
+    private fun isEcho(b: ByteArray, sent: ByteArray): Boolean =
+        b.size >= sent.size && sent.indices.all { b[it] == sent[it] } &&
+            (sent.size until b.size).all { b[it].toInt() == 0 }
+
+    /**
+     * 2.9-alpha2's legacy reads came back as an echo of the command. Try 2011 (device
+     * info) in each [LEGACY_WAYS] framing, report each answer, keep the first that is not
+     * an echo (or the SDK's own framing if all are).
+     */
+    private fun legacyProbe() {
+        var pick: LegacyWay? = null
+        for (w in LEGACY_WAYS) {
+            way = w
+            val sent = legacyCmdBytes(1, 1)
+            runCatching { legacyGet(1, 1) }.fold(
+                onSuccess = { b ->
+                    val echo = isEcho(b, sent)
+                    say("legacy try ${w.label}: ${b.size} B ${hex(b, 24)}${if (echo) " · echo" else ""}")
+                    if (!echo && pick == null) pick = w
+                },
+                onFailure = { say("legacy try ${w.label}: ${it.message}") })
+        }
+        way = pick ?: LEGACY_WAYS[0]
+        say(if (pick != null) "legacy framing: ${way.label}" else "legacy: every framing echoed — using ${way.label}")
     }
 
     /** Phase A (0x85): 3-byte head + u32 total. Phase B (0x81): command + IN per chunk,
@@ -651,7 +732,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     private fun legacyDoubleGet(group: Int, sub: Int): ByteArray = ep0.withLock {
         check(legacyCmd(group, sub, GET_LEN)) { "legacy length cmd failed" }
         val head = ByteArray(7)
-        val hn = ctl(REQ_IN, GET_LEN, group shl 8, xuIndex, head, 7)
+        val hn = legacyIn(group, GET_LEN, head, 7)
         check(hn >= 7) { "legacy head $hn B ${hex(head.copyOf(maxOf(hn, 0)))}" }
         val total = le32(head, 3)
         check(total in 4..MAX_DOUBLE_GET) { "legacy length $total, head ${hex(head)}" }
@@ -662,7 +743,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         while (have < out.size) {
             check(legacyCmd(group, sub, GET_CUR)) { "legacy chunk cmd failed at $have" }
             val want = minOf(CHUNK, out.size - have + 3)
-            val n = ctl(REQ_IN, GET_CUR, group shl 8, xuIndex, chunk, want)
+            val n = legacyIn(group, GET_CUR, chunk, want)
             check(n > 3) { "legacy truncated at $have/${out.size} (n=$n)" }
             if (have == 0 && frameCount == 0L) say("legacy 2046 chunk head ${hex(chunk, 8)}")
             val m = minOf(n - 3, out.size - have)
@@ -762,6 +843,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         lastFrameLen = n
         lastFrameHead = frame.copyOf(minOf(16, n))
         lastFrameKind = classify(frame, n)
+        if (lastFrameKind == "JPEG") { lastJpeg = frame.copyOf(n); jpegSeq++ }
         videoFrames++
         val now = System.nanoTime()
         if (fpsStart == 0L) fpsStart = now
