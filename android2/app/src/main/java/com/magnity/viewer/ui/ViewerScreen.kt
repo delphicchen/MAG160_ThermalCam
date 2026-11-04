@@ -50,6 +50,8 @@ import com.magnity.viewer.pipeline.SrTier
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
+import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -127,7 +129,7 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                         }
                     }
                     Spacer(Modifier.height(6.dp))
-                    ColorBar(vm.paletteName, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
+                    ColorBar(vm.paletteName, vm.displayGamma, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
                 }
             } else {
                 UsbDevicePanel(vm)
@@ -459,9 +461,9 @@ private fun RangeBar(
 }
 
 @Composable
-internal fun ColorBar(palette: String, lo: Float, hi: Float, modifier: Modifier) {
-    val lut = remember(palette) {
-        android.graphics.Bitmap.createBitmap(Palettes.lut(palette), 256, 1,
+internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modifier: Modifier) {
+    val lut = remember(palette, gamma) {
+        android.graphics.Bitmap.createBitmap(Palettes.lut(palette, gamma), 256, 1,
             android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
     }
     Column(modifier) {
@@ -827,6 +829,17 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                valueRange = 0.2f..3f, steps = 27)
         Text(stringResource(R.string.min_span_hint), color = DIM, fontSize = 10.sp)
 
+        // display gamma on a log slider: 1.00 in the middle, ⅓ … 3 at the ends; tap the
+        // value to go back to linear
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.display_gamma), color = FG, modifier = Modifier.weight(1f))
+            Text("γ %.2f".format(vm.displayGamma), color = DIM, fontSize = 11.sp,
+                 modifier = Modifier.clickable { vm.displayGamma = 1f })
+        }
+        Slider(ln(vm.displayGamma), valueRange = -GAMMA_LN_MAX..GAMMA_LN_MAX, steps = 21,
+               onValueChange = { vm.displayGamma = (exp(it) * 100f).roundToInt() / 100f })
+        Text(stringResource(R.string.display_gamma_hint), color = DIM, fontSize = 10.sp)
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.temporalDenoise, onCheckedChange = { vm.temporalDenoise = it })
             Text(stringResource(R.string.temporal_denoise), color = FG, modifier = Modifier.weight(1f))
@@ -1152,6 +1165,9 @@ private fun AlignSlider(label: String, value: Float, range: ClosedFloatingPointR
 
 /** String ids of the palettes' on-screen names (values/labels.xml); the pref keeps the
  *  internal name. */
+/** Display gamma slider range, ln γ: γ from ⅓ to 3. */
+private val GAMMA_LN_MAX = ln(3f)
+
 private val PALETTE_LABELS = mapOf(
     "inferno" to R.string.palette_inferno, "ironbow" to R.string.palette_ironbow,
     "jet" to R.string.palette_jet, "gray" to R.string.palette_gray,

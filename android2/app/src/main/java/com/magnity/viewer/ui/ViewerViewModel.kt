@@ -200,6 +200,10 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var scaleHi: Float by pref("scale_hi", 100f, skipWrite = { autoScale })
     /** Auto range is never narrower than this (°C); see [ImageOps.autoRange]. */
     var minSpan: Float by pref("min_span", DEFAULT_MIN_SPAN)
+    /** Display gamma (contrast curve) of the palette, see [Palettes.lut]; display only. */
+    var displayGamma: Float by pref("display_gamma", 1f)
+    /** The palette LUT as shown: [paletteName] through [displayGamma]. */
+    fun displayLut(): IntArray = Palettes.lut(paletteName, displayGamma)
     // default = camera plugged straight into the phone's USB-C port, portrait UI
     var rotation by pref("rotation", 90)            // 0/90/180/270 clockwise
     var mirror by pref("mirror", true)
@@ -1354,7 +1358,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                                      (if (it.vulkan) "Vulkan" else "CPU") + " · " + str(srTierLabel(it.tier)))
                     }
                 if (u != null) {
-                    val img = u.render(field, w, h, lo, hi, Palettes.lut(paletteName))
+                    val img = u.render(field, w, h, lo, hi, displayLut())
                     noteSrTimings(u)
                     srRendered = true
                     renderPath = "Thermal SR ${img.w}×${img.h}"
@@ -1374,7 +1378,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val gpu = anime4k ?: Anime4kGpu(getApplication()).also { anime4k = it }
                 return gpu.render(field, w, h, lo, hi, if (k >= 4) 2 else 1,
-                                  Palettes.lut(paletteName))
+                                  displayLut())
                     .also { renderPath = "Anime4K ${it.w}×${it.h}" }
             } catch (e: Throwable) {
                 Log.e(TAG, "Anime4K GPU failed — falling back to bicubic", e)
@@ -1385,7 +1389,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         val src = if (k > 1) ImageOps.resizeBicubic(field, w, h, w * k, h * k) else field
-        val pal = Palettes.lut(paletteName)
+        val pal = displayLut()
         if (pixBuf.size != src.size) pixBuf = IntArray(src.size)
         val img = pixBuf
         val inv = 255f / (hi - lo)
@@ -1659,7 +1663,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         srFrame = false
         // what the frame is made of: enough to tell a frozen or flat stream from a
         // display problem in a user's screenshot
-        sb.append("\n$paletteName · ${upscaler.name} ×$upscale → $renderPath")
+        sb.append("\n$paletteName γ%.2f · ${upscaler.name}".format(displayGamma) + " ×$upscale → $renderPath")
         lastFrame?.let {
             sb.append("\nT %.2f..%.2f °C · scale %.2f..%.2f · Δ %.3f °C"
                 .format(it.tempMin, it.tempMax, it.scaleLoC, it.scaleHiC, frameDiffC))
@@ -1691,7 +1695,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var thermalWriter: ThermalStream.Writer? = null
 
     private fun composite(fr: FrameResult) = FrameComposer.compose(
-        fr, Palettes.lut(paletteName), showMaxRoi, showMinRoi, spot, spotCelsius(),
+        fr, displayLut(), showMaxRoi, showMinRoi, spot, spotCelsius(),
         if (showCenter) centerCelsius(fr) else null)
 
     fun takeScreenshot() {
