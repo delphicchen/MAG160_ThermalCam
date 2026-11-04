@@ -1,10 +1,17 @@
-# MagViewer 2.9-alpha2 (HIK 4117: older firmware without the “2.0” version)
+# MagViewer 2.9-alpha3 (contrast gamma; HIK 4117 older firmware)
 **Alpha — a diagnostic build for testing, not a stable release.** Built by GitHub Actions
 from the `ccr-1a3608d0-s97tvm` branch.
 
 **This APK is “MagViewer β”** (`com.magnity.viewer.beta`, signed by the build server): it
 installs **next to** MagViewer 2.8, not over it, with its own settings. If a β you built
-yourself is installed, uninstall that first. It installs over 2.8-alpha1 … 2.9-alpha1.
+yourself is installed, uninstall that first. It installs over 2.8-alpha1 … 2.9-alpha2.
+
+## New in 2.9-alpha3 — contrast (gamma), all cameras
+- ☰ → **Contrast (gamma)**, under Minimum span: bends the palette without changing the
+  range. Above 1 gives more colours to the cooler part of the scene, below 1 to the warmer
+  part; 1.00 is linear (tap the value to reset). Range ⅓ … 3, saved.
+- Display only: temperatures and saved °C are unchanged. Screenshots, videos and capture
+  playback use the same curve; the colour bar shows it and its labels stay in °C.
 
 ## New in 2.9-alpha2 — Hikvision TB-4117 (issue #4)
 Some 4117 modules answer the version probe with zeros instead of “2.0”: 2.9-alpha1 then
