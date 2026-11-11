@@ -1,4 +1,4 @@
-# MagViewer 2.9-alpha6 (contrast knob on the colour bar, HIK 4117 mirror fix)
+# MagViewer 2.9-alpha6 (contrast knob on the colour bar, steady picture size, HIK 4117 mirror fix)
 **Alpha — a test build, not a stable release.** Built locally (not by GitHub Actions).
 
 **This APK is “MagViewer β”** (`com.magnity.viewer.beta`), signed with a different key than
@@ -7,8 +7,12 @@ installs next to MagViewer 2.8, not over it.
 
 ## New in 2.9-alpha6
 - **Contrast on the main screen**: the colour bar has a white knob — drag it along the bar
-  to bend the palette (same setting as ☰ → Contrast (gamma)); double-tap the bar for 1.00.
-  The knob marks where the palette's middle colour sits; γ is shown next to the middle label.
+  to bend the palette (the gamma of 2.9-alpha3); double-tap the bar for 1.00. The knob marks
+  where the palette's middle colour sits; γ is shown next to the middle label. The slider in
+  ☰ is gone.
+- **The picture no longer changes size**: under the buttons there is one line only,
+  resolution · fps (a notice takes its place for a few seconds). The camera id, FPA and
+  connection status moved to the Debug overlay.
 - **Mirror is now remembered per camera**. The HIK 4117's own picture was shown mirrored
   (issue #4): mirror is off by default for the 4117, the other cameras keep their setting.
 

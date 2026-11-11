@@ -1688,6 +1688,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private fun debugText(): String {
         val sb = StringBuilder()
         sb.append("%.1f fps · %.1f ms/frame\n".format(fps, totalMs))
+        // what the bottom line no longer shows: camera, loop status, FPA
+        sb.append("USB ${connectedUsb ?: "—"} · FPA ${lastFrame?.fpa}\n$status\n")
         STAGES.indices.forEach { i ->
             sb.append("%s %.1f".format(STAGES[i], stageMs[i]))
             sb.append(if (i == 3) "\n" else if (i < STAGES.size - 1) " · " else "")

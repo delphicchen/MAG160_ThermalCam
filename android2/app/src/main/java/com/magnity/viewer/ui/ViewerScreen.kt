@@ -37,6 +37,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -50,7 +51,6 @@ import com.magnity.viewer.pipeline.SrTier
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
-import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.floor
 import kotlin.math.max
@@ -245,16 +245,23 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             }
             val notice = vm.notice
             LaunchedEffect(notice) { if (notice != null) { delay(3000); vm.notice = null } }
+            // while a picture is shown: one line only (resolution · fps, or a notice in its
+            // place), so the image above never changes size; camera id, FPA and the loop's
+            // status are in the Debug overlay
             Column(Modifier.weight(1f)) {
                 if (fr != null) {
-                    Text("%.1f fps".format(vm.fps) + (vm.connectedUsb?.let { " · USB $it" } ?: ""),
-                         color = ACCENT, fontSize = 13.sp)
+                    if (notice != null) {
+                        Text(notice, color = Color(0xFFD6A93D), fontSize = 13.sp, maxLines = 1,
+                             overflow = TextOverflow.Ellipsis)
+                    } else {
+                        Text("${fr.w}×${fr.h} · " + "%.1f fps".format(vm.fps), color = ACCENT,
+                             fontSize = 13.sp, maxLines = 1)
+                    }
+                } else {
+                    Text(notice ?: vm.status,
+                         color = if (notice != null) Color(0xFFD6A93D) else DIM,
+                         fontSize = 10.sp, maxLines = 2)
                 }
-                Text(
-                    notice ?: (vm.status + (fr?.let { " · FPA ${it.fpa}" } ?: "")),
-                    color = if (notice != null) Color(0xFFD6A93D) else DIM,
-                    fontSize = 10.sp, maxLines = 2,
-                )
             }
         }
     }
@@ -855,16 +862,6 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                valueRange = 0.2f..3f, steps = 27)
         Text(stringResource(R.string.min_span_hint), color = DIM, fontSize = 10.sp)
 
-        // display gamma on a log slider: 1.00 in the middle, ⅓ … 3 at the ends; tap the
-        // value to go back to linear
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(R.string.display_gamma), color = FG, modifier = Modifier.weight(1f))
-            Text("γ %.2f".format(vm.displayGamma), color = DIM, fontSize = 11.sp,
-                 modifier = Modifier.clickable { vm.displayGamma = 1f })
-        }
-        Slider(ln(vm.displayGamma), valueRange = -GAMMA_LN_MAX..GAMMA_LN_MAX, steps = 21,
-               onValueChange = { vm.displayGamma = (exp(it) * 100f).roundToInt() / 100f })
-        Text(stringResource(R.string.display_gamma_hint), color = DIM, fontSize = 10.sp)
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.temporalDenoise, onCheckedChange = { vm.temporalDenoise = it })
@@ -1191,12 +1188,9 @@ private fun AlignSlider(label: String, value: Float, range: ClosedFloatingPointR
 
 /** String ids of the palettes' on-screen names (values/labels.xml); the pref keeps the
  *  internal name. */
-/** Colour-bar knob range: x = 0.5^γ for γ 3 … ⅓ (same range as the drawer slider). */
+/** Colour-bar knob range: x = 0.5^γ for γ 3 … ⅓. */
 private const val BAR_X_MIN = 0.125f
 private const val BAR_X_MAX = 0.7937f
-
-/** Display gamma slider range, ln γ: γ from ⅓ to 3. */
-private val GAMMA_LN_MAX = ln(3f)
 
 private val PALETTE_LABELS = mapOf(
     "inferno" to R.string.palette_inferno, "ironbow" to R.string.palette_ironbow,

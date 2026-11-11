@@ -94,8 +94,6 @@
     <string name="zoom_offset">缩放 ×%1$.2f · 位移 %2$+.3f / %3$+.3f</string>
     <string name="min_span">最小温宽（自动范围）</string>
     <string name="min_span_hint">自动范围会把色板拉伸到画面中的温度范围。整个画面温差不到一度时，这样拉伸会把传感器本身的噪声画成斑块和假纹理（超分还会把它锐化）。自动范围不会窄于这个温宽；更平坦的场景会落在色板中段。想看非常细微的温差就调低；平坦的场景看起来斑驳就调高。手动范围不受此限制。</string>
-    <string name="display_gamma">对比（gamma）</string>
-    <string name="display_gamma_hint">不改范围、只弯曲色板：大于 1 把较多颜色分给画面中较冷的部分，小于 1 分给较热的部分。1.00 为线性（点数值可归位）。只影响显示——温度读数、存档的 °C 与色条刻度不变，色条会显示这条曲线。主画面也能调：拖动色条上的白色拉杆（点两下归 1.00）。</string>
     <string name="video_only">相机自己的画面——目前没有温度</string>
     <string name="temporal_denoise">时域降噪</string>
     <string name="spatial_denoise">空间降噪</string>
