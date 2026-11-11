@@ -1,9 +1,21 @@
-# MagViewer 2.9-alpha6 (contrast knob on the colour bar, steady picture size, HIK 4117 mirror fix)
+# MagViewer 2.9-alpha7 (HIK 4117 older firmware: third try at temperatures)
 **Alpha — a test build, not a stable release.** Built locally (not by GitHub Actions).
 
 **This APK is “MagViewer β”** (`com.magnity.viewer.beta`), signed with a different key than
 the β builds from the build server (2.9-alpha4 and older): **uninstall the old MagViewer β first**. It
 installs next to MagViewer 2.8, not over it.
+
+## New in 2.9-alpha7 — Hikvision TB-4117 older firmware (issue #4)
+In 2.9-alpha4 the SDK's byte order got a real answer from the module (firmware
+“V5.5.4 build 200822”), but after the last two probe variants (“read twice”, alpha2's
+order) every answer was zeros.
+- Those two variants are gone; only the SDK's order is tried (with and without the
+  channel byte).
+- An all-zero answer re-sends the protocol switch (selector 3 {00 05}) and asks once more;
+  the report says so (`zeros → sel3 {00 05} re-sent`).
+- The temperature frame (2046) is asked for in two ways in turn — the command alone, or
+  with the request “2.0” firmware takes — and the one that works is kept. Debug shows
+  `legacy … · 2046 … · resync N`; ✓ once a frame came through.
 
 ## New in 2.9-alpha6
 - **Contrast on the main screen**: the colour bar has a white knob — drag it along the bar
