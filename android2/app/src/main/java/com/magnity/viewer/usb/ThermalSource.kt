@@ -6,8 +6,9 @@ import android.hardware.usb.UsbDevice
 /**
  * A thermal camera on USB, as the viewer sees it: a stream of per-pixel temperature frames
  * in milli-Celsius ([getTemperatureData], row-major [width]×[height]) plus the few controls
- * the UI drives. [MagDeviceWrapper] (MAG160), [Tiny2cSource] (InfiRay AC020) and
- * [Hik4117Source] (Hikvision TB-4117, diagnostic) implement it; [ThermalSources] picks one
+ * the UI drives. [MagDeviceWrapper] (MAG160), [Tiny2cSource] (InfiRay AC020),
+ * [Tiny1Source] (InfiRay Tiny1C / Tiny1B, IRUVC) and [Hik4117Source] (Hikvision TB-4117,
+ * diagnostic) implement it; [ThermalSources] picks one
  * for an attached device.
  *
  * Threading is the implementation's business — frames arrive on an SDK thread and
@@ -18,7 +19,7 @@ interface ThermalSource {
     val width: Int
     val height: Int
     val fps: Int
-    /** Short id keeping per-camera settings apart ("mag160", "tiny2c", "hik4117"). */
+    /** Short id keeping per-camera settings apart ("mag160", "tiny2c", "tiny1c", "tiny1b", "hik4117"). */
     val kind: String
     /** Thermal lens focal length in native pixels — fusion's starting zoom. */
     val focalPx: Float
@@ -60,7 +61,7 @@ object ThermalSources {
     /** A camera the viewer connects to without asking first (known VID/PID). */
     fun isKnown(device: UsbDevice): Boolean =
         MagDeviceWrapper.isMagnity(device) || Hik4117Source.isKnown(device) ||
-            Tiny2cSource.isKnown(device) || (device.vendorId to device.productId) in learned
+            Tiny1Source.isKnown(device) || Tiny2cSource.isKnown(device) || (device.vendorId to device.productId) in learned
 
     /** [isKnown], or a UVC device that may be a Tiny2C under another id — Android's USB
      *  permission dialog is the user's say before it is opened. */
@@ -73,6 +74,8 @@ object ThermalSources {
     fun label(device: UsbDevice): String? = when {
         MagDeviceWrapper.isMagnity(device) -> "MAG160"
         Hik4117Source.isKnown(device) -> "HIK 4117"
+        Tiny1Source.isTiny1b(device) -> "Tiny1B"
+        Tiny1Source.isKnown(device) -> "Tiny1C"
         isKnown(device) -> "Tiny2C"
         Tiny2cSource.isUvc(device) -> "UVC"
         else -> null
@@ -83,6 +86,8 @@ object ThermalSources {
         MagDeviceWrapper.isMagnity(device) -> current as? MagDeviceWrapper ?: MagDeviceWrapper()
         Hik4117Source.isKnown(device) ->
             (current as? Hik4117Source)?.takeIf { it.device == device } ?: Hik4117Source(device)
+        Tiny1Source.isKnown(device) ->
+            (current as? Tiny1Source)?.takeIf { it.device == device } ?: Tiny1Source(device)
         else -> (current as? Tiny2cSource)?.takeIf { it.device == device } ?: Tiny2cSource(device)
     }
 }

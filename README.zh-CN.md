@@ -29,6 +29,7 @@
 |---|---|---|
 | Magnity **MAG160 / MAG-Mx / MAG-Cx** | 160×120 | ✅ 支持（原厂 SDK） |
 | InfiRay **Tiny2C**（AC020） | 256×192 | ✅ 支持（原厂 AC020 SDK） |
+| InfiRay **Tiny1C** / **Tiny1B**（USB） | 256×192 | 🧪 测试中（2.9-alpha5，原厂 IRUVC SDK） |
 | 海康 **TB-4117-3/S**（USB） | 160×120 | 🧪 诊断支持（2.8） |
 
 ## 🤝 一起支持更多模组

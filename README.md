@@ -30,6 +30,7 @@ fusion whichever module it is.
 |---|---|---|
 | Magnity **MAG160 / MAG-Mx / MAG-Cx** | 160×120 | ✅ Supported (factory SDK) |
 | InfiRay **Tiny2C** (AC020) | 256×192 | ✅ Supported (vendor AC020 SDK) |
+| InfiRay **Tiny1C** / **Tiny1B** (USB) | 256×192 | 🧪 In testing (2.9-alpha5, vendor IRUVC SDK) |
 | Hikvision **TB-4117-3/S** (USB) | 160×120 | 🧪 Diagnostic support (2.8) |
 
 ## 🤝 Help add more modules

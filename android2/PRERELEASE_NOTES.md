@@ -1,10 +1,18 @@
-# MagViewer 2.9-alpha4 (HIK 4117 older firmware: picture, second try at temperatures)
-**Alpha — a diagnostic build for testing, not a stable release.** Built by GitHub Actions
-from the `ccr-1a3608d0-s97tvm` branch.
+# MagViewer 2.9-alpha5 (InfiRay Tiny1C / Tiny1B, first try)
+**Alpha — a test build, not a stable release.** Built locally (not by GitHub Actions).
 
-**This APK is “MagViewer β”** (`com.magnity.viewer.beta`, signed by the build server): it
-installs **next to** MagViewer 2.8, not over it, with its own settings. If a β you built
-yourself is installed, uninstall that first. It installs over 2.8-alpha1 … 2.9-alpha3.
+**This APK is “MagViewer β”** (`com.magnity.viewer.beta`), signed with a different key than
+the earlier β builds from the build server: **uninstall the old MagViewer β first**. It
+installs next to MagViewer 2.8, not over it.
+
+## New in 2.9-alpha5 — InfiRay Tiny1C and Tiny1B
+- Both modules (256×192, USB) are recognised when plugged in, through InfiRay's IRUVC
+  Android SDK 1.4.2: temperatures, FFC (shutter) and emissivity. Not yet tried on a module.
+- Any UVC device under Realtek's VID 0x0BDA is taken for a Tiny1; PID 0x3901 is a Tiny1B.
+- Debug overlay: SDK counters, the sizes the module offers, the raw temperature range and
+  which scale it was read with (÷64 Tiny1C, ÷16 Tiny1B), and `rowΔ` (the smaller of the two
+  is the module's real row length).
+- Tiny1B is drawn 192 wide × 256 tall, as in its vendor demo — to be confirmed.
 
 ## New in 2.9-alpha4 — Hikvision TB-4117 older firmware (issue #4)
 In 2.9-alpha2 the module answered every older-protocol query with the query itself, so

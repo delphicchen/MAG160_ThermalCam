@@ -6,6 +6,9 @@
     <usb-device vendor-id="33596" product-id="2" />
     <!-- InfiRay Tiny2C (AC020 UVC): 0x3474:0x4321, reported from a unit -->
     <usb-device vendor-id="13428" product-id="17185" />
+    <!-- InfiRay Tiny1C / Tiny1B (IRUVC): Realtek bridge VID 0x0BDA, any PID
+         (Tiny1B = 0x3901 from its demo; Tiny1C's own PID not known yet) -->
+    <usb-device vendor-id="3034" />
     <!-- Hikvision TB-4117-3/S (USB UVC firmware): 0x2BDF:0x0101, diagnostic build -->
     <usb-device vendor-id="11231" product-id="257" />
     <!-- other AC020 modules: 0x0A0A:0x2602 from the vendor demo's filter, unconfirmed -->

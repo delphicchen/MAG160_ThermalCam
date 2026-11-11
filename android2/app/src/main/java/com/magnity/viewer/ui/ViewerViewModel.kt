@@ -469,6 +469,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 connectedUsb = ThermalSources.idText(device) + " · " + when (sdk) {
                     is MagDeviceWrapper -> "MAG160"
                     is Hik4117Source -> "HIK 4117"
+                    is com.magnity.viewer.usb.Tiny1Source -> if (sdk.kind == "tiny1b") "Tiny1B" else "Tiny1C"
                     else -> "Tiny2C"
                 }
                 (sdk as? Hik4117Source)?.let { sdkLog = it.report() }

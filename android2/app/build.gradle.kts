@@ -12,8 +12,8 @@ android {
         applicationId = "com.magnity.viewer"
         minSdk = 29
         targetSdk = 35
-        versionCode = 25
-        versionName = "2.9-alpha4"
+        versionCode = 26
+        versionName = "2.9-alpha5"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild {
             cmake { arguments += listOf("-DANDROID_STL=c++_shared") }
@@ -58,6 +58,8 @@ android {
     packaging {
         // the AC020 SDK ships its own libc++_shared (older NDK); ours from CMake wins
         jniLibs.pickFirsts += "**/libc++_shared.so"
+        // both InfiRay SDKs (AC020, IRUVC) ship an LLVM OpenMP runtime; one copy is packaged
+        jniLibs.pickFirsts += "**/libomp.so"
     }
 }
 
@@ -78,4 +80,6 @@ dependencies {
     implementation(files("libs/ac020/libAC020sdk_USB_IR_UVC_1.1.5.aar",
                          "libs/ac020/libcommon_1.2.0_2409191614.aar",
                          "libs/ac020/libirutils_1.2.1.aar"))
+    // InfiRay Tiny1C / Tiny1B (IRUVC) — vendor SDK 1.4.2 from Tiny1C-SDK.zip
+    implementation(files("libs/iruvc/libusbirsdk_1.4.2_2407111936_standard.aar"))
 }
