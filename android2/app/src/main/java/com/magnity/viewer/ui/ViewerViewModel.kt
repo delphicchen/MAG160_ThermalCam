@@ -769,18 +769,28 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Another kind of camera than last time: each lens sits elsewhere on the phone and has
-     * its own field of view, so park this camera's registration under `<key>@<kind>` and
+     * its own field of view, so park this camera's mirror and registration under `<key>@<kind>` and
      * bring back the new camera's (the defaults on its first connect).
      */
     private fun switchCameraProfile(kind: String) {
         val old = cameraKind
-        if (kind == old) return
+        if (kind == old) {
+            // first connect since mirror became per camera: the HIK 4117's own picture
+            // is the right way round already (issue #4), the others keep what they had
+            if (!prefs.contains("mirror@$kind")) {
+                if (kind == "hik4117") mirror = false
+                prefs.edit().putBoolean("mirror@$kind", mirror).apply()
+            }
+            return
+        }
         prefs.edit()
+            .putBoolean("mirror@$old", mirror)
             .putFloat("fusion_zoom@$old", fusionZoom)
             .putFloat("fusion_dx@$old", fusionDx)
             .putFloat("fusion_dy@$old", fusionDy)
             .putString("fusion_calib@$old", fusionCalibJson)
             .apply()
+        mirror = prefs.getBoolean("mirror@$kind", kind != "hik4117")
         fusionZoom = prefs.getFloat("fusion_zoom@$kind", 1.6f)
         fusionDx = prefs.getFloat("fusion_dx@$kind", 0f)
         fusionDy = prefs.getFloat("fusion_dy@$kind", 0f)

@@ -94,7 +94,7 @@
     <string name="min_span">最小溫寬（自動範圍）</string>
     <string name="min_span_hint">自動範圍會把色盤拉伸到畫面中的溫度範圍。整個畫面溫差不到一度時，這樣拉伸會把感測器本身的雜訊畫成斑塊和假紋理（超分還會把它銳化）。自動範圍不會窄於這個溫寬；更平坦的場景會落在色盤中段。想看非常細微的溫差就調低；平坦的場景看起來斑駁就調高。手動範圍不受此限制。</string>
     <string name="display_gamma">對比（gamma）</string>
-    <string name="display_gamma_hint">不改範圍、只彎曲色盤：大於 1 把較多顏色分給畫面中較冷的部分，小於 1 分給較熱的部分。1.00 為線性（點數值可歸位）。只影響顯示——溫度讀數、存檔的 °C 與色條刻度不變，色條會顯示這條曲線。</string>
+    <string name="display_gamma_hint">不改範圍、只彎曲色盤：大於 1 把較多顏色分給畫面中較冷的部分，小於 1 分給較熱的部分。1.00 為線性（點數值可歸位）。只影響顯示——溫度讀數、存檔的 °C 與色條刻度不變，色條會顯示這條曲線。主畫面也能調：拖動色條上的白色拉桿（點兩下歸 1.00）。</string>
     <string name="video_only">相機自己的畫面——目前沒有溫度</string>
     <string name="temporal_denoise">時域降噪</string>
     <string name="spatial_denoise">空間降噪</string>

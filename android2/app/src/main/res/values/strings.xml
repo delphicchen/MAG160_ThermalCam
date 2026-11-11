@@ -95,7 +95,7 @@
     <string name="min_span">Minimum span (auto range)</string>
     <string name="min_span_hint">Auto range stretches the colours over the temperatures in view. When the whole scene lies within a fraction of a degree, that stretch paints the sensor\'s own noise as blotches and false texture (which Thermal SR then sharpens). The auto range never gets narrower than this; a flatter scene sits in the middle of the palette. Lower it to see very small differences; raise it if flat scenes look blotchy. Manual range is not limited.</string>
     <string name="display_gamma">Contrast (gamma)</string>
-    <string name="display_gamma_hint">Bends the palette without changing the range: above 1 gives more colours to the cooler part of the scene, below 1 to the warmer part. 1.00 is linear (tap the value to reset). Display only — temperatures, captures\' °C and the colour bar\'s labels are unchanged; the bar shows the curve.</string>
+    <string name="display_gamma_hint">Bends the palette without changing the range: above 1 gives more colours to the cooler part of the scene, below 1 to the warmer part. 1.00 is linear (tap the value to reset). Display only — temperatures, captures\' °C and the colour bar\'s labels are unchanged; the bar shows the curve. Also adjustable on the main screen: drag the white knob on the colour bar (double-tap = 1.00).</string>
     <string name="video_only">Camera\'s own picture — no temperature yet</string>
     <string name="temporal_denoise">Temporal denoise</string>
     <string name="spatial_denoise">Spatial denoise</string>

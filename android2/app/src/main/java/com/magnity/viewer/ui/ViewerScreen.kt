@@ -132,7 +132,8 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                     if (fr.videoOnly) {
                         Text(stringResource(R.string.video_only), color = DIM, fontSize = 11.sp)
                     } else {
-                        ColorBar(vm.paletteName, vm.displayGamma, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
+                        ColorBar(vm.paletteName, vm.displayGamma, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp),
+                                 onGamma = { vm.displayGamma = it })
                     }
                 }
             } else {
@@ -466,22 +467,42 @@ private fun RangeBar(
 }
 
 @Composable
-internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modifier: Modifier) {
+internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modifier: Modifier,
+                      onGamma: ((Float) -> Unit)? = null) {
     val lut = remember(palette, gamma) {
         android.graphics.Bitmap.createBitmap(Palettes.lut(palette, gamma), 256, 1,
             android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
     }
+    // With [onGamma] the bar is also the contrast control: its knob marks where the
+    // palette's middle colour sits (x = 0.5^γ); drag it along the bar, double-tap = γ 1.
+    val setGamma by rememberUpdatedState(onGamma)
+    val barMod = if (onGamma == null) Modifier else Modifier
+        .pointerInput(Unit) {
+            detectDragGestures { change, _ ->
+                change.consume()
+                val x = (change.position.x / size.width).coerceIn(BAR_X_MIN, BAR_X_MAX)
+                setGamma?.invoke((ln(x) / ln(0.5f) * 100f).roundToInt() / 100f)
+            }
+        }
+        .pointerInput(Unit) { detectTapGestures(onDoubleTap = { setGamma?.invoke(1f) }) }
     Column(modifier) {
-        Canvas(Modifier.fillMaxWidth().height(14.dp)) {
+        Canvas(Modifier.fillMaxWidth().height(14.dp).then(barMod)) {
             drawImage(lut, srcOffset = IntOffset.Zero, srcSize = IntSize(256, 1),
                       dstOffset = IntOffset.Zero,
                       dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
                       filterQuality = FilterQuality.Low)
+            if (onGamma != null) {
+                val kx = size.width * Math.pow(0.5, gamma.toDouble()).toFloat()
+                drawLine(Color.Black, Offset(kx, 0f), Offset(kx, size.height), strokeWidth = 7f)
+                drawLine(Color.White, Offset(kx, 0f), Offset(kx, size.height), strokeWidth = 3f)
+            }
         }
         Row(Modifier.fillMaxWidth()) {
             Text("%.1f°C".format(lo), color = Color(0xFFC9D1D9), fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
-            Text("%.1f".format((lo + hi) / 2f), color = Color(0xFFC9D1D9), fontSize = 12.sp)
+            Text("%.1f".format((lo + hi) / 2f) +
+                     (if (onGamma != null && gamma != 1f) "  γ%.2f".format(gamma) else ""),
+                 color = Color(0xFFC9D1D9), fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
             Text("%.1f°C".format(hi), color = Color(0xFFC9D1D9), fontSize = 12.sp)
         }
@@ -1170,6 +1191,10 @@ private fun AlignSlider(label: String, value: Float, range: ClosedFloatingPointR
 
 /** String ids of the palettes' on-screen names (values/labels.xml); the pref keeps the
  *  internal name. */
+/** Colour-bar knob range: x = 0.5^γ for γ 3 … ⅓ (same range as the drawer slider). */
+private const val BAR_X_MIN = 0.125f
+private const val BAR_X_MAX = 0.7937f
+
 /** Display gamma slider range, ln γ: γ from ⅓ to 3. */
 private val GAMMA_LN_MAX = ln(3f)
 
