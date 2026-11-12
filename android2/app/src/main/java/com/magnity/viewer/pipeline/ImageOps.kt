@@ -523,15 +523,23 @@ object ImageOps {
         return vLo to vHi
     }
 
+    /** Auto range headroom above the hot end, as a fraction of the span. */
+    private const val HOT_MARGIN = 0.04f
+
     /**
-     * The auto display range: the 1st..99th percentile, never narrower than [minSpan] °C.
+     * The auto display range: the 1st..99.9th percentile plus [HOT_MARGIN] of the span on
+     * the hot side, never narrower than [minSpan] °C. The hot end used to be the 99th
+     * percentile: a warm object filling much of the frame (a hand) then had its top 1 %
+     * flattened to the palette's last colour. The cold end keeps clipping 1 % — noise there
+     * matters less than contrast.
      * A scene flatter than that is shown at [minSpan], centred on its median, instead of
      * stretching the sensor's own noise (tens of mK) over the whole palette — what makes a
      * near-uniform scene look blotchy, and what an upscaler then sharpens into texture.
      */
     fun autoRange(a: FloatArray, minSpan: Float): Pair<Float, Float> {
-        val (p1, p99) = percentileRange(a, 1f, 99f)
-        if (p99 - p1 >= minSpan) return p1 to p99
+        val (p1, p999) = percentileRange(a, 1f, 99.9f)
+        val hi = p999 + (p999 - p1) * HOT_MARGIN
+        if (hi - p1 >= minSpan) return p1 to hi
         val mid = percentileRange(a, 50f, 50f).first
         return (mid - minSpan / 2) to (mid + minSpan / 2)
     }
