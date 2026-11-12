@@ -231,6 +231,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     // 2046 snapshots
     @Volatile private var snapMs = 0f
     @Volatile private var snapErrors = 0L
+    /** How the last 2046 matrix was laid out (legacy firmware says 160×120), for [diag]. */
+    @Volatile private var matrixInfo = ""
     @Volatile private var snapError: String? = null
     @Volatile private var devEmissivity = "?"
     private var speed = "?"
@@ -370,6 +372,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             .format(videoFps, lastFrameKind.substringBefore(" · "), lastFrameLen))
         append("\n2046 %.0f ms/frame · ok=%d err=%d".format(snapMs, frameCount, snapErrors))
         snapError?.let { append(" · ").append(it.take(60)) }
+        if (matrixInfo.isNotEmpty()) append("\nmatrix $matrixInfo")
         if (streamLive) append("\nlive stream $liveLabel · %.1f temps/s · %d".format(streamFps, streamTemps))
         if (legacy) append("\nlegacy ${way.label} · 2046 ${LEGACY_2046[legacy2046]}" +
             (if (legacy2046Fixed) " ✓" else "") + " · resync $resyncs")
@@ -705,7 +708,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         check(base >= 0 && b.size >= base + 27) { "2046: ${b.size} B" }
         val jl = le32(b, base + 1); val w = le32(b, base + 5); val h = le32(b, base + 9)
         val tb = le32(b, base + 13)
-        check(w == W && h == H && tb == w * h * 4) { "2046: ${w}x$h, $tb B of temperature" }
+        check(((w == W && h == H) || (w == H && h == W)) && tb == W * H * 4) {
+            "2046: ${w}x$h, $tb B of temperature" }
         if (legacy && frameCount == 0L) {
             legacy2046Fixed = true
             say("legacy 2046 (${LEGACY_2046[legacy2046]}): $base B before the head · ${hex(b, 32)}")
@@ -713,13 +717,31 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         val o = base + 27 + jl
         check(jl >= 0 && b.size >= o + tb) { "2046 truncated: ${b.size} < ${o + tb}" }
         val bb = ByteBuffer.wrap(b, o, tb).order(ByteOrder.LITTLE_ENDIAN)
-        return IntArray(W * H) { (bb.float * 1000f).roundToInt() }
+        val c = FloatArray(W * H) { bb.float }
+        // legacy firmware (issue #4, 2.9-alpha9) says 160×120: the row length the data
+        // is smoother along decides, and a landscape matrix is turned clockwise to portrait
+        val d160 = rowDelta(c, H); val d120 = rowDelta(c, W)
+        val landscape = w == H && d160 <= d120
+        matrixInfo = "${w}x$h · rowΔ 160:%.2f 120:%.2f → %s".format(d160, d120,
+            if (landscape) "landscape, turned" else "portrait")
+        return IntArray(W * H) { i ->
+            val f = if (!landscape) c[i] else c[(W - 1 - i % W) * H + i / W]
+            (f * 1000f).roundToInt()
+        }
     }
 
-    /** Offset of LE u32 {W, H, W·H·4} in the first 64 bytes, or null. */
+    /** Mean |Δ| between pixels [w] apart (vertical neighbours if rows are [w] long). */
+    private fun rowDelta(a: FloatArray, w: Int): Float {
+        var d = 0.0
+        for (i in 0 until a.size - w) d += abs(a[i] - a[i + w])
+        return (d / (a.size - w)).toFloat()
+    }
+
+    /** Offset of LE u32 {W, H, W·H·4} (or {H, W, …}) in the first 64 bytes, or null. */
     private fun findSizes(b: ByteArray): Int? =
         (0..minOf(64, b.size - 12)).firstOrNull {
-            le32(b, it) == W && le32(b, it + 4) == H && le32(b, it + 8) == W * H * 4
+            val a = le32(b, it); val c = le32(b, it + 4)
+            ((a == W && c == H) || (a == H && c == W)) && le32(b, it + 8) == W * H * 4
         }
 
     // ---- XU transactions --------------------------------------------------------------
