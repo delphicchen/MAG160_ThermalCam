@@ -54,7 +54,9 @@ import kotlin.math.roundToInt
  * {group, 0, sub, channel} got the real 2011 answer ("V5.5.4 build 200822"), but after
  * its "read twice" and alpha2-order tries every answer was zeros — those two are gone;
  * an all-zero answer now re-sends sel3 {00 05} and asks once more ([legacyResync]), and
- * 2046 alternates two request payloads until one works ([LEGACY_2046]).
+ * 2046 alternates two request payloads until one works ([LEGACY_2046]). 2.9-alpha7's
+ * report: every read answers, and the 2046 length head is big-endian (00 01 45 c6 =
+ * 83398 B, a 76800-byte matrix plus a JPEG) — it was read little-endian and refused.
  *
  * Without temperatures (channel locked, or 2046 keeps failing) the module's own MJPEG is
  * handed to the viewer as [videoFrame], so there is a picture, without readouts.
@@ -769,8 +771,9 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         say(if (pick != null) "legacy framing: ${way.label}" else "legacy: every framing echoed — using ${way.label}")
     }
 
-    /** Phase A (0x85): 3-byte head + u32 total. Phase B (0x81): command + IN per chunk,
-     *  each 3-byte head + ≤509 B, until total − 3 bytes. Returns the joined data. */
+    /** Phase A (0x85): 3-byte head + big-endian u32 total. Phase B (0x81): command + IN
+     *  per chunk, each 3-byte head + ≤509 B, until total − 3 bytes. Returns the joined
+     *  data; a module that ends early gives what arrived (the parser checks the size). */
     private fun legacyDoubleGet(group: Int, sub: Int, request: ByteArray? = null): ByteArray = ep0.withLock {
         val head = ByteArray(7)
         var hn = legacyLength(group, sub, request, head)
@@ -778,7 +781,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             hn = legacyLength(group, sub, request, head)
         }
         check(hn >= 7) { "legacy head $hn B ${hex(head.copyOf(maxOf(hn, 0)))}" }
-        val total = le32(head, 3)
+        val total = be32(head, 3)
         check(total in 4..MAX_DOUBLE_GET) { "legacy length $total, head ${hex(head)}" }
         if (frameCount == 0L && snapErrors < 4) say("legacy 2046 head ${hex(head)} → $total B")
         val out = ByteArray(total - 3)
@@ -788,6 +791,10 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             check(legacyCmd(group, sub, GET_CUR, request)) { "legacy chunk cmd failed at $have" }
             val want = minOf(CHUNK, out.size - have + 3)
             val n = legacyIn(group, GET_CUR, chunk, want)
+            if (n <= 3 && have > 0) {
+                if (frameCount == 0L && snapErrors < 4) say("legacy 2046 ended at $have/${out.size} (n=$n)")
+                return@withLock out.copyOf(have)
+            }
             check(n > 3) { "legacy truncated at $have/${out.size} (n=$n)" }
             if (have == 0 && frameCount == 0L && snapErrors < 4) say("legacy 2046 chunk head ${hex(chunk, 8)}")
             val m = minOf(n - 3, out.size - have)
@@ -1051,6 +1058,9 @@ private fun le16(b: ByteArray, o: Int): Int = u8(b, o) or (u8(b, o + 1) shl 8)
 
 private fun le32(b: ByteArray, o: Int): Int =
     u8(b, o) or (u8(b, o + 1) shl 8) or (u8(b, o + 2) shl 16) or (u8(b, o + 3) shl 24)
+
+private fun be32(b: ByteArray, o: Int): Int =
+    (u8(b, o) shl 24) or (u8(b, o + 1) shl 16) or (u8(b, o + 2) shl 8) or u8(b, o + 3)
 
 private fun put32(b: ByteArray, o: Int, v: Int) {
     for (k in 0..3) b[o + k] = (v shr (8 * k)).toByte()
