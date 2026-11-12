@@ -58,6 +58,12 @@ import kotlin.math.roundToInt
  * report: every read answers, and the 2046 length head is big-endian (00 01 45 c6 =
  * 83398 B, a 76800-byte matrix plus a JPEG) — it was read little-endian and refused.
  *
+ * 2046 is ~1 frame/s at best. So the stream test now runs by itself on connect, and every
+ * "FRMI" frame that carries a 120×160 matrix (f32, or u16 ÷ dwTmScale) is used as a
+ * temperature frame ([frmiTemps]). The fastest coding/format it finds is kept live
+ * ([goLive]) and remembered: the next connect starts in it straight away ([resumeLive]),
+ * and runs the test again if it gives nothing. The stream parameter is restored on [stop].
+ *
  * Without temperatures (channel locked, or 2046 keeps failing) the module's own MJPEG is
  * handed to the viewer as [videoFrame], so there is a picture, without readouts.
  *
@@ -130,6 +136,10 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
 
         private const val PREFS = "hik4117"
         private const val KEY_RESTORE_2038 = "restore_2038"
+        /** "coding,fmt,frame,interval" of the stream that gave temperatures (coding 0: unchanged). */
+        private const val KEY_LIVE = "live_stream"
+        /** Temperature frames per second a stream must give to replace 2046. */
+        private const val LIVE_MIN_FPS = 2f
 
         fun isKnown(device: UsbDevice): Boolean =
             device.vendorId == VID && device.productId == PID
@@ -152,6 +162,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     }
     /** One format/frame the stream test commits. */
     private class Pick(val fmt: Int, val frame: Int, val interval: Int, val label: String)
+    /** A stream that gave temperatures: the coding type set for it (null: left as it was). */
+    private class Live(val coding: Int?, val pick: Pick, val tps: Float)
 
     private var conn: UsbDeviceConnection? = null
     private var vcIf: UsbInterface? = null
@@ -172,6 +184,16 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     @Volatile private var tempsDead = false
     @Volatile private var lastJpeg: ByteArray? = null
     @Volatile private var jpegSeq = 0L
+    /** Temperatures come from the bulk stream ([goLive]); 2046 rests. */
+    @Volatile private var streamLive = false
+    @Volatile private var liveLabel = ""
+    /** 2038 as it was before [goLive], put back on [stop]. */
+    private var liveOrig: ByteArray? = null
+    /** Temperature frames taken from the stream ([frmiTemps]). */
+    @Volatile private var streamTemps = 0L
+    @Volatile private var streamFps = 0f
+    private var tfStart = 0L
+    private var tfFrames = 0
 
     private val running = AtomicBoolean(false)
     private val snapping = AtomicBoolean(false)
@@ -237,6 +259,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         frameCount = 0; snapErrors = 0; snapError = null; snapMs = 0f
         tempsDead = false; lastJpeg = null; jpegSeq = 0; way = LEGACY_WAYS[0]
         legacy2046 = 0; legacy2046Fixed = false; resyncs = 0
+        streamLive = false; liveLabel = ""; liveOrig = null; streamTemps = 0; streamFps = 0f
 
         say("HIK 4117 diagnostic · ${ThermalSources.idText(device)} · " +
             listOfNotNull(runCatching { device.manufacturerName }.getOrNull(),
@@ -289,6 +312,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             if (!legacy) restorePending2038() else legacyProbe()
             readInfo()
             if (!legacy) compensationOff()        // legacy writes: format not decoded yet
+            resumeLive()
         } else {
             tempsDead = true
             say("showing the module's own video (no temperature)")
@@ -297,9 +321,17 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         snapper = thread(name = "hik4117-2046", isDaemon = true) { snapLoop() }
     }
 
+    /** No live stream yet: the viewer runs [runStreamTest] on connect (test builds). */
+    val autoTest: Boolean get() = running.get() && !streamLive
+
     override fun stop() {
         snapping.set(false)
         snapper?.join(4000); snapper = null
+        if (streamLive) {
+            streamLive = false
+            liveOrig?.let { o -> ep0.withLock { restore2038(o, "after the live stream") } }
+            liveOrig = null
+        }
         // needs the stream still running: the command channel only answers while it does
         compRestore?.let { c ->
             val err = runCatching { simpleSet(3, 8, c) }.getOrDefault(-1)
@@ -338,10 +370,11 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             .format(videoFps, lastFrameKind.substringBefore(" · "), lastFrameLen))
         append("\n2046 %.0f ms/frame · ok=%d err=%d".format(snapMs, frameCount, snapErrors))
         snapError?.let { append(" · ").append(it.take(60)) }
+        if (streamLive) append("\nlive stream $liveLabel · %.1f temps/s · %d".format(streamFps, streamTemps))
         if (legacy) append("\nlegacy ${way.label} · 2046 ${LEGACY_2046[legacy2046]}" +
             (if (legacy2046Fixed) " ✓" else "") + " · resync $resyncs")
         append("\nbulk pl=$payloads bad=$badHeaders full=$fullReads err=$bulkErrors · ε(dev) $devEmissivity")
-        if (testing) append("\nstream test running…")
+        if (testing) append("\nstream test running… (about 1 min)")
     }
 
     override fun sensorTemp(): Int? = null
@@ -394,6 +427,15 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         testing = true
         val def = defaultPick()
         var orig: ByteArray? = null
+        var best: Live? = null
+        fun note(coding: Int?, pk: Pick, s: Sample) {
+            if (s.tps >= LIVE_MIN_FPS && s.tps > (best?.tps ?: 0f)) best = Live(coding, pk, s.tps)
+        }
+        if (streamLive) {                         // test from the default stream again
+            streamLive = false
+            liveOrig?.let { restore2038(it, "before the test") }
+            liveOrig = null
+        }
         try {
             ep0.withLock { }                      // a 2046 in flight finishes first
             say("— stream test")
@@ -405,7 +447,9 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
                     if (!running.get()) break
                     val pr = commit(pk)
                     Thread.sleep(SETTLE_MS)
-                    say("  ${pk.label}: ${probeText(pr)} → ${measure(MEASURE_MS)}")
+                    val s = measure(MEASURE_MS)
+                    say("  ${pk.label}: ${probeText(pr)} → $s")
+                    note(null, pk, s)
                 }
                 return
             }
@@ -433,16 +477,78 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
                     if (!running.get()) break
                     val pr = commit(pk)
                     Thread.sleep(SETTLE_MS)
-                    say("  ${pk.label}: ${probeText(pr)} → ${measure(MEASURE_MS)}")
+                    val s = measure(MEASURE_MS)
+                    say("  ${pk.label}: ${probeText(pr)} → $s")
+                    note(v, pk, s)
                 }
             }
         } catch (t: Throwable) {
             say("FAIL ${t.javaClass.simpleName}: ${t.message}")
         } finally {
-            orig?.let { restore2038(it, "after the test") }
-            commit(def)
+            val b = best
+            if (b != null && running.get() && (b.coding == null || orig != null)) {
+                goLive(b, orig)
+            } else {
+                orig?.let { restore2038(it, "after the test") }
+                commit(def)
+                say("no stream gave temperatures (≥ $LIVE_MIN_FPS/s) — 2046 snapshots stay")
+            }
             Thread.sleep(SETTLE_MS)
             say("after: ${measure(1500)}")
+            testing = false
+        }
+    }
+
+    /** Switch to [l] (2039 coding, then its format), remember it for the next connect.
+     *  [orig] is 2038 before any change; prefs keep it until [stop] puts it back. */
+    private fun goLive(l: Live, orig: ByteArray?) {
+        if (l.coding != null && orig != null) {
+            val err = runCatching { simpleSet(3, 5, orig.copyOf().also { it[0] = 1; it[1] = l.coding.toByte() }) }
+                .getOrDefault(-1)
+            say("live: coding=${l.coding} set err=$err")
+        }
+        commit(l.pick)
+        liveOrig = if (l.coding != null) orig else null
+        liveLabel = "coding=${l.coding ?: "–"} ${l.pick.label}"
+        streamLive = true
+        prefs?.edit()?.putString(KEY_LIVE,
+            "${l.coding ?: 0},${l.pick.fmt},${l.pick.frame},${l.pick.interval}")?.apply()
+        say("LIVE stream: $liveLabel → %.1f temperature frames/s (kept for the next connect)".format(l.tps))
+    }
+
+    /** The stream a previous test kept: start in it; if no temperatures come in 3 s, forget
+     *  it, go back to 2046 and let the test run again. */
+    private fun resumeLive() {
+        val p = prefs?.getString(KEY_LIVE, null)?.split(',')?.mapNotNull { it.toIntOrNull() } ?: return
+        val forget = { prefs?.edit()?.remove(KEY_LIVE)?.apply() }
+        if (p.size < 4) { forget(); return }
+        val coding = p[0].takeIf { it > 0 }
+        if (coding != null && legacy) { forget(); return }
+        val pick = Pick(p[1], p[2], p[3], formats.firstOrNull { it.index == p[1] }?.let { f ->
+            f.frames.firstOrNull { it.index == p[2] }?.let { "${f.kind} ${it.w}x${it.h}" } } ?: "fmt${p[1]}/${p[2]}")
+        say("— live stream from the last test: coding=${coding ?: "–"} ${pick.label}")
+        testing = true
+        try {
+            val orig = if (coding == null) null else runCatching { simpleGet(3, 5) }.getOrNull()
+                ?.takeIf { it.size >= 2 }
+            if (coding != null && orig == null) { say("  2038 read failed — test instead"); forget(); return }
+            if (orig != null) prefs?.edit()?.putString(KEY_RESTORE_2038, hex(orig, orig.size, ""))?.apply()
+            val t0 = streamTemps
+            goLive(Live(coding, pick, 0f), orig)
+            streamLive = false                    // until it proves itself
+            Thread.sleep(3000)
+            val n = streamTemps - t0
+            if (n >= LIVE_MIN_FPS * 3) {
+                streamLive = true
+                say("  $n temperature frames in 3 s — live")
+            } else {
+                say("  $n temperature frames in 3 s — back to 2046, the test runs again")
+                forget()
+                orig?.let { restore2038(it, "after a failed resume") }
+                liveOrig = null
+                commit(defaultPick())
+            }
+        } finally {
             testing = false
         }
     }
@@ -467,9 +573,11 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     }
 
     private class Sample(val frames: Long, val fps: Float, val kbps: Float, val len: Int,
-                         val kind: String, val head: String, val bad: Long, val full: Long) {
+                         val kind: String, val head: String, val bad: Long, val full: Long,
+                         val tps: Float) {
         override fun toString(): String {
-            val extra = if (bad > 0 || full > 0) " bad=$bad full=$full" else ""
+            val extra = (if (bad > 0 || full > 0) " bad=$bad full=$full" else "") +
+                (if (tps > 0f) " · TEMPS %.1f/s".format(tps) else "")
             return if (frames == 0L) "no frames (%.0f KB/s$extra)".format(kbps)
             else "%.1f fps · %d B · %s · %.0f KB/s%s · %s".format(fps, len, kind, kbps, extra, head)
         }
@@ -477,12 +585,14 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
 
     private fun measure(ms: Long): Sample {
         val f0 = videoFrames; val b0 = bytesIn; val bad0 = badHeaders; val full0 = fullReads
+        val t0s = streamTemps
         val t0 = System.nanoTime()
         Thread.sleep(ms)
         val dt = (System.nanoTime() - t0) / 1e9f
         val n = videoFrames - f0
         return Sample(n, n / dt, (bytesIn - b0) / 1024f / dt, lastFrameLen, lastFrameKind,
-                      hex(lastFrameHead, 12), badHeaders - bad0, fullReads - full0)
+                      hex(lastFrameHead, 12), badHeaders - bad0, fullReads - full0,
+                      (streamTemps - t0s) / dt)
     }
 
     // ---- start-up reads ---------------------------------------------------------------
@@ -552,7 +662,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     private fun snapLoop() {
         var fails = 0
         while (snapping.get()) {
-            if (testing) { Thread.sleep(50); continue }
+            if (testing || streamLive) { Thread.sleep(50); continue }
             val t0 = System.nanoTime()
             try {
                 val m = capture2046()
@@ -903,6 +1013,16 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         if (lastFrameKind == "JPEG") { lastJpeg = frame.copyOf(n); jpegSeq++ }
         videoFrames++
         val now = System.nanoTime()
+        if (lastFrameKind.startsWith("FRMI")) frmiTemps(frame, n, findFrmi(frame, n))?.let { m ->
+            tempLock.withLock { latestTemp = m }
+            frameCount++; streamTemps++
+            if (tfStart == 0L) tfStart = now
+            tfFrames++
+            if (now - tfStart >= 1_000_000_000L) {
+                streamFps = tfFrames * 1e9f / (now - tfStart)
+                tfStart = now; tfFrames = 0
+            }
+        }
         if (fpsStart == 0L) fpsStart = now
         fpsFrames++
         if (now - fpsStart >= 1_000_000_000L) {
@@ -962,6 +1082,38 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         val dl = minOf(len, n - d)
         sb.append(" ·").append(if (mode == 1) u16Range(b, d, dl) else u16Range(b, d, dl) + f32Range(b, d, dl))
         return sb.toString()
+    }
+
+    /**
+     * The temperature matrix of a FRMI frame at [k], as 120×160 milli-°C, or null when it
+     * has none. STREAM_RT_DATA_INFO_S gives w×h (120×160, or 160×120 — turned clockwise to
+     * portrait); STREAM_FS_SUPPLE_INFO_TEMP mode 0 = f32 °C, 1 = u16 ÷ dwTmScale + dwTmOffset
+     * (read as kelvin when it averages above 150). Null too if over 1 % is not °C-like.
+     */
+    private fun frmiTemps(b: ByteArray, n: Int, k: Int): IntArray? {
+        if (k < 0 || k + 16 > n) return null
+        val head = le32(b, k + 4)
+        val rt = k + if (head > FRMI_TEMP_HEAD) 20 else 16
+        if (head < 16 || rt + 64 > n) return null
+        val w = le32(b, rt + 28); val h = le32(b, rt + 32)
+        if (!((w == W && h == H) || (w == H && h == W))) return null
+        val mode = le32(b, rt + 48)
+        val scale = le32(b, rt + 52).coerceAtLeast(1).toFloat(); val off = le32(b, rt + 56)
+        val px = W * H
+        val d = k + head
+        if (d + px * (if (mode == 1) 2 else 4) > n) return null
+        val bb = ByteBuffer.wrap(b, 0, n).order(ByteOrder.LITTLE_ENDIAN)
+        val c = FloatArray(px) {
+            if (mode == 1) (bb.getShort(d + it * 2).toInt() and 0xffff) / scale + off
+            else bb.getFloat(d + it * 4)
+        }
+        if (mode == 1 && c.average() > 150) for (i in c.indices) c[i] -= 273.15f
+        if (c.count { !it.isFinite() || it < -60f || it > 1000f } * 100 > px) return null
+        return IntArray(px) { i ->
+            val x = i % W; val y = i / W
+            val f = if (w == W) c[i] else c[(W - 1 - x) * H + y]
+            if (f.isFinite()) (f.coerceIn(-60f, 1000f) * 1000f).roundToInt() else 0
+        }
     }
 
     private fun u16Range(b: ByteArray, off: Int, len: Int): String {

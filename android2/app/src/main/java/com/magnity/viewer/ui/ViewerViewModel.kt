@@ -475,6 +475,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 (sdk as? Hik4117Source)?.let { sdkLog = it.report() }
                 status = str(R.string.st_connected, sdk.width, sdk.height)
                 startSdkLoop()
+                // test builds: the stream test runs by itself, the tester only sends the report
+                if ((sdk as? Hik4117Source)?.autoTest == true) runHik4117Test()
             } catch (e: Throwable) {
                 Log.e(TAG, "connect failed", e)
                 status = str(R.string.st_connect_failed,

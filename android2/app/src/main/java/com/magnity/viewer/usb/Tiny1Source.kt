@@ -28,8 +28,9 @@ import kotlin.concurrent.withLock
  * plus one trailing flag byte (1 = the SDK asks for a USB restart). Tiny1C: raw / 64 K
  * (the sample's `(T + 273.15) * 16 * 4`); the Tiny1B demo of 2020 divides by 16 instead —
  * the scale is picked per frame from the values ([scaleShift]), since the two ranges don't
- * overlap for any real scene. The Tiny1B demo also lays its frame out 192 wide × 256 tall;
- * [diag] shows which row length gives the smoother picture, to confirm it on hardware.
+ * overlap for any real scene. The Tiny1B demo lays its frame out 192 wide × 256 tall, but
+ * a Tiny1B on hardware (2.9-alpha5, rowΔ 256:1 192:24) has 256-pixel rows like the Tiny1C;
+ * read as 192 wide it showed stripes. [diag] keeps the row-length check.
  *
  * Not done (yet): high/low gain switching (default high gain), the SDK's NUC-table
  * temperature correction, and [sensorTemp].
@@ -61,9 +62,8 @@ class Tiny1Source(val device: UsbDevice) : ThermalSource {
     override val kind = if (tiny1b) "tiny1b" else "tiny1c"
     /** Datasheet lens 3.2 mm ≈ 56° across 256 px: 128 / tan(28°). */
     override val focalPx = 240.7f
-    // the Tiny1B demo draws its frame 192 wide × 256 tall; the Tiny1C sample 256 × 192
-    override val width = if (tiny1b) SENSOR_H else SENSOR_W
-    override val height = if (tiny1b) SENSOR_W else SENSOR_H
+    override val width = SENSOR_W
+    override val height = SENSOR_H
     override val fps = FPS
     @Volatile override var frameCount = 0L; private set
 
