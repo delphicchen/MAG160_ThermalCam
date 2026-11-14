@@ -105,6 +105,12 @@ SDK, and grew from there to other modules.
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.11.2 — 2026-11-14
+- **Fusion button on the main screen** — next to the palette, highlighted while fusion is on; its
+  settings stay in the menu.
+- **Colour bar labels no longer clipped**; the action buttons are a little lower to make room.
+- **New app icon.**
+
 ### 2.11.1 — 2026-11-14
 - **Fixed a crash in the calibration wizard** — opening the keyboard for the lens spacing squeezed
   the image so narrow that drawing the colour bar's contrast knob threw.
