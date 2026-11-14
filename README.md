@@ -30,8 +30,8 @@ fusion whichever module it is.
 |---|---|---|
 | Magnity **MAG160 / MAG-Mx / MAG-Cx** | 160×120 | ✅ Supported (factory SDK) |
 | InfiRay **Tiny2C** (AC020) | 256×192 | ✅ Supported (vendor AC020 SDK) |
-| InfiRay **Tiny1C** / **Tiny1B** (USB) | 256×192 | 🧪 In testing (2.9-alpha5, vendor IRUVC SDK) |
-| Hikvision **TB-4117-3/S** (USB) | 160×120 | 🧪 Diagnostic support (2.8) |
+| InfiRay **Tiny1C** / **Tiny1B** (USB) | 256×192 | ✅ Supported (2.9, vendor IRUVC SDK) |
+| Hikvision **TB-4117-3/S** (USB) | 160×120 | ✅ Supported (2.9) — ~23 fps on newer firmware, ~3 fps on older V5.x |
 
 ## 🤝 Help add more modules
 
@@ -54,7 +54,7 @@ SDK, and grew from there to other modules.
 |---|---|
 | 📱 **Works on Android 15+** | Runs where the factory MAG-Cx / MAG-Mx apps no longer do. |
 | 🌡️ **Real absolute temperature** | Straight from the factory SDK — fully corrected, no manual calibration. |
-| 📷 **Several modules, one app** | Magnity MAG160 / MAG-Mx, InfiRay **Tiny2C** (256×192) and, in testing, Hikvision **TB-4117** — plug one in and MagViewer recognises it. |
+| 📷 **Several modules, one app** | Magnity MAG160 / MAG-Mx, InfiRay **Tiny2C**, **Tiny1C** / **Tiny1B** (256×192) and Hikvision **TB-4117** — plug one in and MagViewer recognises it. |
 | 🎯 **MIN / MAX / CTR / SPOT / ROI markers** | Find the hottest and coldest point instantly, read the centre crosshair, tap for a spot or drag a box for its mean, plus a live colour bar and a smoothly tracking auto range. |
 | 🔍 **Detail enhancement (DDE)** | Optional commercial-camera look: local contrast and edges brought out, flat areas quieter — display only, readouts untouched. |
 | 🎚️ **Adjustable emissivity** | Set ε from 0.10 to 1.00, with one-tap presets for skin, matte paint and wood. |
@@ -103,6 +103,24 @@ SDK, and grew from there to other modules.
 
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
+
+### 2.9 — 2026-11-14
+- **InfiRay Tiny1C and Tiny1B** (256×192, USB) through InfiRay's IRUVC Android SDK 1.4.2:
+  temperatures, FFC and emissivity.
+- **Hikvision TB-4117-3/S: full support.** On newer firmware MagViewer finds the module's
+  temperature stream by itself on first connect (about a minute) and shows it live at ~23 fps,
+  then starts in it straight away; FFC and emissivity are sent to the module. Older firmware
+  (V5.x) speaks an older protocol, now decoded for reading: temperatures at ~3 fps (FFC and
+  emissivity not yet). Before the first temperature frame the
+  module's own video is shown.
+- **ROI: drag a box** on the image for its mean temperature (tap = SPOT, now with its value on
+  the picture); in the live view, captures and `.mgt` playback.
+- **Contrast (γ) handle on the colour bar** — drag it, double-tap for 1.00 (the slider in ☰ is
+  gone). Mirror is remembered per camera.
+- **Auto range keeps hot spots**: the hot end follows the 99.9th percentile plus 4 % headroom;
+  a warm object filling the frame is no longer a flat white patch.
+- The image keeps its size: one status line under the buttons (details moved to Debug), and the
+  readout row never wraps.
 
 ### 2.8 — 2026-10-27
 - **Runs on Android 10 and later** (2.7 needed Android 13). HarmonyOS 2–4 may work (not
