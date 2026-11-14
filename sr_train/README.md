@@ -69,7 +69,8 @@ sr_train/
 ├── colab/
 │   ├── train_thermal_sr.ipynb           the Colab run (MODEL = 'full' / 'medium' / 'lite')
 │   ├── train_thermal_sr_lite.ipynb      same, preset to the lite 32/10 model — Run all
-│   └── train_thermal_sr_medium.ipynb    same, preset to the medium 48/10 model — Run all
+│   ├── train_thermal_sr_medium.ipynb    same, preset to the medium 48/10 model — Run all
+│   └── train_thermal_sr_v5.ipynb        v5: teacher + distilled re-parameterised students
 ├── options/
 │   ├── 01_thermal_srvgg_x4_net.yml      stage 1, L1 + spectrum + gradient — the model
 │   ├── 02_thermal_srvgg_x4_gan.yml      stage 2, + VGG + light GAN (optional, off)
@@ -83,7 +84,10 @@ sr_train/
     ├── ncnn_to_pth.py                   exported ncnn SRVGG model → BasicSR checkpoint
     ├── convert_ncnn.sh                  pnnx (or onnx2ncnn) → .param/.bin → fp16
     ├── verify_ncnn.py                   PyTorch vs ncnn, with tolerance rationale
-    └── hallucination_check.py           fake-hot-spot / energy-preservation validation
+    ├── hallucination_check.py           fake-hot-spot / energy-preservation validation
+    ├── rep_fold.py                      v5: fold RepSRVGG ↔ SRVGGNetCompact (self-checking)
+    ├── grey_teacher_init.py             v5: RealESRNet_x4plus → 1-channel teacher start
+    └── eval_psnr.py                     v5: PSNR table of several checkpoints
 ```
 
 Work inside a clone of `xinntao/Real-ESRGAN`; these files sit beside it and are
@@ -351,6 +355,25 @@ the output conv shrinks (~2 % of the network).
 
    The app offers a package to a camera whose frame size is inside the zip (these: the
    Tiny2C); on another camera, load the zip by hand — it then serves every camera.
+
+## v5 — distillation + re-parameterisation (all three sizes)
+
+Same app models, same ncnn graphs and frame times — better weights. A large RRDBNet 64/23
+teacher (Colab only, warm-started from RealESRNet_x4plus folded to one channel) is trained on
+v4's data, degradation and loss; then each student — full 64/10, medium 48/10, lite 32/10 —
+starts from the app's bundled model of its size, is trained re-parameterised (3×3 + 1×1 +
+identity per conv) against the GT and the teacher's output, and is folded back into a plain
+SRVGGNetCompact. Plan, budget and acceptance rules: [`PLAN_V5.md`](PLAN_V5.md).
+
+Open [`colab/train_thermal_sr_v5.ipynb`](colab/train_thermal_sr_v5.ipynb) in Colab
+([direct link](https://colab.research.google.com/github/delphicchen/MAG160_ThermalCam/blob/main/sr_train/colab/train_thermal_sr_v5.ipynb)),
+pick an A100, run once with `SMOKE = True`, then *Run all* for real. It ends with
+`thermal_ncnn_v5.zip`, `…_v5_medium48.zip`, `…_v5_lite32.zip` for **Load SR model (.zip)…**
+and a PSNR / fake-hot-spot comparison against the bundled models.
+
+New files: `thermal_arch/thermal_v5.py` (`RepSRVGG`, `ThermalDistillModel`),
+`options/03_teacher_rrdb_x4.yml`, `options/04_distill_rep_x4.yml`, `scripts/rep_fold.py`,
+`scripts/grey_teacher_init.py`, `scripts/eval_psnr.py`.
 
 ## Time estimates (single RTX 3090-class GPU)
 

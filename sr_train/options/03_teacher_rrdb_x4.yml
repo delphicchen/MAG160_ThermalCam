@@ -1,0 +1,158 @@
+# v5 teacher (sr_train/PLAN_V5.md) — a large RRDBNet trained on exactly stage 1's data,
+# degradation and loss. It never ships: it runs on Colab only, as the target the small
+# student is distilled towards (04_distill_rep_x4.yml). Warm start: RealESRNet_x4plus (the
+# L1-only Real-ESRGAN, no GAN), folded to one channel by scripts/grey_teacher_init.py.
+name: thermal_v5_teacher
+model_type: ThermalRealESRNetModel
+scale: 4
+num_gpu: 1
+manual_seed: 0
+
+# ---- degradation, stage 1 of 2 -------------------------------------------------------
+# Changes vs finetune_realesrgan_x4plus.yml, and why:
+#  * blur_sigma 0.2–1.5 (was 0.2–3.0): the fixed 6.5 mm lens is always in focus and the
+#    sensor is already the resolution limit — heavy blur is not a degradation this camera
+#    produces, and training on it costs sharpness.
+#  * sinc_prob 0 (was 0.1): sinc ringing models a resampling filter in a photo pipeline.
+#    The thermal path has none, and ringing halos next to a hot edge read as fake
+#    temperature.
+#  * noise stronger and Poisson-weighted (gaussian_prob 0.3 vs 0.5, poisson 1–3.0):
+#    microbolometer noise is dominated by shot/thermal noise that scales with signal.
+#  * gray_noise_prob high: the sensor is single-channel, so its noise is identical in
+#    R, G and B after we replicate the grey frame.
+#  * jpeg_range kept but mild — the SDK path has no JPEG, this only adds robustness.
+#  * FPN + low-contrast: added by ThermalRealESRNetModel, see archs/thermal_degradation.py
+resize_prob: [0.2, 0.7, 0.1]   # up, down, keep
+resize_range: [0.3, 1.5]
+gaussian_noise_prob: 0.3
+noise_range: [1, 25]
+poisson_scale_range: [0.05, 3.0]
+gray_noise_prob: 0.6
+jpeg_range: [50, 95]
+
+second_blur_prob: 0.5
+resize_prob2: [0.3, 0.6, 0.1]
+resize_range2: [0.5, 1.2]
+gaussian_noise_prob2: 0.3
+noise_range2: [1, 15]
+poisson_scale_range2: [0.05, 2.0]
+gray_noise_prob2: 0.6
+jpeg_range2: [60, 95]
+
+gt_size: 256
+queue_size: 180
+
+# USM-sharpened ground truth. Stock Real-ESRGAN trains against a sharpened GT, which
+# teaches the network to overshoot edges — pleasant on photos, but on a thermal frame an
+# overshoot beside a hot edge reads as a temperature that is not there. Trained against
+# the true GT instead; the fake-hot-spot check in scripts/hallucination_check.py is what
+# this is protecting.
+gt_usm: false
+
+# ---- sensor view (thermal_arch/thermal_degradation.py) ------------------------------
+# Each crop is a scene of random temperature span; the sensor adds noise of a size in °C;
+# the display range is the 1-99 % of that noisy frame, applied to input and target alike
+# — what the app does. Generic microbolometer ranges, not one unit's measurement: they
+# cover 38 real MAG160 frames (span 0.7-33 °C, pixel noise ~0.1-0.2 °C, stripes up to
+# ~0.1 °C) with margin. Stripes run along both axes equally (the app rotates before
+# upscaling). scripts/estimate_fpn_stats.py says whether a noisier unit needs wider ones.
+sensor_prob: 0.9
+sensor_span_c: [0.5, 40.0]      # log-uniform
+sensor_noise_c: [0.02, 0.20]
+sensor_noise_log: true         # log-uniform: the app's temporal denoise (on by default)
+                               # leaves most real inputs at the quiet end
+sensor_stripe_c: [0.0, 0.10]
+sensor_map_c: [0.0, 0.05]
+sensor_gain: [0.0, 0.004]       # relative
+
+datasets:
+  train:
+    name: thermal_hr
+    type: RealESRGANDataset
+    dataroot_gt: datasets/thermal_hr
+    meta_info: datasets/meta_info/thermal_hr.txt
+    io_backend:
+      type: disk
+
+    blur_kernel_size: 15
+    kernel_list: ['iso', 'aniso', 'generalized_iso', 'generalized_aniso', 'plateau_iso', 'plateau_aniso']
+    kernel_prob: [0.50, 0.25, 0.10, 0.05, 0.07, 0.03]
+    sinc_prob: 0
+    blur_sigma: [0.2, 1.5]
+    betag_range: [0.5, 4]
+    betap_range: [1, 2]
+
+    blur_kernel_size2: 11
+    kernel_list2: ['iso', 'aniso', 'generalized_iso', 'generalized_aniso', 'plateau_iso', 'plateau_aniso']
+    kernel_prob2: [0.50, 0.25, 0.10, 0.05, 0.07, 0.03]
+    sinc_prob2: 0
+    blur_sigma2: [0.2, 1.0]
+    betag_range2: [0.5, 4]
+    betap_range2: [1, 2]
+
+    final_sinc_prob: 0
+
+    gt_size: 256
+    use_hflip: true
+    use_rot: false          # thermal scenes have a gravity direction; keep it
+
+    use_shuffle: true
+    num_worker_per_gpu: 5
+    batch_size_per_gpu: 12
+    dataset_enlarge_ratio: 1
+    prefetch_mode: ~
+
+# Validation is visual: 20 held-out real MAG160Core frames, no ground truth exists at 4x.
+# BasicSR needs paired data for metrics, so we score nothing here and instead dump
+# comparison grids with scripts/hallucination_check.py at each checkpoint.
+
+# RRDBNet 64/23, one channel in and out: RealESRNet_x4plus's shape (16.7 M parameters,
+# ~40x the student). Too heavy for a phone; it only has to be good.
+network_g:
+  type: RRDBNet
+  num_in_ch: 1
+  num_out_ch: 1
+  num_feat: 64
+  num_block: 23
+  num_grow_ch: 32
+  scale: 4
+
+path:
+  pretrain_network_g: experiments/pretrained_models/RealESRNet_x4plus-grey.pth
+  param_key_g: params_ema
+  strict_load_g: true
+  resume_state: ~
+
+train:
+  ema_decay: 0.999
+  optim_g:
+    type: Adam
+    lr: !!float 1e-4      # fine-tune of a trained net: half of stage 1's
+    weight_decay: 0
+    betas: [0.9, 0.99]
+
+  scheduler:
+    type: MultiStepLR
+    milestones: [18000]
+    gamma: 0.5
+
+  total_iter: 30000      # the notebook overrides it (TEACHER_ITER)
+  warmup_iter: -1
+
+  # L1 plus L1s on the image spectrum and on Sobel gradients: hold edges a plain L1
+  # averages away, without a GAN's license to invent texture (thermal_arch/thermal_degradation.py)
+  pixel_opt:
+    type: L1FFTLoss
+    loss_weight: 1.0
+    fft_weight: 1.0     # orthonormal spectrum L1 ~32 % of the loss on over-smoothed output
+    grad_weight: 0.5    # Sobel-gradient L1 ~13 %; the pixel L1 still leads (~55 %)
+    reduction: mean
+
+logger:
+  print_freq: 100
+  save_checkpoint_freq: !!float 2e3
+  use_tb_logger: true
+
+dist_params:
+  backend: nccl
+  port: 29500
