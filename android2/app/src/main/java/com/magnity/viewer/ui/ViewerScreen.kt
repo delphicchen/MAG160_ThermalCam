@@ -108,7 +108,8 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                 val density = LocalDensity.current
                 val barH = 40.dp
                 val paneWpx = with(density) { maxWidth.toPx() }
-                val paneHpx = with(density) { (maxHeight - barH).toPx() }
+                // never negative: the keyboard can leave the pane shorter than the bar
+                val paneHpx = with(density) { (maxHeight - barH).coerceAtLeast(0.dp).toPx() }
                 // bitmap aspect, not the grid's: wide-search fusion shows the visible frame
                 val bw = fr.bitmap.width.toFloat(); val bh = fr.bitmap.height.toFloat()
                 val scale = min(paneWpx / bw, paneHpx / bh)
@@ -490,18 +491,23 @@ private fun RangeBar(
             labelPaint.color = HOT.copy(alpha = a).toArgb()
             val hiTxt = "%.1f".format(hi)
             val hiW = labelPaint.measureText(hiTxt)
-            c.nativeCanvas.drawText(hiTxt, (xHi - hiW / 2f).coerceIn(0f, size.width - hiW),
+            c.nativeCanvas.drawText(hiTxt, (xHi - hiW / 2f).clampTo(0f, size.width - hiW),
                                     ty, labelPaint)
 
             labelPaint.color = COLD.copy(alpha = a).toArgb()
             val loTxt = "%.1f".format(lo)
             val loW = labelPaint.measureText(loTxt)
             c.nativeCanvas.drawText(loTxt,
-                (xLo - loW / 2f).coerceIn(domLoW + gap, size.width - domHiW - gap - loW),
+                (xLo - loW / 2f).clampTo(domLoW + gap, size.width - domHiW - gap - loW),
                 by, labelPaint)
         }
     }
 }
+
+/** coerceIn that survives an empty range: a bar squeezed narrower than what is drawn on it
+ *  (the image shrinks to almost nothing while the keyboard is up) pins to [lo] instead of
+ *  throwing in the draw pass. */
+private fun Float.clampTo(lo: Float, hi: Float) = if (hi < lo) lo else coerceIn(lo, hi)
 
 @Composable
 internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modifier: Modifier,
@@ -535,7 +541,7 @@ internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modif
             if (onGamma != null) {
                 val kw = 12.dp.toPx()
                 val kx = (size.width * Math.pow(0.5, gamma.toDouble()).toFloat())
-                    .coerceIn(kw / 2, size.width - kw / 2)
+                    .clampTo(kw / 2, size.width - kw / 2)
                 val cr = androidx.compose.ui.geometry.CornerRadius(kw / 2)
                 drawRoundRect(Color.Black, Offset(kx - kw / 2 - 2f, 0f),
                               Size(kw + 4f, size.height), cr)

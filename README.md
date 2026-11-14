@@ -105,6 +105,10 @@ SDK, and grew from there to other modules.
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.11.1 — 2026-11-14
+- **Fixed a crash in the calibration wizard** — opening the keyboard for the lens spacing squeezed
+  the image so narrow that drawing the colour bar's contrast knob threw.
+
 ### 2.11 — 2026-11-14
 - **Simpler fusion calibration** — the calibration wizard no longer needs measured distances:
   enter the spacing between the phone's lens and the thermal lens (one ruler measurement), align
