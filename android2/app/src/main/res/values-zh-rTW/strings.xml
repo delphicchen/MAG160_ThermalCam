@@ -48,6 +48,7 @@
     <string name="open_capture">開啟溫度檔…</string>
     <string name="fusion_needs_camera">可見光融合需要相機權限</string>
     <string name="fusion">可見光融合（beta）</string>
+    <string name="fusion_short">融合</string>
     <string name="fusion_edges">MSX 輪廓</string>
     <string name="fusion_blend">混合</string>
     <string name="fusion_wide">大視野</string>

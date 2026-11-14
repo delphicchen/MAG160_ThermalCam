@@ -67,6 +67,9 @@ internal val WARN = Color(0xFFD6A93D)
 /** AF regions the HAL reports using (diagnostics, next to the requested [WARN] window). */
 internal val HAL_AF = Color(0xFF39C5CF)
 
+/** Height of the action and bottom-row buttons (Material's default is 40). */
+private val ACTION_H = 36.dp
+
 @Composable
 fun ViewerScreen(vm: ViewerViewModel = viewModel()) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -106,7 +109,8 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                            contentAlignment = Alignment.Center) {
             if (fr != null) {
                 val density = LocalDensity.current
-                val barH = 40.dp
+                // spacer 6 + bar with its knob 26 + the label row: 40 clipped the labels
+                val barH = 50.dp
                 val paneWpx = with(density) { maxWidth.toPx() }
                 // never negative: the keyboard can leave the pane shorter than the bar
                 val paneHpx = with(density) { (maxHeight - barH).coerceAtLeast(0.dp).toPx() }
@@ -198,19 +202,19 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             // actions
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { vm.doFfc() }, enabled = vm.connected && !vm.ffcBusy,
-                       modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                       modifier = Modifier.weight(1f).height(ACTION_H), contentPadding = PaddingValues(4.dp)) {
                     Text(if (vm.ffcBusy) "FFC…" else "FFC") }
                 Button(onClick = { vm.paused = !vm.paused }, enabled = vm.connected,
-                       modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                       modifier = Modifier.weight(1f).height(ACTION_H), contentPadding = PaddingValues(4.dp)) {
                     Text(stringResource(if (vm.paused) R.string.resume else R.string.pause)) }
                 FilledTonalButton(onClick = { vm.takeScreenshot() }, enabled = fr != null,
-                                  modifier = Modifier.weight(1f),
+                                  modifier = Modifier.weight(1f).height(ACTION_H),
                                   contentPadding = PaddingValues(4.dp)) { Text(stringResource(R.string.snap)) }
                 Button(onClick = { vm.toggleRecording() }, enabled = fr != null || vm.recording,
                        colors = ButtonDefaults.buttonColors(
                            containerColor = if (vm.recording) Color(0xFFDA3633) else Color(0xFF5A2E2E),
                            contentColor = Color.White),
-                       modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                       modifier = Modifier.weight(1f).height(ACTION_H), contentPadding = PaddingValues(4.dp)) {
                     Text(stringResource(if (vm.recording) R.string.stop else R.string.rec)) }
             }
 
@@ -218,12 +222,12 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
 
         // menu + palette + REC timer + status
         Row(verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             OutlinedButton(onClick = onMenu, contentPadding = PaddingValues(0.dp),
-                           modifier = Modifier.size(38.dp)) { Text("☰") }
+                           modifier = Modifier.size(ACTION_H)) { Text("☰") }
             var exp by remember { mutableStateOf(false) }
             Box {
-                OutlinedButton(onClick = { exp = true },
+                OutlinedButton(onClick = { exp = true }, modifier = Modifier.height(ACTION_H),
                                contentPadding = PaddingValues(horizontal = 10.dp)) {
                     Text(paletteLabel(vm.paletteName), fontSize = 12.sp)
                 }
@@ -235,8 +239,29 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                     }
                 }
             }
+            // visible fusion on/off, next to the palette: both change how the picture is
+            // drawn; its settings stay in the drawer. Highlighted while it is on.
+            val cameraPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                vm.fusionOn = granted
+                if (!granted) vm.notice = vm.str(R.string.fusion_needs_camera)
+            }
+            OutlinedButton(onClick = {
+                               if (!vm.fusionOn && !vm.hasCameraPermission())
+                                   cameraPermission.launch(Manifest.permission.CAMERA)
+                               else vm.fusionOn = !vm.fusionOn
+                           },
+                           modifier = Modifier.height(ACTION_H),
+                           contentPadding = PaddingValues(horizontal = 8.dp),
+                           colors = ButtonDefaults.outlinedButtonColors(
+                               containerColor = if (vm.fusionOn) Color(0xFF1F3A5F) else Color.Transparent)) {
+                Text(stringResource(R.string.fusion_short), fontSize = 12.sp,
+                     color = if (vm.fusionOn) ACCENT else FG)
+            }
             // timing overlay on the image — highlighted while it is on
             OutlinedButton(onClick = { vm.debugOsd = !vm.debugOsd },
+                           modifier = Modifier.height(ACTION_H),
                            contentPadding = PaddingValues(horizontal = 8.dp),
                            colors = ButtonDefaults.outlinedButtonColors(
                                containerColor = if (vm.debugOsd) Color(0xFF1F3A5F) else Color.Transparent)) {
@@ -262,7 +287,7 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                              overflow = TextOverflow.Ellipsis)
                     } else {
                         Text("${fr.w}×${fr.h} · " + "%.1f fps".format(vm.fps), color = ACCENT,
-                             fontSize = 13.sp, maxLines = 1)
+                             fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 } else {
                     Text(notice ?: vm.status,

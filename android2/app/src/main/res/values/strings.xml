@@ -49,6 +49,7 @@
     <string name="open_capture">Open temperature capture…</string>
     <string name="fusion_needs_camera">Visible fusion needs camera permission</string>
     <string name="fusion">Visible fusion (beta)</string>
+    <string name="fusion_short">Fusion</string>
     <string name="fusion_edges">MSX edges</string>
     <string name="fusion_blend">Blend</string>
     <string name="fusion_wide">Wide</string>
