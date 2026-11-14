@@ -9,7 +9,17 @@ Convolution `0=32`), not from this folder's name. A lite model imported in the d
 (`files/model-lite/`) overrides this one; see `../model/README.md` and
 `docs/THERMAL_SR_MODEL.md`.
 
-Bundled now (2026-10-26): SRVGGNetCompact **32/10**, 1-channel (°C sensor view), Colab
+Bundled now (2026-11-14): **v5** — the same SRVGGNetCompact 32/10 graph (the `.param` is
+byte-identical to v4's), new weights: trained re-parameterised (3×3 + 1×1 + identity, folded
+back) and distilled from an RRDBNet 64/23 teacher, 60k iterations from the v4 weights, L1 +
+FFT spectrum + gradient against GT and teacher, no GAN (`sr_train/PLAN_V5.md`,
+`train_thermal_sr_v5.ipynb`). Package `thermal_ncnn_v5_lite32.zip`.
+
+v4 → v5, both rebuilt from their ncnn fp16 files (PyTorch CPU): PSNR 30.10 → **30.22 dB** on
+the 200 CIDIS val frames (clean 4× area-down — ranks models only); invented peaks / frame
+23.3 → **19.0** on 20 of them. Not yet checked on real MAG160 / Tiny frames.
+
+The v4 model it replaces — 2026-10-26: SRVGGNetCompact **32/10**, 1-channel (°C sensor view), Colab
 `train_thermal_sr_lite.ipynb` — recipe v4 (`v4-l1-fft1-grad05-noiselog-lite32`): warm start
 = the bundled v4 64/10 pruned to 32 channels (largest-L1 filters), then 80k iterations of
 L1 + FFT spectrum + gradient loss, log-uniform sensor noise, no GAN; converted with pnnx
