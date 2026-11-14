@@ -100,6 +100,11 @@ Magnity **MAG-Mx / MAG-Cx** USB 热像仪（VID `0x833C`）硬件很好，但原
 完整说明与各版本 APK 都在
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases)。
 
+### 2.10 — 2026-11-14
+- **内置 Thermal SR 更清晰、捏造热点更少** — 完整／中量／轻量三种大小都换成 v5 权重：网络与速度不变，
+  训练时用重参数化并向大 40 倍的老师模型蒸馏（`sr_train/PLAN_V5.md`）。在未参与训练的热图像上：
+  PSNR +0.1–0.2 dB，捏造的热点比 2.9 少 5–18 %。
+
 ### 2.9 — 2026-11-14
 - **InfiRay Tiny1C 与 Tiny1B**（256×192，USB），通过 InfiRay 的 IRUVC Android SDK 1.4.2：温度、FFC、发射率。
 - **海康 TB-4117-3/S 正式支持**：新版固件第一次连接时自动找出模组的温度串流（约 1 分钟），实时约 23 fps，
