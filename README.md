@@ -55,7 +55,7 @@ SDK, and grew from there to other modules.
 | 📱 **Works on Android 15+** | Runs where the factory MAG-Cx / MAG-Mx apps no longer do. |
 | 🌡️ **Real absolute temperature** | Straight from the factory SDK — fully corrected, no manual calibration. |
 | 📷 **Several modules, one app** | Magnity MAG160 / MAG-Mx, InfiRay **Tiny2C** (256×192) and, in testing, Hikvision **TB-4117** — plug one in and MagViewer recognises it. |
-| 🎯 **MIN / MAX / CTR / SPOT markers** | Find the hottest and coldest point instantly, read the centre crosshair, plus a live colour bar and a smoothly tracking auto range. |
+| 🎯 **MIN / MAX / CTR / SPOT / ROI markers** | Find the hottest and coldest point instantly, read the centre crosshair, tap for a spot or drag a box for its mean, plus a live colour bar and a smoothly tracking auto range. |
 | 🔍 **Detail enhancement (DDE)** | Optional commercial-camera look: local contrast and edges brought out, flat areas quieter — display only, readouts untouched. |
 | 🎚️ **Adjustable emissivity** | Set ε from 0.10 to 1.00, with one-tap presets for skin, matte paint and wood. |
 | 🚀 **4× AI super-resolution** | A thermal-tuned Real-ESRGAN model on the GPU via **ncnn + Vulkan** turns 160×120 into a crisp 640×480. |

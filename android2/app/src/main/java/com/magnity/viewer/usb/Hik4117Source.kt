@@ -1122,8 +1122,11 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         val mode = le32(b, rt + 48)
         val scale = le32(b, rt + 52).coerceAtLeast(1).toFloat(); val off = le32(b, rt + 56)
         val px = W * H
-        val d = k + head
-        if (d + px * (if (mode == 1) 2 else 4) > n) return null
+        val bytes = px * (if (mode == 1) 2 else 4)
+        // dwLen = matrix + 4 (SDK); on hardware the 4 bytes come first — read from k + head
+        // they made the matrix one pixel late: 0.0 °C as MIN, a seam along one edge
+        val d = k + head + if (le32(b, k + 12) == bytes + 4) 4 else 0
+        if (d + bytes > n) return null
         val bb = ByteBuffer.wrap(b, 0, n).order(ByteOrder.LITTLE_ENDIAN)
         val c = FloatArray(px) {
             if (mode == 1) (bb.getShort(d + it * 2).toInt() and 0xffff) / scale + off

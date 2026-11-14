@@ -148,7 +148,9 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             Readout("MIN", measured?.tempMin, COLD, vm.showMinRoi) { vm.showMinRoi = !vm.showMinRoi }
             Readout("MAX", measured?.tempMax, HOT, vm.showMaxRoi) { vm.showMaxRoi = !vm.showMaxRoi }
             Readout("CTR", vm.centerCelsius(fr), ACCENT, vm.showCenter) { vm.showCenter = !vm.showCenter }
-            Readout("SPOT", vm.spotCelsius(), Color.White, vm.spot != null) { vm.spot = null }
+            // tap the image: SPOT (one pixel); drag: ROI (mean of the box); tap here: clear
+            Readout(if (vm.roiBox != null) "ROI" else "SPOT", vm.roiCelsius(measured), Color.White,
+                    vm.spot != null || vm.roiBox != null) { vm.clearRoi() }
             Spacer(Modifier.weight(1f))
             // stacked so four readouts still fit one row on a ~390 dp phone
             Column(horizontalAlignment = Alignment.End) {
@@ -321,16 +323,31 @@ private fun ThermalImage(
             setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
         }
     }
+    fun grid(off: Offset) = ((off.x - left) / cellW).toInt() to ((off.y - top) / cellH).toInt()
     Canvas(modifier.pointerInput(fr.w, fr.h, dispW, dispH, r) {
         detectTapGestures(
             onTap = { off ->
-                val gx = ((off.x - left) / cellW).toInt()
-                val gy = ((off.y - top) / cellH).toInt()
+                val (gx, gy) = grid(off)
                 // outside the thermal inset there is no temperature to read
-                if (gx in 0 until fr.w && gy in 0 until fr.h) vm.spot = gx to gy
+                if (gx in 0 until fr.w && gy in 0 until fr.h) vm.setSpot(gx, gy)
             },
-            onLongPress = { vm.spot = null },
+            onLongPress = { vm.clearRoi() },
         )
+    }.pointerInput(fr.w, fr.h, dispW, dispH, r) {
+        // drag: an area from where the finger went down to where it is, clipped to the grid
+        var x0 = 0; var y0 = 0
+        detectDragGestures(
+            onDragStart = { off ->
+                val (gx, gy) = grid(off)
+                x0 = gx.coerceIn(0, fr.w - 1); y0 = gy.coerceIn(0, fr.h - 1)
+            },
+        ) { change, _ ->
+            change.consume()
+            val (gx, gy) = grid(change.position)
+            val x1 = gx.coerceIn(0, fr.w - 1); val y1 = gy.coerceIn(0, fr.h - 1)
+            vm.setBox(android.graphics.Rect(minOf(x0, x1), minOf(y0, y1),
+                                            maxOf(x0, x1) + 1, maxOf(y0, y1) + 1))
+        }
     }) {
         drawImage(image, dstSize = IntSize(dispW, dispH), filterQuality = FilterQuality.Low)
         fun label(c: Offset, color: Color, v: Float) {
@@ -361,6 +378,15 @@ private fun ThermalImage(
             val c = Offset(left + (sx + 0.5f) * cellW, top + (sy + 0.5f) * cellH)
             drawLine(Color.White, c - Offset(18f, 0f), c + Offset(18f, 0f), 3f)
             drawLine(Color.White, c - Offset(0f, 18f), c + Offset(0f, 18f), 3f)
+            if (!fr.videoOnly) vm.roiCelsius(fr)?.let { label(c, Color.White, it) }
+        }
+        vm.roiBox?.let { b ->
+            val tl = Offset(left + b.left * cellW, top + b.top * cellH)
+            val sz = Size(b.width() * cellW, b.height() * cellH)
+            drawRect(Color.Black, tl, sz, style = Stroke(6f))
+            drawRect(Color.White, tl, sz, style = Stroke(3f))
+            // the mean, above the box's top-right corner
+            if (!fr.videoOnly) vm.roiCelsius(fr)?.let { label(Offset(tl.x + sz.width - 24f, tl.y), Color.White, it) }
         }
         // AF regions the HAL reports — dashed cyan, compare with the requested window
         fr.afHalBoxes?.forEach { b ->
@@ -493,22 +519,36 @@ internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modif
         }
         .pointerInput(Unit) { detectTapGestures(onDoubleTap = { setGamma?.invoke(1f) }) }
     Column(modifier) {
-        Canvas(Modifier.fillMaxWidth().height(14.dp).then(barMod)) {
+        // with a knob the canvas is taller than the bar: the handle sticks out above and
+        // below it (a thin line on the bar was easy to miss), and is easier to grab
+        val pad = if (onGamma != null) 6.dp else 0.dp
+        Canvas(Modifier.fillMaxWidth().height(14.dp + pad * 2).then(barMod)) {
+            val py = pad.toPx()
             drawImage(lut, srcOffset = IntOffset.Zero, srcSize = IntSize(256, 1),
-                      dstOffset = IntOffset.Zero,
-                      dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                      dstOffset = IntOffset(0, py.roundToInt()),
+                      dstSize = IntSize(size.width.roundToInt(), (size.height - 2 * py).roundToInt()),
                       filterQuality = FilterQuality.Low)
             if (onGamma != null) {
-                val kx = size.width * Math.pow(0.5, gamma.toDouble()).toFloat()
-                drawLine(Color.Black, Offset(kx, 0f), Offset(kx, size.height), strokeWidth = 7f)
-                drawLine(Color.White, Offset(kx, 0f), Offset(kx, size.height), strokeWidth = 3f)
+                val kw = 12.dp.toPx()
+                val kx = (size.width * Math.pow(0.5, gamma.toDouble()).toFloat())
+                    .coerceIn(kw / 2, size.width - kw / 2)
+                val cr = androidx.compose.ui.geometry.CornerRadius(kw / 2)
+                drawRoundRect(Color.Black, Offset(kx - kw / 2 - 2f, 0f),
+                              Size(kw + 4f, size.height), cr)
+                drawRoundRect(Color.White, Offset(kx - kw / 2, 2f), Size(kw, size.height - 4f), cr)
+                // grip: two short dark lines
+                for (dx in listOf(-2.5f, 2.5f)) {
+                    val gx = kx + dx * density
+                    drawLine(Color(0xFF555555), Offset(gx, size.height / 2 - 4.dp.toPx()),
+                             Offset(gx, size.height / 2 + 4.dp.toPx()), strokeWidth = 1.5f * density)
+                }
             }
         }
         Row(Modifier.fillMaxWidth()) {
             Text("%.1f°C".format(lo), color = Color(0xFFC9D1D9), fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
             Text("%.1f".format((lo + hi) / 2f) +
-                     (if (onGamma != null && gamma != 1f) "  γ%.2f".format(gamma) else ""),
+                     (if (onGamma != null) "  γ%.2f".format(gamma) else ""),
                  color = Color(0xFFC9D1D9), fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
             Text("%.1f°C".format(hi), color = Color(0xFFC9D1D9), fontSize = 12.sp)

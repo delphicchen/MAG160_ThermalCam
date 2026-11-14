@@ -331,6 +331,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var appVisible = true
 
     var spot: Pair<Int, Int>? by mutableStateOf(null)   // oriented (x,y), null = none
+    /** Dragged area on the oriented grid (right/bottom exclusive); replaces [spot] and is
+     *  replaced by it — one ROI at a time. Cleared like SPOT: its readout or a long press. */
+    var roiBox: android.graphics.Rect? by mutableStateOf(null)
+
+    fun setSpot(x: Int, y: Int) { roiBox = null; spot = x to y }
+    fun setBox(r: android.graphics.Rect) { spot = null; roiBox = r }
+    fun clearRoi() { spot = null; roiBox = null }
 
     var lastFrame by mutableStateOf<FrameResult?>(null); private set
     var ffcBusy by mutableStateOf(false); private set
@@ -1744,7 +1751,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var thermalWriter: ThermalStream.Writer? = null
 
     private fun composite(fr: FrameResult) = FrameComposer.compose(
-        fr, displayLut(), showMaxRoi, showMinRoi, spot, spotCelsius(),
+        fr, displayLut(), showMaxRoi, showMinRoi, spot, roiBox, roiCelsius(fr),
         if (showCenter) centerCelsius(fr) else null)
 
     fun takeScreenshot() {
@@ -1882,6 +1889,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val (x, y) = spot ?: return null
         if (x < 0 || y < 0 || x >= fr.w || y >= fr.h) return null
         return fr.temps.getOrNull(y * fr.w + x)
+    }
+
+    /** The ROI's reading: SPOT's pixel, or the mean of the dragged area. Raw °C. */
+    fun roiCelsius(fr: FrameResult? = lastFrame): Float? {
+        fr ?: return null
+        val r = roiBox ?: return if (spot != null) spotCelsius() else null
+        return ImageOps.boxMean(fr.temps, fr.w, fr.h, r)
     }
 
     /** CTR: mean of the pixels at the grid's geometric centre — the 2×2 block on an even

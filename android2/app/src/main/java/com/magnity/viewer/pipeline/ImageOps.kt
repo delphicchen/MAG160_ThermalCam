@@ -523,6 +523,17 @@ object ImageOps {
         return vLo to vHi
     }
 
+    /** Mean of [t] (row length [w]) over [r] (right/bottom exclusive), clipped to the
+     *  grid; null when nothing of it is on the grid. */
+    fun boxMean(t: FloatArray, w: Int, h: Int, r: android.graphics.Rect): Float? {
+        val x0 = r.left.coerceAtLeast(0); val x1 = r.right.coerceAtMost(w)
+        val y0 = r.top.coerceAtLeast(0); val y1 = r.bottom.coerceAtMost(h)
+        if (x1 <= x0 || y1 <= y0 || t.size < w * h) return null
+        var s = 0.0
+        for (y in y0 until y1) for (x in x0 until x1) s += t[y * w + x]
+        return (s / ((x1 - x0) * (y1 - y0))).toFloat()
+    }
+
     /** Auto range headroom above the hot end, as a fraction of the span. */
     private const val HOT_MARGIN = 0.04f
 
