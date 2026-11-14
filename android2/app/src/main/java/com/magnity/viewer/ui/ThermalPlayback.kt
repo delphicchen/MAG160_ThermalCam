@@ -45,6 +45,12 @@ class ThermalPlayback(private val reader: ThermalStream.Reader, val name: String
     var tMs by mutableLongStateOf(0L); private set
     /** Tapped position in the native grid, null = none. */
     var spot by mutableStateOf<Pair<Int, Int>?>(null)
+    /** Dragged area (right/bottom exclusive), as in the live view; one of the two at a time. */
+    var roiBox by mutableStateOf<android.graphics.Rect?>(null)
+
+    fun setSpot(x: Int, y: Int) { roiBox = null; spot = x to y }
+    fun setBox(r: android.graphics.Rect) { spot = null; roiBox = r }
+    fun clearRoi() { spot = null; roiBox = null }
     var showMin by mutableStateOf(true)
     var showMax by mutableStateOf(true)
 
@@ -54,6 +60,12 @@ class ThermalPlayback(private val reader: ThermalStream.Reader, val name: String
         val (x, y) = spot ?: return null
         if (x < 0 || y < 0 || x >= w || y >= h) return null
         return field?.getOrNull(y * w + x)
+    }
+
+    /** SPOT's pixel or the box's mean on the shown frame, °C. */
+    fun roiCelsius(): Float? {
+        val b = roiBox ?: return spotCelsius()
+        return ImageOps.boxMean(field ?: return null, w, h, b)
     }
 
     fun seekTo(i: Int) { index = i.coerceIn(0, frameCount - 1) }

@@ -3,6 +3,7 @@ package com.magnity.viewer.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Button
@@ -95,7 +96,8 @@ fun PlaybackPane(vm: ViewerViewModel, pb: ThermalPlayback) {
             verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth()) {
             Readout("MIN", pb.tempMin, COLD, pb.showMin) { pb.showMin = !pb.showMin }
             Readout("MAX", pb.tempMax, HOT, pb.showMax) { pb.showMax = !pb.showMax }
-            Readout("SPOT", pb.spotCelsius(), Color.White, pb.spot != null) { pb.spot = null }
+            Readout(if (pb.roiBox != null) "ROI" else "SPOT", pb.roiCelsius(), Color.White,
+                    pb.spot != null || pb.roiBox != null) { pb.clearRoi() }
         }
 
         if (pb.frameCount > 1) {
@@ -142,15 +144,28 @@ private fun PlaybackImage(
             onTap = { off ->
                 val gx = (off.x / cellW).toInt()
                 val gy = (off.y / cellH).toInt()
-                if (gx in 0 until pb.w && gy in 0 until pb.h) pb.spot = gx to gy
+                if (gx in 0 until pb.w && gy in 0 until pb.h) pb.setSpot(gx, gy)
             },
-            onLongPress = { pb.spot = null },
+            onLongPress = { pb.clearRoi() },
         )
+    }.pointerInput(pb, dispW, dispH) {
+        // drag: an area, as in the live view
+        var x0 = 0; var y0 = 0
+        detectDragGestures(
+            onDragStart = { off ->
+                x0 = (off.x / cellW).toInt().coerceIn(0, pb.w - 1)
+                y0 = (off.y / cellH).toInt().coerceIn(0, pb.h - 1)
+            },
+        ) { change, _ ->
+            change.consume()
+            val x1 = (change.position.x / cellW).toInt().coerceIn(0, pb.w - 1)
+            val y1 = (change.position.y / cellH).toInt().coerceIn(0, pb.h - 1)
+            pb.setBox(android.graphics.Rect(minOf(x0, x1), minOf(y0, y1),
+                                            maxOf(x0, x1) + 1, maxOf(y0, y1) + 1))
+        }
     }) {
         drawImage(image, dstSize = IntSize(dispW, dispH), filterQuality = FilterQuality.Low)
-        fun marker(pos: Int, color: Color, v: Float) {
-            val c = Offset((pos % pb.w + 0.5f) * cellW, (pos / pb.w + 0.5f) * cellH)
-            drawCircle(color, 18f, c, style = Stroke(4f, cap = StrokeCap.Round))
+        fun label(c: Offset, color: Color, v: Float) {
             val label = "%.1f°C".format(v)
             labelPaint.color = color.toArgb()
             val tw = labelPaint.measureText(label)
@@ -158,12 +173,25 @@ private fun PlaybackImage(
             val ty = (c.y - 20f).coerceAtLeast(38f)
             drawIntoCanvas { it.nativeCanvas.drawText(label, tx, ty, labelPaint) }
         }
+        fun marker(pos: Int, color: Color, v: Float) {
+            val c = Offset((pos % pb.w + 0.5f) * cellW, (pos / pb.w + 0.5f) * cellH)
+            drawCircle(color, 18f, c, style = Stroke(4f, cap = StrokeCap.Round))
+            label(c, color, v)
+        }
         if (pb.showMax) marker(pb.maxPos, HOT, pb.tempMax)
         if (pb.showMin) marker(pb.minPos, COLD, pb.tempMin)
         pb.spot?.let { (sx, sy) ->
             val c = Offset((sx + 0.5f) * cellW, (sy + 0.5f) * cellH)
             drawLine(Color.White, c - Offset(18f, 0f), c + Offset(18f, 0f), 3f)
             drawLine(Color.White, c - Offset(0f, 18f), c + Offset(0f, 18f), 3f)
+            pb.roiCelsius()?.let { label(c, Color.White, it) }
+        }
+        pb.roiBox?.let { b ->
+            val tl = Offset(b.left * cellW, b.top * cellH)
+            val sz = androidx.compose.ui.geometry.Size(b.width() * cellW, b.height() * cellH)
+            drawRect(Color.Black, tl, sz, style = Stroke(6f))
+            drawRect(Color.White, tl, sz, style = Stroke(3f))
+            pb.roiCelsius()?.let { label(Offset(tl.x + sz.width - 24f, tl.y), Color.White, it) }
         }
     }
 }

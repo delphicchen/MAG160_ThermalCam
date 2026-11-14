@@ -153,9 +153,13 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                     vm.spot != null || vm.roiBox != null) { vm.clearRoi() }
             Spacer(Modifier.weight(1f))
             // stacked so four readouts still fit one row on a ~390 dp phone
+            // no wrapping: a wide readout used to push ε onto a second line, the row grew
+            // and the image shrank and grew with it (issue #5)
             Column(horizontalAlignment = Alignment.End) {
-                if (vm.fusionOn) Text(vm.fusionDistanceLabel, color = DIM, fontSize = 12.sp)
-                Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp)
+                if (vm.fusionOn) Text(vm.fusionDistanceLabel, color = DIM, fontSize = 12.sp,
+                                      maxLines = 1, softWrap = false)
+                Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp,
+                     maxLines = 1, softWrap = false)
             }
         }
 
@@ -562,8 +566,9 @@ internal fun Readout(label: String, value: Float?, color: Color, on: Boolean,
                     onClick: () -> Unit) {
     val c = if (on) color else color.copy(alpha = 0.35f)
     Column(Modifier.clickable(onClick = onClick)) {
-        Text(label, color = c, fontSize = 11.sp)
-        Text(value?.let { "%.1f°C".format(it) } ?: "--", color = c, fontSize = 20.sp)
+        Text(label, color = c, fontSize = 11.sp, maxLines = 1, softWrap = false)
+        Text(value?.let { "%.1f°C".format(it) } ?: "--", color = c, fontSize = 20.sp,
+             maxLines = 1, softWrap = false)
     }
 }
 

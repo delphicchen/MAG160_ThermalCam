@@ -110,7 +110,7 @@
     <string name="copy_report">Copy report</string>
     <string name="n_report_copied">Report copied</string>
     <string name="disconnect">Disconnect</string>
-    <string name="help_live">Tap the image to place SPOT, long-press to clear.\nTap MIN / MAX / CTR / SPOT under the image to hide a marker.\nRed ring = MAX, green ring = MIN, blue cross = CTR (centre).</string>
+    <string name="help_live">Tap the image to place SPOT, drag a box for ROI (its mean), long-press to clear.\nTap MIN / MAX / CTR / SPOT under the image to hide a marker.\nRed ring = MAX, green ring = MIN, blue cross = CTR (centre).</string>
     <string name="calib_outside">Focus %1$s is outside the saved distances</string>
     <string name="align">Align</string>
     <string name="calib_outside_align">Focus %1$s is outside the saved distances — align on the centre object, then Save…</string>
@@ -145,7 +145,7 @@
     <string name="frame_n">frame %1$d / %2$d</string>
     <string name="prev">◀ prev</string>
     <string name="next">next ▶</string>
-    <string name="help_playback">Tap the image to read a temperature, long-press to clear.\nColour range follows each frame; the numbers are absolute °C as captured.</string>
+    <string name="help_playback">Tap the image to read a temperature, drag a box for its mean, long-press to clear.\nColour range follows each frame; the numbers are absolute °C as captured.</string>
     <string name="st_disconnected">disconnected</string>
     <string name="st_uvc_needs_camera">UVC camera %1$s: Android needs the Camera permission before it allows USB access — tap Allow</string>
     <string name="st_uvc_camera_denied">Camera permission denied — a UVC camera (Tiny2C) cannot connect without it; turn it on in the app\'s system settings</string>

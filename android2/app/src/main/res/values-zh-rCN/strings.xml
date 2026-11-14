@@ -110,7 +110,7 @@
     <string name="copy_report">复制报告</string>
     <string name="n_report_copied">已复制报告</string>
     <string name="disconnect">断开连接</string>
-    <string name="help_live">点画面放置 SPOT，长按清除。\n点画面下方的 MIN / MAX / CTR / SPOT 可隐藏标记。\n红圈 = MAX，绿圈 = MIN，蓝十字 = CTR（中心点）。</string>
+    <string name="help_live">点画面放置 SPOT，拖动框选 ROI（区域平均），长按清除。\n点画面下方的 MIN / MAX / CTR / SPOT 可隐藏标记。\n红圈 = MAX，绿圈 = MIN，蓝十字 = CTR（中心点）。</string>
     <string name="calib_outside">对焦 %1$s 超出已存的距离</string>
     <string name="align">对齐</string>
     <string name="calib_outside_align">对焦 %1$s 超出已存的距离 —— 对准中央物体后按“保存…”</string>
@@ -145,7 +145,7 @@
     <string name="frame_n">第 %1$d / %2$d 帧</string>
     <string name="prev">◀ 上一帧</string>
     <string name="next">下一帧 ▶</string>
-    <string name="help_playback">点画面读取温度，长按清除。\n色阶范围依每帧调整；数值是拍摄当时的绝对 °C。</string>
+    <string name="help_playback">点画面读取温度，拖动框选读取区域平均，长按清除。\n色阶范围依每帧调整；数值是拍摄当时的绝对 °C。</string>
     <string name="st_disconnected">未连接</string>
     <string name="st_uvc_needs_camera">UVC 相机 %1$s：Android 规定要先允许“相机”权限才能访问 USB —— 请点允许</string>
     <string name="st_uvc_camera_denied">相机权限被拒 —— 没有它 UVC 相机（Tiny2C）无法连接，请到系统设置的应用权限中开启</string>
