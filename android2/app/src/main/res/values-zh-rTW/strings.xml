@@ -69,7 +69,14 @@
     <string name="align_live">在即時畫面上對齊</string>
     <string name="wizard_button">校正精靈</string>
     <string name="wizard_title">校正精靈</string>
-    <string name="wizard_intro">需要：一個溫熱、輪廓清楚的東西（一杯熱水就很好用），和量距離的工具（捲尺、雷射測距儀，或 60 cm 地磚）。\n• 手機正對目標、十字線對準它，不要斜拿。\n• 輸入實際量到的距離，不要用鏡頭估計值。\n• 共四個距離：遠處（3 m 以上）、1 m、0.5 m、0.3 m。按「完成」才會取代目前的校正。</string>
+    <string name="wizard_intro">需要：一個溫熱、輪廓清楚的東西（一杯熱水就很好用），和一把尺。\n• 量手機主鏡頭中心到熱像鏡頭中心的直線距離，填在下面。\n• 第 1 步：3 m 以外的目標，距離大概即可。第 2、3 步：約 1 m 與 0.4 m，不用量，距離會由鏡頭間距算出。\n• 手機正對目標、十字線對準它。按「完成」才會取代目前的校正。</string>
+    <string name="wizard_intro_adv">需要：一個溫熱、輪廓清楚的東西（一杯熱水就很好用），和量距離的工具（捲尺、雷射測距儀，或 60 cm 地磚）。\n• 手機正對目標、十字線對準它，不要斜拿。\n• 輸入實際量到的距離，不要用鏡頭估計值。\n• 共四個距離：遠處（3 m 以上）、1 m、0.5 m、0.3 m。按「完成」才會取代目前的校正。</string>
+    <string name="wizard_spacing">鏡頭間距（cm）</string>
+    <string name="wizard_advanced">進階</string>
+    <string name="wizard_simple">簡易</string>
+    <string name="wizard_no_optics">這支手機的相機沒有回報鏡頭資料，距離需要實際量測。</string>
+    <string name="wizard_simple_near_hint">把溫熱物體放在約 %1$s，調 X、Y 讓輪廓重合。不用量距離。</string>
+    <string name="wizard_computed">推算：%1$s</string>
     <string name="wizard_start">開始</string>
     <string name="wizard_step">第 %1$d / %2$d 步</string>
     <string name="wizard_far_hint">對準 3 m 以外的溫熱物體。ZOOM 已依鏡頭資料估計，輪廓大小不合才需要調；再調 X、Y 讓輪廓重合。</string>

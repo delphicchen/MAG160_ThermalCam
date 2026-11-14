@@ -125,6 +125,11 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         private const val STAGE_EMA = 0.1f
         /** Calibration wizard: suggested distance per step (m; the first, far one also takes ∞). */
         val WIZARD_STEPS_M = floatArrayOf(3f, 1f, 0.5f, 0.3f)
+        /** Simple wizard: far, then two nearer points whose distance comes from the lens
+         *  spacing ([FusionCalibration.invZFromParallax]) — nothing to measure there. */
+        val WIZARD_SIMPLE_STEPS_M = floatArrayOf(3f, 1f, 0.4f)
+        /** Nearer than the far point by at least this (1/m), or the two are one distance. */
+        const val WIZARD_MIN_DINVZ = 0.2f
         /** A wizard sample further than this from the fitted line is flagged for a redo. */
         const val WIZARD_MAX_RESIDUAL_PX = 3f
         /** Consecutive frames one press of the fusion debug dump saves. */
@@ -268,6 +273,9 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var fusionDx by pref("fusion_dx", 0f)
     var fusionDy by pref("fusion_dy", 0f)
     var fusionRotation by pref("fusion_rotation", 90)   // visible sensor → portrait
+    /** Straight-line spacing between the phone's lens and the thermal lens, cm (ruler);
+     *  0 = not entered. What the simple wizard turns an alignment into a distance with. */
+    var fusionBaselineCm by pref("fusion_baseline_cm", 0f)
     /** The align sliders replace the range/action rows while this is on. */
     var fusionAligning by mutableStateOf(false)
 
@@ -797,12 +805,14 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             .putFloat("fusion_zoom@$old", fusionZoom)
             .putFloat("fusion_dx@$old", fusionDx)
             .putFloat("fusion_dy@$old", fusionDy)
+            .putFloat("fusion_baseline_cm@$old", fusionBaselineCm)
             .putString("fusion_calib@$old", fusionCalibJson)
             .apply()
         mirror = prefs.getBoolean("mirror@$kind", kind != "hik4117")
         fusionZoom = prefs.getFloat("fusion_zoom@$kind", 1.6f)
         fusionDx = prefs.getFloat("fusion_dx@$kind", 0f)
         fusionDy = prefs.getFloat("fusion_dy@$kind", 0f)
+        fusionBaselineCm = prefs.getFloat("fusion_baseline_cm@$kind", 0f)
         fusionCalibJson = prefs.getString("fusion_calib@$kind", "") ?: ""
         calibSamples = FusionCalibration.decodeSamples(fusionCalibJson)
         cameraKind = kind
@@ -861,9 +871,34 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- calibration wizard (PLAN_CALIBRATION.md, B) ------------------------------
 
-    /** Wizard page: null = not running, 0 = intro, 1..[WIZARD_STEPS_M].size = one distance
+    /** Wizard page: null = not running, 0 = intro, 1..[wizardSteps].size = one distance
      *  each, past that = the summary. */
     var wizardStep by mutableStateOf<Int?>(null); private set
+    /** Simple run (distances from the lens spacing) or the advanced, measured one. */
+    var wizardSimple by mutableStateOf(true); private set
+    /** Suggested distance per step of this run (m). */
+    val wizardSteps: FloatArray get() = if (wizardSimple) WIZARD_SIMPLE_STEPS_M else WIZARD_STEPS_M
+
+    /** tan of the visible camera's half field of view along upright x / y; null = the
+     *  phone doesn't report its optics, and only the advanced wizard can run. */
+    private fun uprightFovTan(): Pair<Float, Float>? {
+        val (tx, ty) = rgbCamera.fovTan ?: return null
+        // the upright frame's width runs along the sensor's y when it is mounted 90°/270°
+        return if (fusionRotation == 90 || fusionRotation == 270) ty to tx else tx to ty
+    }
+
+    fun wizardSimpleAvailable(): Boolean = rgbCamera.fovTan != null
+
+    /** Simple run, past the far step: 1/Z of the alignment on the sliders now, from its
+     *  shift against the far sample. Null = not applicable, or not clearly nearer yet. */
+    fun wizardComputedInvZ(): Float? {
+        if (!wizardSimple || fusionBaselineCm <= 0f) return null
+        val far = wizardTaken[1] ?: return null
+        val (tx, ty) = uprightFovTan() ?: return null
+        return FusionCalibration.invZFromParallax(far, fusionDx, fusionDy, tx, ty,
+                                                  fusionBaselineCm / 100f)
+            .takeIf { it >= far.invZ + WIZARD_MIN_DINVZ }
+    }
     /** Samples taken in this run, by step; the saved calibration changes only on finish. */
     var wizardTaken by mutableStateOf(mapOf<Int, FusionCalibration.CalibSample>()); private set
     private var wizardBackup: Triple<Float, Float, Float>? = null
@@ -871,10 +906,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     /** Starting zoom from the two lenses' fields of view (the phone reports its own; see
      *  [ThermalSource.focalPx]); null = the phone camera doesn't report its optics. */
     fun estimatedZoom(): Float? {
-        val (tx, ty) = rgbCamera.fovTan ?: return null
+        val vis = uprightFovTan()?.first ?: return null
         val ow = lastFrame?.w ?: return null           // oriented thermal width
-        // the upright frame's width runs along the sensor's y when it is mounted 90°/270°
-        val vis = if (fusionRotation == 90 || fusionRotation == 270) ty else tx
         return (vis / (ow / 2f / sdk.focalPx)).takeIf { it in 1f..3f }
     }
 
@@ -886,7 +919,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Intro → first distance: zoom from the optics, offsets from the old calibration if any. */
-    fun wizardBegin() {
+    fun wizardBegin(simple: Boolean) {
+        wizardSimple = simple
         estimatedZoom()?.let { fusionZoom = it }
         calibFit.takeIf { it.usable }?.let { f -> fusionDx = f.dxAt(0f); fusionDy = f.dyAt(0f) }
         fusionAligning = true
@@ -920,7 +954,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Go to the next step that has no sample yet, else the summary. */
     private fun wizardAdvance() {
-        val n = WIZARD_STEPS_M.size
+        val n = wizardSteps.size
         val next = (1..n).firstOrNull { it !in wizardTaken && it > (wizardStep ?: 0) }
         wizardStep = next ?: (n + 1)
         fusionAligning = next != null
@@ -928,7 +962,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Summary → take one step again. */
     fun wizardRedo(step: Int) {
-        wizardTaken = wizardTaken - step
+        // simple run: the nearer points' distances were worked out from the far one
+        wizardTaken = if (wizardSimple && step == 1) emptyMap() else wizardTaken - step
         wizardStep = step
         fusionAligning = true
     }

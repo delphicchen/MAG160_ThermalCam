@@ -70,7 +70,14 @@
     <string name="align_live">Align on live image</string>
     <string name="wizard_button">Calibration wizard</string>
     <string name="wizard_title">Calibration wizard</string>
-    <string name="wizard_intro">You need something warm with clear edges (a cup of hot water works well) and a way to measure distance (tape, laser rangefinder, or 60 cm floor tiles).\n• Hold the phone square to the target with the crosshair on it — don\'t tilt.\n• Enter the measured distance, not the lens estimate.\n• Four distances: far (3 m or more), 1 m, 0.5 m and 0.3 m. Your current calibration is replaced only when you finish.</string>
+    <string name="wizard_intro">You need something warm with clear edges (a cup of hot water works well) and a ruler.\n• Measure the straight-line distance between the centre of the phone\'s main camera lens and the centre of the thermal lens, and enter it below.\n• Step 1: a target 3 m or more away — a rough distance is enough. Steps 2 and 3: about 1 m and 0.4 m, nothing to measure — the distance is worked out from the lens spacing.\n• Hold the phone square to the target, crosshair on it. Your current calibration is replaced only when you finish.</string>
+    <string name="wizard_intro_adv">You need something warm with clear edges (a cup of hot water works well) and a way to measure distance (tape, laser rangefinder, or 60 cm floor tiles).\n• Hold the phone square to the target with the crosshair on it — don\'t tilt.\n• Enter the measured distance, not the lens estimate.\n• Four distances: far (3 m or more), 1 m, 0.5 m and 0.3 m. Your current calibration is replaced only when you finish.</string>
+    <string name="wizard_spacing">Lens spacing (cm)</string>
+    <string name="wizard_advanced">Advanced</string>
+    <string name="wizard_simple">Simple</string>
+    <string name="wizard_no_optics">This phone\'s camera doesn\'t report its lens data, so the distances have to be measured.</string>
+    <string name="wizard_simple_near_hint">Put the warm object about %1$s away and move X and Y until the outlines coincide. No need to measure.</string>
+    <string name="wizard_computed">Computed: %1$s</string>
     <string name="wizard_start">Start</string>
     <string name="wizard_step">Step %1$d of %2$d</string>
     <string name="wizard_far_hint">Aim at a warm object 3 m or more away. ZOOM is estimated from the lenses — change it only if the outline sizes differ — then move X and Y until the outlines coincide.</string>
