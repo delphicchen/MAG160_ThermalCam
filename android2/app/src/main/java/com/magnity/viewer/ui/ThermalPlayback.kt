@@ -45,6 +45,12 @@ class ThermalPlayback(private val reader: ThermalStream.Reader, val name: String
     var tMs by mutableLongStateOf(0L); private set
     /** Tapped position in the native grid, null = none. */
     var spot by mutableStateOf<Pair<Int, Int>?>(null)
+    /** Dragged area (right/bottom exclusive), as in the live view; one of the two at a time. */
+    var roiBox by mutableStateOf<android.graphics.Rect?>(null)
+
+    fun setSpot(x: Int, y: Int) { roiBox = null; spot = x to y }
+    fun setBox(r: android.graphics.Rect) { spot = null; roiBox = r }
+    fun clearRoi() { spot = null; roiBox = null }
     var showMin by mutableStateOf(true)
     var showMax by mutableStateOf(true)
 
@@ -56,11 +62,17 @@ class ThermalPlayback(private val reader: ThermalStream.Reader, val name: String
         return field?.getOrNull(y * w + x)
     }
 
+    /** SPOT's pixel or the box's mean on the shown frame, °C. */
+    fun roiCelsius(): Float? {
+        val b = roiBox ?: return spotCelsius()
+        return ImageOps.boxMean(field ?: return null, w, h, b)
+    }
+
     fun seekTo(i: Int) { index = i.coerceIn(0, frameCount - 1) }
     fun step(d: Int) = seekTo(index + d)
 
     /** Decode and render frame [i]; file and pixel work stay off the main thread. */
-    suspend fun show(i: Int, palette: String, minSpan: Float) {
+    suspend fun show(i: Int, palette: String, gamma: Float, minSpan: Float) {
         val idx = i.coerceIn(0, frameCount - 1)
         val r = withContext(Dispatchers.IO) {
             val f = reader.frame(idx)
@@ -75,7 +87,7 @@ class ThermalPlayback(private val reader: ThermalStream.Reader, val name: String
             // same auto range as the live view, so a capture looks like what was on screen
             val (lo, hi) = ImageOps.autoRange(t, minSpan)
             val src = ImageOps.resizeBicubic(t, w, h, w * SCALE, h * SCALE)
-            val lut = Palettes.lut(palette)
+            val lut = Palettes.lut(palette, gamma)
             val px = IntArray(src.size)
             val inv = 255f / (hi - lo)
             for (p in src.indices) {

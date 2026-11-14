@@ -41,10 +41,36 @@ import kotlin.math.roundToInt
  * and each advertised UVC format, and record what the bulk stream turns into — a
  * per-frame temperature stream there would make the 4117 a live camera like the others.
  *
+ * The vendor's HCUSBSDK V2.4.0.3 (Android) adds, from its `HCUsbSDK.h` and manual: coding
+ * types 1–11, the "FRMI" header such a stream starts with, and — from the command table in
+ * its `libHCUSBSDK.so` — 2025 manual correct (FFC, group 2 sub 4) and 2031 basic parameter
+ * (emissivity, group 3 sub 1). The SDK itself is not used.
+ *
+ * Not every 4117 answers "2.0" to the version probe (issue #4: all zeros, yet the vendor
+ * app works). The SDK then switches to an older protocol, ProtocolStrategyUvc10, decoded
+ * from its disassembly: [legacyGet] / [legacyDoubleGet]. Reads and 2046 only; writes
+ * (compensation, ε, FFC, 2039) wait until a report shows the reads work. 2.9-alpha2's
+ * reads came back as an echo of the command. In 2.9-alpha4 the SDK's byte order
+ * {group, 0, sub, channel} got the real 2011 answer ("V5.5.4 build 200822"), but after
+ * its "read twice" and alpha2-order tries every answer was zeros — those two are gone;
+ * an all-zero answer now re-sends sel3 {00 05} and asks once more ([legacyResync]), and
+ * 2046 alternates two request payloads until one works ([LEGACY_2046]). 2.9-alpha7's
+ * report: every read answers, and the 2046 length head is big-endian (00 01 45 c6 =
+ * 83398 B, a 76800-byte matrix plus a JPEG) — it was read little-endian and refused.
+ *
+ * 2046 is ~1 frame/s at best. So the stream test now runs by itself on connect, and every
+ * "FRMI" frame that carries a 120×160 matrix (f32, or u16 ÷ dwTmScale) is used as a
+ * temperature frame ([frmiTemps]). The fastest coding/format it finds is kept live
+ * ([goLive]) and remembered: the next connect starts in it straight away ([resumeLive]),
+ * and runs the test again if it gives nothing. The stream parameter is restored on [stop].
+ *
+ * Without temperatures (channel locked, or 2046 keeps failing) the module's own MJPEG is
+ * handed to the viewer as [videoFrame], so there is a picture, without readouts.
+ *
  * Writes to the module: body-temperature compensation (2044/2045, which lifts skin by
- * ~3 °C) is off while connected and restored on [stop]; the stream test restores the
- * stream parameter, and keeps the original in prefs until it is back, so a crash mid-test
- * is undone on the next connect. Emissivity and FFC are not wired up in this build.
+ * ~3 °C) is off while connected and emissivity is the viewer's; both are restored on
+ * [stop]. The stream test restores the stream parameter, and keeps the original in prefs
+ * until it is back, so a crash mid-test is undone on the next connect.
  */
 class Hik4117Source(val device: UsbDevice) : ThermalSource {
 
@@ -70,13 +96,50 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         private const val MAX_DOUBLE_GET = 2 shl 20
         private const val DEFAULT_INTERVAL = 333_333   // 30 fps in 100 ns units
 
-        /** Stream test: byVideoCodingType values tried, and the time each format gets. */
-        private val CODING_TYPES = 0..8
+        /** Stream test: byVideoCodingType values tried, and the time each format gets.
+         *  HCUsbSDK.h: 1 raw · 2 full-screen temperature · 3 real-time raw · 4 heat map ·
+         *  5 thermal live · 6 YUV · 7 PS MJPEG · 8 temperature + YUV · 9 YUV + raw ·
+         *  10 YUV without header · 11 header + YUV + raw. */
+        private val CODING_TYPES = 1..11
         private const val SETTLE_MS = 400L
         private const val MEASURE_MS = 1500L
 
+        /** The stream header's magic, "FRMI": HCUsbSDK.h writes it 0x70827773 (the letters'
+         *  decimal ASCII), so both readings in both byte orders are looked for. */
+        private val FRMI_MAGICS = listOf(
+            byteArrayOf(0x46, 0x52, 0x4D, 0x49), byteArrayOf(0x49, 0x4D, 0x52, 0x46),
+            byteArrayOf(0x73, 0x77, 0x82.toByte(), 0x70), byteArrayOf(0x70, 0x82.toByte(), 0x77, 0x73),
+        )
+        /** sizeof(USB_THERMAL_STREAM_TEMP_S); the heat-map header (…_TEMP_HOT) is longer. */
+        private const val FRMI_TEMP_HEAD = 132
+
+        private const val LEGACY_NO_WRITE = "legacy protocol: writes not decoded yet"
+
+        /** Legacy reads: how the OUT command is framed and timed ([legacyProbe]). The
+         *  SDK's builder writes {group, flags (0 = read, 0x88 = write), sub} and, for
+         *  commands with a channel, the channel byte; alpha2 sent {group, sub, 0, 1}. */
+        private class LegacyWay(val label: String, val sdkOrder: Boolean, val channel: Boolean,
+                                val gapMs: Long, val twice: Boolean)
+        // alpha4: "read twice" and alpha2's order were followed by zeros only — not retried
+        private val LEGACY_WAYS = listOf(
+            LegacyWay("SDK {g 0 s ch}", true, true, 0, false),
+            LegacyWay("SDK {g 0 s}", true, false, 0, false),
+        )
+        /** Legacy 2046 OUT payloads: the command head alone, or {g 0 s} + the 13-byte
+         *  request "2.0" firmware takes (channel 1, year) — which one the module wants is
+         *  unknown; [capture2046] alternates until one gives a frame, then keeps it. */
+        private val LEGACY_2046 = listOf("head only", "head + 2.0 request")
+        /** Re-sync attempts written to the report (later ones only counted). */
+        private const val RESYNC_REPORTED = 5
+        /** 2046 failures before the module's own video stands in for temperatures. */
+        private const val VIDEO_ONLY_AFTER = 3
+
         private const val PREFS = "hik4117"
         private const val KEY_RESTORE_2038 = "restore_2038"
+        /** "coding,fmt,frame,interval" of the stream that gave temperatures (coding 0: unchanged). */
+        private const val KEY_LIVE = "live_stream"
+        /** Temperature frames per second a stream must give to replace 2046. */
+        private const val LIVE_MIN_FPS = 2f
 
         fun isKnown(device: UsbDevice): Boolean =
             device.vendorId == VID && device.productId == PID
@@ -99,6 +162,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     }
     /** One format/frame the stream test commits. */
     private class Pick(val fmt: Int, val frame: Int, val interval: Int, val label: String)
+    /** A stream that gave temperatures: the coding type set for it (null: left as it was). */
+    private class Live(val coding: Int?, val pick: Pick, val tps: Float)
 
     private var conn: UsbDeviceConnection? = null
     private var vcIf: UsbInterface? = null
@@ -108,6 +173,27 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     private val formats = mutableListOf<UvcFormat>()
     private val xuUnits = mutableListOf<Int>()
     private var xuUnit = XU_UNIT
+    /** Older firmware without the "2.0" version string: see [versionProbe], [legacyGet]. */
+    @Volatile private var legacy = false
+    @Volatile private var way = LEGACY_WAYS[0]
+    /** Index into [LEGACY_2046]; fixed once a legacy 2046 succeeds. */
+    @Volatile private var legacy2046 = 0
+    @Volatile private var legacy2046Fixed = false
+    @Volatile private var resyncs = 0
+    /** No temperatures from this module: [videoSeq] / [videoFrame] stand in. */
+    @Volatile private var tempsDead = false
+    @Volatile private var lastJpeg: ByteArray? = null
+    @Volatile private var jpegSeq = 0L
+    /** Temperatures come from the bulk stream ([goLive]); 2046 rests. */
+    @Volatile private var streamLive = false
+    @Volatile private var liveLabel = ""
+    /** 2038 as it was before [goLive], put back on [stop]. */
+    private var liveOrig: ByteArray? = null
+    /** Temperature frames taken from the stream ([frmiTemps]). */
+    @Volatile private var streamTemps = 0L
+    @Volatile private var streamFps = 0f
+    private var tfStart = 0L
+    private var tfFrames = 0
 
     private val running = AtomicBoolean(false)
     private val snapping = AtomicBoolean(false)
@@ -119,6 +205,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     private val tempLock = ReentrantLock()
     private var latestTemp: IntArray? = null
     private var compRestore: ByteArray? = null
+    private var epsRestore: ByteArray? = null
 
     private val report = StringBuilder()
 
@@ -144,6 +231,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     // 2046 snapshots
     @Volatile private var snapMs = 0f
     @Volatile private var snapErrors = 0L
+    /** How the last 2046 matrix was laid out (legacy firmware says 160×120), for [diag]. */
+    @Volatile private var matrixInfo = ""
     @Volatile private var snapError: String? = null
     @Volatile private var devEmissivity = "?"
     private var speed = "?"
@@ -170,6 +259,9 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         payloads = 0; bytesIn = 0; badHeaders = 0; fullReads = 0; bulkErrors = 0
         videoFrames = 0; lastFrameLen = 0; lastFrameKind = "—"; videoFps = 0f
         frameCount = 0; snapErrors = 0; snapError = null; snapMs = 0f
+        tempsDead = false; lastJpeg = null; jpegSeq = 0; way = LEGACY_WAYS[0]
+        legacy2046 = 0; legacy2046Fixed = false; resyncs = 0
+        streamLive = false; liveLabel = ""; liveOrig = null; streamTemps = 0; streamFps = 0f
 
         say("HIK 4117 diagnostic · ${ThermalSources.idText(device)} · " +
             listOfNotNull(runCatching { device.manufacturerName }.getOrNull(),
@@ -219,23 +311,40 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             else "video: no frame in 3 s (payloads=$payloads bad=$badHeaders err=$bulkErrors)")
 
         if (versionProbe()) {
-            restorePending2038()
+            if (!legacy) restorePending2038() else legacyProbe()
             readInfo()
-            compensationOff()
+            if (!legacy) compensationOff()        // legacy writes: format not decoded yet
+            resumeLive()
+        } else {
+            tempsDead = true
+            say("showing the module's own video (no temperature)")
         }
         snapping.set(true)
         snapper = thread(name = "hik4117-2046", isDaemon = true) { snapLoop() }
     }
 
+    /** No live stream yet: the viewer runs [runStreamTest] on connect (test builds). */
+    val autoTest: Boolean get() = running.get() && !streamLive
+
     override fun stop() {
         snapping.set(false)
         snapper?.join(4000); snapper = null
+        if (streamLive) {
+            streamLive = false
+            liveOrig?.let { o -> ep0.withLock { restore2038(o, "after the live stream") } }
+            liveOrig = null
+        }
         // needs the stream still running: the command channel only answers while it does
         compRestore?.let { c ->
             val err = runCatching { simpleSet(3, 8, c) }.getOrDefault(-1)
             Log.i(TAG, "body-temperature compensation restored (err=$err)")
         }
         compRestore = null
+        epsRestore?.let { b ->
+            val err = runCatching { simpleSet(3, 1, b) }.getOrDefault(-1)
+            Log.i(TAG, "emissivity restored (err=$err)")
+        }
+        epsRestore = null
         running.set(false)
         reader?.join(1500); reader = null
     }
@@ -253,21 +362,59 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
 
     override fun getTemperatureData(): IntArray? = tempLock.withLock { latestTemp }
 
+    override val videoSeq: Long get() = if (tempsDead && frameCount == 0L) jpegSeq else 0L
+
+    override fun videoFrame(): android.graphics.Bitmap? =
+        lastJpeg?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
+
     override fun diag(): String = buildString {
-        append("HIK $speed · video %.1f fps · %s · %d B".format(videoFps, lastFrameKind, lastFrameLen))
+        append("HIK $speed · video %.1f fps · %s · %d B"
+            .format(videoFps, lastFrameKind.substringBefore(" · "), lastFrameLen))
         append("\n2046 %.0f ms/frame · ok=%d err=%d".format(snapMs, frameCount, snapErrors))
         snapError?.let { append(" · ").append(it.take(60)) }
+        if (matrixInfo.isNotEmpty()) append("\nmatrix $matrixInfo")
+        if (streamLive) append("\nlive stream $liveLabel · %.1f temps/s · %d".format(streamFps, streamTemps))
+        if (legacy) append("\nlegacy ${way.label} · 2046 ${LEGACY_2046[legacy2046]}" +
+            (if (legacy2046Fixed) " ✓" else "") + " · resync $resyncs")
         append("\nbulk pl=$payloads bad=$badHeaders full=$fullReads err=$bulkErrors · ε(dev) $devEmissivity")
-        if (testing) append("\nstream test running…")
+        if (testing) append("\nstream test running… (about 1 min)")
     }
 
     override fun sensorTemp(): Int? = null
 
-    /** Not in the diagnostic build: the module keeps its own ε (shown in [diag]). */
-    override fun setEmissivity(e: Float): Boolean = false
+    /**
+     * 2031 (group 3 sub 1): the 2030 basic parameter read back with dwEmissivity (byte 16)
+     * set to ε × 100, [0.01, 1.00]. The module's own value is put back on [stop].
+     */
+    override fun setEmissivity(e: Float): Boolean = runCatching {
+        val v = (e * 100f).roundToInt().coerceIn(1, 100)
+        val err = ep0.withLock {
+            val b = simpleGet(3, 1)
+            check(b.size >= 20) { "2030: ${b.size} B" }
+            if (epsRestore == null) epsRestore = b.copyOf().also { it[0] = 1 }
+            simpleSet(3, 1, b.copyOf().also { it[0] = 1; put32(it, 16, v) })
+        }
+        val now = runCatching { le32(simpleGet(3, 1), 16) }.getOrDefault(-1)
+        if (now > 0) devEmissivity = "%.2f".format(now / 100f)
+        say("2031 emissivity $v/100: err=$err, now $now")
+        err == 0
+    }.getOrElse { say("2031: ${it.message}"); false }
 
-    /** No shutter command known on the USB firmware; the module runs FFC on its own. */
-    override fun triggerFfc(): Boolean = false
+    /**
+     * 2025 manual correct (group 2 sub 4), the shutter FFC. The SDK sends it without a
+     * parameter: the payload here is the channel byte, padded to what GET_LEN asks for.
+     */
+    override fun triggerFfc(): Boolean = runCatching {
+        check(!legacy) { LEGACY_NO_WRITE }
+        val (len, err) = ep0.withLock {
+            select(2, 4)
+            val len = xuLen(2)
+            val p = ByteArray(if (len in 1..CHUNK) len else 1).also { it[0] = 1 }
+            len to if (xuSet(2, p)) lastError() else -1
+        }
+        say("2025 FFC: GET_LEN $len, err=$err")
+        err == 0
+    }.getOrElse { say("2025 FFC: ${it.message}"); false }
 
     // ---- the experiment ---------------------------------------------------------------
 
@@ -283,10 +430,32 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         testing = true
         val def = defaultPick()
         var orig: ByteArray? = null
+        var best: Live? = null
+        fun note(coding: Int?, pk: Pick, s: Sample) {
+            if (s.tps >= LIVE_MIN_FPS && s.tps > (best?.tps ?: 0f)) best = Live(coding, pk, s.tps)
+        }
+        if (streamLive) {                         // test from the default stream again
+            streamLive = false
+            liveOrig?.let { restore2038(it, "before the test") }
+            liveOrig = null
+        }
         try {
             ep0.withLock { }                      // a 2046 in flight finishes first
             say("— stream test")
             say("baseline: ${measure(2000)}")
+            if (legacy) {
+                say("legacy protocol: 2038/2039 not decoded yet — UVC formats only")
+                for (f in formats.filter { it.index != def.fmt }) {
+                    val pk = pickOf(f) ?: continue
+                    if (!running.get()) break
+                    val pr = commit(pk)
+                    Thread.sleep(SETTLE_MS)
+                    val s = measure(MEASURE_MS)
+                    say("  ${pk.label}: ${probeText(pr)} → $s")
+                    note(null, pk, s)
+                }
+                return
+            }
             val o = simpleGet(3, 5)
             orig = o
             say("2038 stream param: ${hex(o)}")
@@ -311,16 +480,78 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
                     if (!running.get()) break
                     val pr = commit(pk)
                     Thread.sleep(SETTLE_MS)
-                    say("  ${pk.label}: ${probeText(pr)} → ${measure(MEASURE_MS)}")
+                    val s = measure(MEASURE_MS)
+                    say("  ${pk.label}: ${probeText(pr)} → $s")
+                    note(v, pk, s)
                 }
             }
         } catch (t: Throwable) {
             say("FAIL ${t.javaClass.simpleName}: ${t.message}")
         } finally {
-            orig?.let { restore2038(it, "after the test") }
-            commit(def)
+            val b = best
+            if (b != null && running.get() && (b.coding == null || orig != null)) {
+                goLive(b, orig)
+            } else {
+                orig?.let { restore2038(it, "after the test") }
+                commit(def)
+                say("no stream gave temperatures (≥ $LIVE_MIN_FPS/s) — 2046 snapshots stay")
+            }
             Thread.sleep(SETTLE_MS)
             say("after: ${measure(1500)}")
+            testing = false
+        }
+    }
+
+    /** Switch to [l] (2039 coding, then its format), remember it for the next connect.
+     *  [orig] is 2038 before any change; prefs keep it until [stop] puts it back. */
+    private fun goLive(l: Live, orig: ByteArray?) {
+        if (l.coding != null && orig != null) {
+            val err = runCatching { simpleSet(3, 5, orig.copyOf().also { it[0] = 1; it[1] = l.coding.toByte() }) }
+                .getOrDefault(-1)
+            say("live: coding=${l.coding} set err=$err")
+        }
+        commit(l.pick)
+        liveOrig = if (l.coding != null) orig else null
+        liveLabel = "coding=${l.coding ?: "–"} ${l.pick.label}"
+        streamLive = true
+        prefs?.edit()?.putString(KEY_LIVE,
+            "${l.coding ?: 0},${l.pick.fmt},${l.pick.frame},${l.pick.interval}")?.apply()
+        say("LIVE stream: $liveLabel → %.1f temperature frames/s (kept for the next connect)".format(l.tps))
+    }
+
+    /** The stream a previous test kept: start in it; if no temperatures come in 3 s, forget
+     *  it, go back to 2046 and let the test run again. */
+    private fun resumeLive() {
+        val p = prefs?.getString(KEY_LIVE, null)?.split(',')?.mapNotNull { it.toIntOrNull() } ?: return
+        val forget = { prefs?.edit()?.remove(KEY_LIVE)?.apply() }
+        if (p.size < 4) { forget(); return }
+        val coding = p[0].takeIf { it > 0 }
+        if (coding != null && legacy) { forget(); return }
+        val pick = Pick(p[1], p[2], p[3], formats.firstOrNull { it.index == p[1] }?.let { f ->
+            f.frames.firstOrNull { it.index == p[2] }?.let { "${f.kind} ${it.w}x${it.h}" } } ?: "fmt${p[1]}/${p[2]}")
+        say("— live stream from the last test: coding=${coding ?: "–"} ${pick.label}")
+        testing = true
+        try {
+            val orig = if (coding == null) null else runCatching { simpleGet(3, 5) }.getOrNull()
+                ?.takeIf { it.size >= 2 }
+            if (coding != null && orig == null) { say("  2038 read failed — test instead"); forget(); return }
+            if (orig != null) prefs?.edit()?.putString(KEY_RESTORE_2038, hex(orig, orig.size, ""))?.apply()
+            val t0 = streamTemps
+            goLive(Live(coding, pick, 0f), orig)
+            streamLive = false                    // until it proves itself
+            Thread.sleep(3000)
+            val n = streamTemps - t0
+            if (n >= LIVE_MIN_FPS * 3) {
+                streamLive = true
+                say("  $n temperature frames in 3 s — live")
+            } else {
+                say("  $n temperature frames in 3 s — back to 2046, the test runs again")
+                forget()
+                orig?.let { restore2038(it, "after a failed resume") }
+                liveOrig = null
+                commit(defaultPick())
+            }
+        } finally {
             testing = false
         }
     }
@@ -345,9 +576,11 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     }
 
     private class Sample(val frames: Long, val fps: Float, val kbps: Float, val len: Int,
-                         val kind: String, val head: String, val bad: Long, val full: Long) {
+                         val kind: String, val head: String, val bad: Long, val full: Long,
+                         val tps: Float) {
         override fun toString(): String {
-            val extra = if (bad > 0 || full > 0) " bad=$bad full=$full" else ""
+            val extra = (if (bad > 0 || full > 0) " bad=$bad full=$full" else "") +
+                (if (tps > 0f) " · TEMPS %.1f/s".format(tps) else "")
             return if (frames == 0L) "no frames (%.0f KB/s$extra)".format(kbps)
             else "%.1f fps · %d B · %s · %.0f KB/s%s · %s".format(fps, len, kind, kbps, extra, head)
         }
@@ -355,23 +588,36 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
 
     private fun measure(ms: Long): Sample {
         val f0 = videoFrames; val b0 = bytesIn; val bad0 = badHeaders; val full0 = fullReads
+        val t0s = streamTemps
         val t0 = System.nanoTime()
         Thread.sleep(ms)
         val dt = (System.nanoTime() - t0) / 1e9f
         val n = videoFrames - f0
         return Sample(n, n / dt, (bytesIn - b0) / 1024f / dt, lastFrameLen, lastFrameKind,
-                      hex(lastFrameHead, 12), badHeaders - bad0, fullReads - full0)
+                      hex(lastFrameHead, 12), badHeaders - bad0, fullReads - full0,
+                      (streamTemps - t0s) / dt)
     }
 
     // ---- start-up reads ---------------------------------------------------------------
 
-    /** GET_LEN + GET_CUR on selector 4 ("2.0"): unlocks the command channel. */
+    /**
+     * GET_LEN + GET_CUR on selector 4, the SDK's DetectDeviceVersion. "2.0" unlocks the
+     * selector-5 protocol (SDK ProtocolStrategyUvc20). Any other answer is older firmware:
+     * the SDK then sends {00 05} to selector 3 and speaks ProtocolStrategyUvc10 ([legacy]).
+     */
     private fun versionProbe(): Boolean {
+        legacy = false
         repeat(3) { attempt ->
             val (len, v) = ep0.withLock { xuLen(4) to xuGet(4, 4) }
             val ok = v != null && v.size >= 3 && v[0] == '2'.code.toByte() && v[1] == '.'.code.toByte()
             say("XU $xuUnit version probe: GET_LEN=$len → ${v?.let { "'${ascii(it)}' ${hex(it)}" } ?: "failed"}")
             if (ok) return true
+            if (v != null && v.size >= 4) {
+                val sent = ep0.withLock { xuSet(3, byteArrayOf(0, 5)) }
+                legacy = true
+                say("not \"2.0\" → legacy protocol (SDK Uvc10): sel3 {00 05} ${if (sent) "sent" else "FAILED"}")
+                return true
+            }
             if (attempt < 2) Thread.sleep(300)
         }
         say("FAIL command channel locked — no temperature without it")
@@ -390,8 +636,8 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             runCatching { simpleGet(g, s) }.fold(
                 onSuccess = { b ->
                     val text = strings(b)
-                    say("$name: ${b.size} B ${hex(b, 24)}" + if (text.isNotEmpty()) " | $text" else "")
-                    if (g == 3 && s == 1 && b.size >= 25) {
+                    say("$name: ${b.size} B ${hex(b, if (legacy) 40 else 24)}" + if (text.isNotEmpty()) " | $text" else "")
+                    if (!legacy && g == 3 && s == 1 && b.size >= 25) {
                         devEmissivity = "%.2f".format(le32(b, 16) / 100f)
                         say("  emissivity ${le32(b, 16)}/100 · distance ${le32(b, 21)}")
                     }
@@ -419,7 +665,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     private fun snapLoop() {
         var fails = 0
         while (snapping.get()) {
-            if (testing) { Thread.sleep(50); continue }
+            if (testing || streamLive) { Thread.sleep(50); continue }
             val t0 = System.nanoTime()
             try {
                 val m = capture2046()
@@ -435,6 +681,10 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
                 snapErrors++
                 snapError = t.message
                 if (snapErrors <= 3) say("2046 failed: ${t.message}")
+                if (frameCount == 0L && snapErrors == VIDEO_ONLY_AFTER.toLong() && !tempsDead) {
+                    tempsDead = true
+                    say("showing the module's own video (no temperature)")
+                }
                 fails++
                 Thread.sleep(if (fails > 3) 1000L else 200L)
             }
@@ -447,15 +697,52 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         req[0] = 1                                         // byChannelID (2 stalls the pipe)
         val year = Calendar.getInstance().get(Calendar.YEAR)
         req[8] = year.toByte(); req[9] = (year shr 8).toByte()
-        val b = doubleGet(3, 9, req)
-        check(b.size >= 27) { "2046: ${b.size} B" }
-        val jl = le32(b, 1); val w = le32(b, 5); val h = le32(b, 9); val tb = le32(b, 13)
-        check(w == W && h == H && tb == w * h * 4) { "2046: ${w}x$h, $tb B of temperature" }
-        val o = 27 + jl
+        val b = if (!legacy) doubleGet(3, 9, req) else {
+            if (!legacy2046Fixed && snapErrors > 0) legacy2046 = (snapErrors % LEGACY_2046.size).toInt()
+            legacyDoubleGet(3, 9, if (legacy2046 == 0) null else req)
+        }
+        // the layout as on "2.0" firmware ({01, jpegLen, w, h, bytes, 10 reserved, JPEG,
+        // f32 °C}); on legacy firmware where it starts is unknown, so find w, h, bytes
+        val base = if (!legacy) 0 else findSizes(b)?.minus(5)
+            ?: error("legacy 2046: ${b.size} B, no 120×160 sizes · ${hex(b, 32)}")
+        check(base >= 0 && b.size >= base + 27) { "2046: ${b.size} B" }
+        val jl = le32(b, base + 1); val w = le32(b, base + 5); val h = le32(b, base + 9)
+        val tb = le32(b, base + 13)
+        check(((w == W && h == H) || (w == H && h == W)) && tb == W * H * 4) {
+            "2046: ${w}x$h, $tb B of temperature" }
+        if (legacy && frameCount == 0L) {
+            legacy2046Fixed = true
+            say("legacy 2046 (${LEGACY_2046[legacy2046]}): $base B before the head · ${hex(b, 32)}")
+        }
+        val o = base + 27 + jl
         check(jl >= 0 && b.size >= o + tb) { "2046 truncated: ${b.size} < ${o + tb}" }
         val bb = ByteBuffer.wrap(b, o, tb).order(ByteOrder.LITTLE_ENDIAN)
-        return IntArray(W * H) { (bb.float * 1000f).roundToInt() }
+        val c = FloatArray(W * H) { bb.float }
+        // legacy firmware (issue #4, 2.9-alpha9) says 160×120: the row length the data
+        // is smoother along decides, and a landscape matrix is turned clockwise to portrait
+        val d160 = rowDelta(c, H); val d120 = rowDelta(c, W)
+        val landscape = w == H && d160 <= d120
+        matrixInfo = "${w}x$h · rowΔ 160:%.2f 120:%.2f → %s".format(d160, d120,
+            if (landscape) "landscape, turned" else "portrait")
+        return IntArray(W * H) { i ->
+            val f = if (!landscape) c[i] else c[(W - 1 - i % W) * H + i / W]
+            (f * 1000f).roundToInt()
+        }
     }
+
+    /** Mean |Δ| between pixels [w] apart (vertical neighbours if rows are [w] long). */
+    private fun rowDelta(a: FloatArray, w: Int): Float {
+        var d = 0.0
+        for (i in 0 until a.size - w) d += abs(a[i] - a[i + w])
+        return (d / (a.size - w)).toFloat()
+    }
+
+    /** Offset of LE u32 {W, H, W·H·4} (or {H, W, …}) in the first 64 bytes, or null. */
+    private fun findSizes(b: ByteArray): Int? =
+        (0..minOf(64, b.size - 12)).firstOrNull {
+            val a = le32(b, it); val c = le32(b, it + 4)
+            ((a == W && c == H) || (a == H && c == W)) && le32(b, it + 8) == W * H * 4
+        }
 
     // ---- XU transactions --------------------------------------------------------------
 
@@ -491,6 +778,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         check(xuSet(5, byteArrayOf(group.toByte(), sub.toByte()))) { "select $group/$sub failed" }
 
     private fun simpleGet(group: Int, sub: Int): ByteArray = ep0.withLock {
+        if (legacy) return legacyGet(group, sub)
         select(group, sub)
         val len = xuLen(group)
         check(len in 1..CHUNK) { "GET_LEN $len (err ${lastError()})" }
@@ -500,6 +788,7 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
     /** SET with a payload whose byte 0 is the channel (1); returns selector 6 (0 = OK),
      *  or −1 when the transfer itself failed. */
     private fun simpleSet(group: Int, sub: Int, payload: ByteArray): Int = ep0.withLock {
+        check(!legacy) { LEGACY_NO_WRITE }
         select(group, sub)
         if (!xuSet(group, payload)) -1 else lastError()
     }
@@ -527,6 +816,130 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
             have += m
         }
         out
+    }
+
+    // Legacy firmware (SDK ProtocolStrategyUvc10, from libHCUSBSDK 2.4.0.3 disassembly;
+    // untested on hardware). No selector 5, no GET_LEN: each read is an OUT on the group's
+    // selector carrying {group, sub, 0, channel}, then an IN on the same selector — both
+    // with the request code of the phase (0x81, or 0x85 for a DoubleGet's length), the
+    // OUT one included. Each IN starts with a 3-byte head.
+
+    /** The command the SDK sends ahead of every legacy IN, framed as [way] says. */
+    private fun legacyCmdBytes(group: Int, sub: Int, request: ByteArray? = null): ByteArray {
+        val w = way
+        val head = if (w.sdkOrder) byteArrayOf(group.toByte(), 0, sub.toByte())
+                   else byteArrayOf(group.toByte(), sub.toByte(), 0)
+        // a request struct starts with the channel byte itself
+        return when {
+            request != null -> head + request
+            w.channel -> head + 1.toByte()
+            else -> head
+        }
+    }
+
+    private fun legacyCmd(group: Int, sub: Int, req: Int, request: ByteArray? = null): Boolean {
+        val ok = ctl(REQ_OUT, req, group shl 8, xuIndex, legacyCmdBytes(group, sub, request)) >= 0
+        if (way.gapMs > 0) Thread.sleep(way.gapMs)
+        return ok
+    }
+
+    /** One IN on the group's selector ([way].twice: a second one, which is kept). */
+    private fun legacyIn(group: Int, req: Int, b: ByteArray, len: Int): Int {
+        var n = ctl(REQ_IN, req, group shl 8, xuIndex, b, len)
+        if (way.twice && n > 0) n = ctl(REQ_IN, req, group shl 8, xuIndex, b, len)
+        return n
+    }
+
+    /** Raw answer, 3-byte head included (its meaning is one of the things to learn). */
+    private fun legacyGet(group: Int, sub: Int): ByteArray = ep0.withLock {
+        var b = legacyGetOnce(group, sub)
+        if (allZero(b) && legacyResync("$group/$sub")) b = legacyGetOnce(group, sub)
+        b
+    }
+
+    private fun legacyGetOnce(group: Int, sub: Int): ByteArray {
+        check(legacyCmd(group, sub, GET_CUR)) { "legacy cmd $group/$sub failed" }
+        val b = ByteArray(CHUNK)
+        val n = legacyIn(group, GET_CUR, b, CHUNK)
+        check(n > 0) { "legacy GET $group/$sub: $n" }
+        return b.copyOf(n)
+    }
+
+    private fun allZero(b: ByteArray): Boolean = b.all { it.toInt() == 0 }
+
+    /** An all-zero answer: send the SDK's switch to this protocol (sel3 {00 05}) again,
+     *  as after the version probe; the caller asks once more. Call with [ep0] held. */
+    private fun legacyResync(what: String): Boolean {
+        val ok = xuSet(3, byteArrayOf(0, 5))
+        resyncs++
+        if (resyncs <= RESYNC_REPORTED) say("legacy $what: zeros → sel3 {00 05} ${if (ok) "re-sent" else "FAILED"}")
+        return ok
+    }
+
+    /** The answer is our own command back, zero-padded: the module did not run it. */
+    private fun isEcho(b: ByteArray, sent: ByteArray): Boolean =
+        b.size >= sent.size && sent.indices.all { b[it] == sent[it] } &&
+            (sent.size until b.size).all { b[it].toInt() == 0 }
+
+    /**
+     * 2.9-alpha2's legacy reads came back as an echo of the command. Try 2011 (device
+     * info) in each [LEGACY_WAYS] framing, report each answer, keep the first that is not
+     * an echo (or the SDK's own framing if all are).
+     */
+    private fun legacyProbe() {
+        var pick: LegacyWay? = null
+        for (w in LEGACY_WAYS) {
+            way = w
+            val sent = legacyCmdBytes(1, 1)
+            runCatching { legacyGet(1, 1) }.fold(
+                onSuccess = { b ->
+                    val echo = isEcho(b, sent)
+                    say("legacy try ${w.label}: ${b.size} B ${hex(b, 24)}${if (echo) " · echo" else ""}")
+                    if (!echo && pick == null) pick = w
+                },
+                onFailure = { say("legacy try ${w.label}: ${it.message}") })
+        }
+        way = pick ?: LEGACY_WAYS[0]
+        say(if (pick != null) "legacy framing: ${way.label}" else "legacy: every framing echoed — using ${way.label}")
+    }
+
+    /** Phase A (0x85): 3-byte head + big-endian u32 total. Phase B (0x81): command + IN
+     *  per chunk, each 3-byte head + ≤509 B, until total − 3 bytes. Returns the joined
+     *  data; a module that ends early gives what arrived (the parser checks the size). */
+    private fun legacyDoubleGet(group: Int, sub: Int, request: ByteArray? = null): ByteArray = ep0.withLock {
+        val head = ByteArray(7)
+        var hn = legacyLength(group, sub, request, head)
+        if (hn >= 7 && allZero(head) && legacyResync("$group/$sub length")) {
+            hn = legacyLength(group, sub, request, head)
+        }
+        check(hn >= 7) { "legacy head $hn B ${hex(head.copyOf(maxOf(hn, 0)))}" }
+        val total = be32(head, 3)
+        check(total in 4..MAX_DOUBLE_GET) { "legacy length $total, head ${hex(head)}" }
+        if (frameCount == 0L && snapErrors < 4) say("legacy 2046 head ${hex(head)} → $total B")
+        val out = ByteArray(total - 3)
+        val chunk = ByteArray(CHUNK)
+        var have = 0
+        while (have < out.size) {
+            check(legacyCmd(group, sub, GET_CUR, request)) { "legacy chunk cmd failed at $have" }
+            val want = minOf(CHUNK, out.size - have + 3)
+            val n = legacyIn(group, GET_CUR, chunk, want)
+            if (n <= 3 && have > 0) {
+                if (frameCount == 0L && snapErrors < 4) say("legacy 2046 ended at $have/${out.size} (n=$n)")
+                return@withLock out.copyOf(have)
+            }
+            check(n > 3) { "legacy truncated at $have/${out.size} (n=$n)" }
+            if (have == 0 && frameCount == 0L && snapErrors < 4) say("legacy 2046 chunk head ${hex(chunk, 8)}")
+            val m = minOf(n - 3, out.size - have)
+            System.arraycopy(chunk, 3, out, have, m)
+            have += m
+        }
+        out
+    }
+
+    private fun legacyLength(group: Int, sub: Int, request: ByteArray?, head: ByteArray): Int {
+        check(legacyCmd(group, sub, GET_LEN, request)) { "legacy length cmd failed" }
+        head.fill(0)
+        return legacyIn(group, GET_LEN, head, 7)
     }
 
     // ---- UVC stream -------------------------------------------------------------------
@@ -619,8 +1032,19 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         lastFrameLen = n
         lastFrameHead = frame.copyOf(minOf(16, n))
         lastFrameKind = classify(frame, n)
+        if (lastFrameKind == "JPEG") { lastJpeg = frame.copyOf(n); jpegSeq++ }
         videoFrames++
         val now = System.nanoTime()
+        if (lastFrameKind.startsWith("FRMI")) frmiTemps(frame, n, findFrmi(frame, n))?.let { m ->
+            tempLock.withLock { latestTemp = m }
+            frameCount++; streamTemps++
+            if (tfStart == 0L) tfStart = now
+            tfFrames++
+            if (now - tfStart >= 1_000_000_000L) {
+                streamFps = tfFrames * 1e9f / (now - tfStart)
+                tfStart = now; tfFrames = 0
+            }
+        }
         if (fpsStart == 0L) fpsStart = now
         fpsFrames++
         if (now - fpsStart >= 1_000_000_000L) {
@@ -629,44 +1053,127 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         }
     }
 
-    /** JPEG, H.264, or raw with its 16-bit and (if plausible) float value ranges. */
+    /** JPEG, H.264, a "FRMI" thermal stream frame, or raw with its 16-bit and (if
+     *  plausible) float value ranges. */
     private fun classify(b: ByteArray, n: Int): String {
-        if (n >= 4 && b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte()) {
-            return if (b[n - 2] == 0xFF.toByte() && b[n - 1] == 0xD9.toByte()) "JPEG" else "JPEG(no EOI)"
-        }
+        val jpeg = n >= 4 && b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte()
+        if (jpeg && b[n - 2] == 0xFF.toByte() && b[n - 1] == 0xD9.toByte()) return "JPEG"
+        findFrmi(b, n).takeIf { it >= 0 }?.let { return frmi(b, n, it) }
+        if (jpeg) return "JPEG(no EOI)"
         if (n >= 4 && b[0].toInt() == 0 && b[1].toInt() == 0 &&
             (b[2].toInt() == 1 || (b[2].toInt() == 0 && b[3].toInt() == 1))) return "H264?"
-        val sb = StringBuilder("raw")
+        return "raw" + u16Range(b, 0, n) + f32Range(b, 0, n)
+    }
+
+    /** Where the magic starts, followed by a plausible head length (not a chance match in
+     *  image data); −1 if nowhere. */
+    private fun findFrmi(b: ByteArray, n: Int): Int {
+        for (i in 0..n - 8) {
+            for (m in FRMI_MAGICS) {
+                if (b[i] == m[0] && b[i + 1] == m[1] && b[i + 2] == m[2] && b[i + 3] == m[3] &&
+                    le32(b, i + 4) in 16..65536) return i
+            }
+        }
+        return -1
+    }
+
+    /**
+     * A thermal stream frame at [k] (HCUsbSDK.h): USB_THERMAL_STREAM_TEMP_S — magic, head
+     * length, type, data length, STREAM_RT_DATA_INFO_S, STREAM_FS_SUPPLE_INFO_TEMP — or the
+     * longer USB_THERMAL_STREAM_TEMP_HOT with a JPEG flag before the RT info and the JPEG's
+     * info after it. Then the temperature data's range: f32 (mode 0) or u16 (mode 1).
+     */
+    private fun frmi(b: ByteArray, n: Int, k: Int): String {
+        if (k + 16 > n) return "FRMI@$k (cut)"
+        val head = le32(b, k + 4)
+        val len = le32(b, k + 12)
+        val hot = head > FRMI_TEMP_HEAD
+        val sb = StringBuilder("FRMI@$k head $head type ${le32(b, k + 8)} data $len")
+        if (hot && k + 20 <= n) sb.append(" jpg ${le32(b, k + 16)}")
+        val rt = k + if (hot) 20 else 16
+        var mode = -1
+        if (rt + 64 <= n) {
+            sb.append(" · rt ${le32(b, rt)} ${le32(b, rt + 28)}×${le32(b, rt + 32)} len ${le32(b, rt + 36)}")
+            sb.append(" fps ${le32(b, rt + 40)} #${le32(b, rt + 4)}")
+            mode = le32(b, rt + 48)
+            sb.append(" · mode $mode scale ${le32(b, rt + 52)} off ${le32(b, rt + 56)} frz ${le32(b, rt + 60)}")
+        }
+        if (hot && k + 100 <= n) sb.append(" · jpeg ${le32(b, k + 88)}×${le32(b, k + 92)} ${le32(b, k + 96)} B")
+        val d = k + head
+        if (head < 16 || d >= n || len <= 0) return sb.append(" · ${hex(b.copyOfRange(k, minOf(n, k + 64)), 64)}").toString()
+        val dl = minOf(len, n - d)
+        sb.append(" ·").append(if (mode == 1) u16Range(b, d, dl) else u16Range(b, d, dl) + f32Range(b, d, dl))
+        return sb.toString()
+    }
+
+    /**
+     * The temperature matrix of a FRMI frame at [k], as 120×160 milli-°C, or null when it
+     * has none. STREAM_RT_DATA_INFO_S gives w×h (120×160, or 160×120 — turned clockwise to
+     * portrait); STREAM_FS_SUPPLE_INFO_TEMP mode 0 = f32 °C, 1 = u16 ÷ dwTmScale + dwTmOffset
+     * (read as kelvin when it averages above 150). Null too if over 1 % is not °C-like.
+     */
+    private fun frmiTemps(b: ByteArray, n: Int, k: Int): IntArray? {
+        if (k < 0 || k + 16 > n) return null
+        val head = le32(b, k + 4)
+        val rt = k + if (head > FRMI_TEMP_HEAD) 20 else 16
+        if (head < 16 || rt + 64 > n) return null
+        val w = le32(b, rt + 28); val h = le32(b, rt + 32)
+        if (!((w == W && h == H) || (w == H && h == W))) return null
+        val mode = le32(b, rt + 48)
+        val scale = le32(b, rt + 52).coerceAtLeast(1).toFloat(); val off = le32(b, rt + 56)
+        val px = W * H
+        val bytes = px * (if (mode == 1) 2 else 4)
+        // dwLen = matrix + 4 (SDK); on hardware the 4 bytes come first — read from k + head
+        // they made the matrix one pixel late: 0.0 °C as MIN, a seam along one edge
+        val d = k + head + if (le32(b, k + 12) == bytes + 4) 4 else 0
+        if (d + bytes > n) return null
+        val bb = ByteBuffer.wrap(b, 0, n).order(ByteOrder.LITTLE_ENDIAN)
+        val c = FloatArray(px) {
+            if (mode == 1) (bb.getShort(d + it * 2).toInt() and 0xffff) / scale + off
+            else bb.getFloat(d + it * 4)
+        }
+        if (mode == 1 && c.average() > 150) for (i in c.indices) c[i] -= 273.15f
+        if (c.count { !it.isFinite() || it < -60f || it > 1000f } * 100 > px) return null
+        return IntArray(px) { i ->
+            val x = i % W; val y = i / W
+            val f = if (w == W) c[i] else c[(W - 1 - x) * H + y]
+            if (f.isFinite()) (f.coerceIn(-60f, 1000f) * 1000f).roundToInt() else 0
+        }
+    }
+
+    private fun u16Range(b: ByteArray, off: Int, len: Int): String {
         var lo = 0xffff; var hi = 0
-        var i = 0
-        while (i + 1 < n) {
+        var i = off
+        while (i + 1 < off + len) {
             val v = (b[i].toInt() and 0xff) or ((b[i + 1].toInt() and 0xff) shl 8)
             if (v < lo) lo = v
             if (v > hi) hi = v
             i += 2
         }
-        sb.append(" u16 $lo..$hi")
-        if (n % 4 == 0) {
-            val bb = ByteBuffer.wrap(b, 0, n).order(ByteOrder.LITTLE_ENDIAN)
-            val count = n / 4
-            val step = maxOf(1, count / 20000)
-            var ok = 0; var seen = 0
-            var flo = Float.MAX_VALUE; var fhi = -Float.MAX_VALUE
-            var k = 0
-            while (k < count) {
-                val f = bb.getFloat(k * 4)
-                seen++
-                // °C-like: in range, and not the denormal crumbs 16-bit data reads as
-                if (f.isFinite() && f > -60f && f < 1000f && (f == 0f || abs(f) >= 1e-3f)) {
-                    ok++
-                    if (f < flo) flo = f
-                    if (f > fhi) fhi = f
-                }
-                k += step
+        return " u16 $lo..$hi"
+    }
+
+    /** " f32 lo..hi" when nearly every float of the data reads as a °C value, else "". */
+    private fun f32Range(b: ByteArray, off: Int, len: Int): String {
+        if (len < 4 || len % 4 != 0) return ""
+        val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN)
+        val count = len / 4
+        val step = maxOf(1, count / 20000)
+        var ok = 0; var seen = 0
+        var flo = Float.MAX_VALUE; var fhi = -Float.MAX_VALUE
+        var k = 0
+        while (k < count) {
+            val f = bb.getFloat(off + k * 4)
+            seen++
+            // °C-like: in range, and not the denormal crumbs 16-bit data reads as
+            if (f.isFinite() && f > -60f && f < 1000f && (f == 0f || abs(f) >= 1e-3f)) {
+                ok++
+                if (f < flo) flo = f
+                if (f > fhi) fhi = f
             }
-            if (ok * 100 >= seen * 99) sb.append(" f32 %.1f..%.1f".format(flo, fhi))
+            k += step
         }
-        return sb.toString()
+        return if (ok * 100 >= seen * 99) " f32 %.1f..%.1f".format(flo, fhi) else ""
     }
 
     // ---- descriptors ------------------------------------------------------------------
@@ -728,6 +1235,9 @@ private fun le16(b: ByteArray, o: Int): Int = u8(b, o) or (u8(b, o + 1) shl 8)
 
 private fun le32(b: ByteArray, o: Int): Int =
     u8(b, o) or (u8(b, o + 1) shl 8) or (u8(b, o + 2) shl 16) or (u8(b, o + 3) shl 24)
+
+private fun be32(b: ByteArray, o: Int): Int =
+    (u8(b, o) shl 24) or (u8(b, o + 1) shl 16) or (u8(b, o + 2) shl 8) or u8(b, o + 3)
 
 private fun put32(b: ByteArray, o: Int, v: Int) {
     for (k in 0..3) b[o + k] = (v shr (8 * k)).toByte()

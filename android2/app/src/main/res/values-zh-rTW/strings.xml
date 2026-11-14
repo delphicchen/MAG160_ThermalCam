@@ -93,6 +93,7 @@
     <string name="zoom_offset">縮放 ×%1$.2f · 位移 %2$+.3f / %3$+.3f</string>
     <string name="min_span">最小溫寬（自動範圍）</string>
     <string name="min_span_hint">自動範圍會把色盤拉伸到畫面中的溫度範圍。整個畫面溫差不到一度時，這樣拉伸會把感測器本身的雜訊畫成斑塊和假紋理（超分還會把它銳化）。自動範圍不會窄於這個溫寬；更平坦的場景會落在色盤中段。想看非常細微的溫差就調低；平坦的場景看起來斑駁就調高。手動範圍不受此限制。</string>
+    <string name="video_only">相機自己的畫面——目前沒有溫度</string>
     <string name="temporal_denoise">時域降噪</string>
     <string name="spatial_denoise">空間降噪</string>
     <string name="detail_enhance">細節增強（DDE）</string>
@@ -108,7 +109,7 @@
     <string name="copy_report">複製報告</string>
     <string name="n_report_copied">已複製報告</string>
     <string name="disconnect">中斷連線</string>
-    <string name="help_live">點畫面放置 SPOT，長按清除。\n點畫面下方的 MIN / MAX / CTR / SPOT 可隱藏標記。\n紅圈 = MAX，綠圈 = MIN，藍十字 = CTR（中心點）。</string>
+    <string name="help_live">點畫面放置 SPOT，拖曳框選 ROI（區域平均），長按清除。\n點畫面下方的 MIN / MAX / CTR / SPOT 可隱藏標記。\n紅圈 = MAX，綠圈 = MIN，藍十字 = CTR（中心點）。</string>
     <string name="calib_outside">對焦 %1$s 超出已存的距離</string>
     <string name="align">對齊</string>
     <string name="calib_outside_align">對焦 %1$s 超出已存的距離 —— 對準中央物體後按「儲存…」</string>
@@ -143,7 +144,7 @@
     <string name="frame_n">第 %1$d / %2$d 幀</string>
     <string name="prev">◀ 上一幀</string>
     <string name="next">下一幀 ▶</string>
-    <string name="help_playback">點畫面讀取溫度，長按清除。\n色階範圍依每幀調整；數值是拍攝當下的絕對 °C。</string>
+    <string name="help_playback">點畫面讀取溫度，拖曳框選讀取區域平均，長按清除。\n色階範圍依每幀調整；數值是拍攝當下的絕對 °C。</string>
     <string name="st_disconnected">未連線</string>
     <string name="st_uvc_needs_camera">UVC 相機 %1$s：Android 規定要先允許「相機」權限才能存取 USB —— 請按允許</string>
     <string name="st_uvc_camera_denied">相機權限被拒 —— 沒有它 UVC 相機（Tiny2C）無法連線，請到系統設定的應用程式權限開啟</string>

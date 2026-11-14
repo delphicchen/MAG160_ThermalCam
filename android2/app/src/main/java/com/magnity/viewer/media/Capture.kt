@@ -62,11 +62,12 @@ object FrameComposer {
 
     private fun align16(v: Int) = (v + 15) / 16 * 16
 
-    /** Thermal image + ROI markers + SPOT + colour bar with range and readouts. */
+    /** Thermal image + ROI markers + SPOT or ROI box + colour bar with range and readouts.
+     *  [roiC]: the SPOT pixel's or the box's mean °C. */
     fun compose(
         fr: FrameResult, lut: IntArray,
         showMax: Boolean, showMin: Boolean,
-        spot: Pair<Int, Int>?, spotC: Float?,
+        spot: Pair<Int, Int>?, box: android.graphics.Rect?, roiC: Float?,
         centerC: Float? = null,
     ): Bitmap {
         // paints are per call: screenshot (IO) and video (processing loop) can overlap
@@ -103,13 +104,23 @@ object FrameComposer {
             c.drawCircle(x, y, 10f, ring)
             label(x, y, color, v)
         }
-        if (showMax) marker(fr.maxPos, Color.rgb(0xF8, 0x51, 0x49), fr.tempMax)
-        if (showMin) marker(fr.minPos, Color.rgb(0x3F, 0xB9, 0x50), fr.tempMin)
+        if (showMax && !fr.videoOnly) marker(fr.maxPos, Color.rgb(0xF8, 0x51, 0x49), fr.tempMax)
+        if (showMin && !fr.videoOnly) marker(fr.minPos, Color.rgb(0x3F, 0xB9, 0x50), fr.tempMin)
         spot?.let { (sx, sy) ->
             val x = px(sx); val y = py(sy)
             ring.color = Color.WHITE
             c.drawLine(x - 14f, y, x + 14f, y, ring)
             c.drawLine(x, y - 14f, x, y + 14f, ring)
+            if (!fr.videoOnly) roiC?.let { label(x, y, Color.WHITE, it) }
+        }
+        box?.let { b ->
+            // cell edges: px() is a cell centre, so step back half a cell
+            val hw = (r?.width() ?: 1f) * iw / fr.w / 2f; val hh = (r?.height() ?: 1f) * ih / fr.h / 2f
+            val rl = px(b.left) - hw; val rt = py(b.top) - hh
+            val rr = px(b.right - 1) + hw; val rb = py(b.bottom - 1) + hh
+            ring.color = Color.WHITE
+            c.drawRect(rl, rt, rr, rb, ring)
+            if (!fr.videoOnly) roiC?.let { label(rr - 14f, rt, Color.WHITE, it) }
         }
         // CTR: gapped crosshair on the grid's geometric centre
         centerC?.let { v ->
@@ -123,6 +134,12 @@ object FrameComposer {
 
         // colour bar, centred in whatever strip is left after alignment padding
         val barTop = ih + (oh - ih - 56f) / 2f
+        if (fr.videoOnly) {                      // the camera's own picture: no scale
+            text.color = Color.WHITE
+            val note = "camera video · no temperature"
+            c.drawText(note, (ow - text.measureText(note)) / 2f, barTop + 42f, text)
+            return out
+        }
         val lutBmp = Bitmap.createBitmap(lut, 256, 1, Bitmap.Config.ARGB_8888)
         c.drawBitmap(lutBmp, null, RectF(8f, barTop, ow - 8f, barTop + 16f), filter)
         text.color = Color.WHITE
@@ -131,7 +148,7 @@ object FrameComposer {
         val hi = "%.1f°C".format(fr.scaleHiC)
         c.drawText(hi, ow - 8f - text.measureText(hi), y2, text)
         val mid = "MAX %.1f  MIN %.1f".format(fr.tempMax, fr.tempMin) +
-            (spotC?.let { "  SPOT %.1f".format(it) } ?: "") +
+            (roiC?.let { (if (box != null) "  ROI %.1f" else "  SPOT %.1f").format(it) } ?: "") +
             "  ε%.2f".format(fr.emissivity)
         c.drawText(mid, (ow - text.measureText(mid)) / 2f, y2, text)
         return out

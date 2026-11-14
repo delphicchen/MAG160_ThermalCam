@@ -37,6 +37,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -50,6 +51,7 @@ import com.magnity.viewer.pipeline.SrTier
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
+import kotlin.math.ln
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -127,7 +129,12 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                         }
                     }
                     Spacer(Modifier.height(6.dp))
-                    ColorBar(vm.paletteName, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp))
+                    if (fr.videoOnly) {
+                        Text(stringResource(R.string.video_only), color = DIM, fontSize = 11.sp)
+                    } else {
+                        ColorBar(vm.paletteName, vm.displayGamma, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp),
+                                 onGamma = { vm.displayGamma = it })
+                    }
                 }
             } else {
                 UsbDevicePanel(vm)
@@ -137,15 +144,22 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
         // readouts; each one is also its marker's on/off switch
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth()) {
-            Readout("MIN", fr?.tempMin, COLD, vm.showMinRoi) { vm.showMinRoi = !vm.showMinRoi }
-            Readout("MAX", fr?.tempMax, HOT, vm.showMaxRoi) { vm.showMaxRoi = !vm.showMaxRoi }
+            val measured = fr?.takeUnless { it.videoOnly }
+            Readout("MIN", measured?.tempMin, COLD, vm.showMinRoi) { vm.showMinRoi = !vm.showMinRoi }
+            Readout("MAX", measured?.tempMax, HOT, vm.showMaxRoi) { vm.showMaxRoi = !vm.showMaxRoi }
             Readout("CTR", vm.centerCelsius(fr), ACCENT, vm.showCenter) { vm.showCenter = !vm.showCenter }
-            Readout("SPOT", vm.spotCelsius(), Color.White, vm.spot != null) { vm.spot = null }
+            // tap the image: SPOT (one pixel); drag: ROI (mean of the box); tap here: clear
+            Readout(if (vm.roiBox != null) "ROI" else "SPOT", vm.roiCelsius(measured), Color.White,
+                    vm.spot != null || vm.roiBox != null) { vm.clearRoi() }
             Spacer(Modifier.weight(1f))
             // stacked so four readouts still fit one row on a ~390 dp phone
+            // no wrapping: a wide readout used to push ε onto a second line, the row grew
+            // and the image shrank and grew with it (issue #5)
             Column(horizontalAlignment = Alignment.End) {
-                if (vm.fusionOn) Text(vm.fusionDistanceLabel, color = DIM, fontSize = 12.sp)
-                Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp)
+                if (vm.fusionOn) Text(vm.fusionDistanceLabel, color = DIM, fontSize = 12.sp,
+                                      maxLines = 1, softWrap = false)
+                Text("ε %.2f".format(vm.emissivity), color = DIM, fontSize = 12.sp,
+                     maxLines = 1, softWrap = false)
             }
         }
 
@@ -237,16 +251,23 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
             }
             val notice = vm.notice
             LaunchedEffect(notice) { if (notice != null) { delay(3000); vm.notice = null } }
+            // while a picture is shown: one line only (resolution · fps, or a notice in its
+            // place), so the image above never changes size; camera id, FPA and the loop's
+            // status are in the Debug overlay
             Column(Modifier.weight(1f)) {
                 if (fr != null) {
-                    Text("%.1f fps".format(vm.fps) + (vm.connectedUsb?.let { " · USB $it" } ?: ""),
-                         color = ACCENT, fontSize = 13.sp)
+                    if (notice != null) {
+                        Text(notice, color = Color(0xFFD6A93D), fontSize = 13.sp, maxLines = 1,
+                             overflow = TextOverflow.Ellipsis)
+                    } else {
+                        Text("${fr.w}×${fr.h} · " + "%.1f fps".format(vm.fps), color = ACCENT,
+                             fontSize = 13.sp, maxLines = 1)
+                    }
+                } else {
+                    Text(notice ?: vm.status,
+                         color = if (notice != null) Color(0xFFD6A93D) else DIM,
+                         fontSize = 10.sp, maxLines = 2)
                 }
-                Text(
-                    notice ?: (vm.status + (fr?.let { " · FPA ${it.fpa}" } ?: "")),
-                    color = if (notice != null) Color(0xFFD6A93D) else DIM,
-                    fontSize = 10.sp, maxLines = 2,
-                )
             }
         }
     }
@@ -306,16 +327,31 @@ private fun ThermalImage(
             setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
         }
     }
+    fun grid(off: Offset) = ((off.x - left) / cellW).toInt() to ((off.y - top) / cellH).toInt()
     Canvas(modifier.pointerInput(fr.w, fr.h, dispW, dispH, r) {
         detectTapGestures(
             onTap = { off ->
-                val gx = ((off.x - left) / cellW).toInt()
-                val gy = ((off.y - top) / cellH).toInt()
+                val (gx, gy) = grid(off)
                 // outside the thermal inset there is no temperature to read
-                if (gx in 0 until fr.w && gy in 0 until fr.h) vm.spot = gx to gy
+                if (gx in 0 until fr.w && gy in 0 until fr.h) vm.setSpot(gx, gy)
             },
-            onLongPress = { vm.spot = null },
+            onLongPress = { vm.clearRoi() },
         )
+    }.pointerInput(fr.w, fr.h, dispW, dispH, r) {
+        // drag: an area from where the finger went down to where it is, clipped to the grid
+        var x0 = 0; var y0 = 0
+        detectDragGestures(
+            onDragStart = { off ->
+                val (gx, gy) = grid(off)
+                x0 = gx.coerceIn(0, fr.w - 1); y0 = gy.coerceIn(0, fr.h - 1)
+            },
+        ) { change, _ ->
+            change.consume()
+            val (gx, gy) = grid(change.position)
+            val x1 = gx.coerceIn(0, fr.w - 1); val y1 = gy.coerceIn(0, fr.h - 1)
+            vm.setBox(android.graphics.Rect(minOf(x0, x1), minOf(y0, y1),
+                                            maxOf(x0, x1) + 1, maxOf(y0, y1) + 1))
+        }
     }) {
         drawImage(image, dstSize = IntSize(dispW, dispH), filterQuality = FilterQuality.Low)
         fun label(c: Offset, color: Color, v: Float) {
@@ -331,8 +367,8 @@ private fun ThermalImage(
             drawCircle(color, 18f, c, style = Stroke(4f, cap = StrokeCap.Round))
             label(c, color, v)
         }
-        if (vm.showMaxRoi) marker(fr.maxPos, HOT, fr.tempMax)
-        if (vm.showMinRoi) marker(fr.minPos, COLD, fr.tempMin)
+        if (vm.showMaxRoi && !fr.videoOnly) marker(fr.maxPos, HOT, fr.tempMax)
+        if (vm.showMinRoi && !fr.videoOnly) marker(fr.minPos, COLD, fr.tempMin)
         if (vm.showCenter) vm.centerCelsius(fr)?.let { v ->
             // gapped crosshair on the grid's geometric centre — the measured pixels stay visible
             val c = Offset(left + fr.w * cellW / 2f, top + fr.h * cellH / 2f)
@@ -346,6 +382,15 @@ private fun ThermalImage(
             val c = Offset(left + (sx + 0.5f) * cellW, top + (sy + 0.5f) * cellH)
             drawLine(Color.White, c - Offset(18f, 0f), c + Offset(18f, 0f), 3f)
             drawLine(Color.White, c - Offset(0f, 18f), c + Offset(0f, 18f), 3f)
+            if (!fr.videoOnly) vm.roiCelsius(fr)?.let { label(c, Color.White, it) }
+        }
+        vm.roiBox?.let { b ->
+            val tl = Offset(left + b.left * cellW, top + b.top * cellH)
+            val sz = Size(b.width() * cellW, b.height() * cellH)
+            drawRect(Color.Black, tl, sz, style = Stroke(6f))
+            drawRect(Color.White, tl, sz, style = Stroke(3f))
+            // the mean, above the box's top-right corner
+            if (!fr.videoOnly) vm.roiCelsius(fr)?.let { label(Offset(tl.x + sz.width - 24f, tl.y), Color.White, it) }
         }
         // AF regions the HAL reports — dashed cyan, compare with the requested window
         fr.afHalBoxes?.forEach { b ->
@@ -459,22 +504,56 @@ private fun RangeBar(
 }
 
 @Composable
-internal fun ColorBar(palette: String, lo: Float, hi: Float, modifier: Modifier) {
-    val lut = remember(palette) {
-        android.graphics.Bitmap.createBitmap(Palettes.lut(palette), 256, 1,
+internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modifier: Modifier,
+                      onGamma: ((Float) -> Unit)? = null) {
+    val lut = remember(palette, gamma) {
+        android.graphics.Bitmap.createBitmap(Palettes.lut(palette, gamma), 256, 1,
             android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
     }
+    // With [onGamma] the bar is also the contrast control: its knob marks where the
+    // palette's middle colour sits (x = 0.5^γ); drag it along the bar, double-tap = γ 1.
+    val setGamma by rememberUpdatedState(onGamma)
+    val barMod = if (onGamma == null) Modifier else Modifier
+        .pointerInput(Unit) {
+            detectDragGestures { change, _ ->
+                change.consume()
+                val x = (change.position.x / size.width).coerceIn(BAR_X_MIN, BAR_X_MAX)
+                setGamma?.invoke((ln(x) / ln(0.5f) * 100f).roundToInt() / 100f)
+            }
+        }
+        .pointerInput(Unit) { detectTapGestures(onDoubleTap = { setGamma?.invoke(1f) }) }
     Column(modifier) {
-        Canvas(Modifier.fillMaxWidth().height(14.dp)) {
+        // with a knob the canvas is taller than the bar: the handle sticks out above and
+        // below it (a thin line on the bar was easy to miss), and is easier to grab
+        val pad = if (onGamma != null) 6.dp else 0.dp
+        Canvas(Modifier.fillMaxWidth().height(14.dp + pad * 2).then(barMod)) {
+            val py = pad.toPx()
             drawImage(lut, srcOffset = IntOffset.Zero, srcSize = IntSize(256, 1),
-                      dstOffset = IntOffset.Zero,
-                      dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                      dstOffset = IntOffset(0, py.roundToInt()),
+                      dstSize = IntSize(size.width.roundToInt(), (size.height - 2 * py).roundToInt()),
                       filterQuality = FilterQuality.Low)
+            if (onGamma != null) {
+                val kw = 12.dp.toPx()
+                val kx = (size.width * Math.pow(0.5, gamma.toDouble()).toFloat())
+                    .coerceIn(kw / 2, size.width - kw / 2)
+                val cr = androidx.compose.ui.geometry.CornerRadius(kw / 2)
+                drawRoundRect(Color.Black, Offset(kx - kw / 2 - 2f, 0f),
+                              Size(kw + 4f, size.height), cr)
+                drawRoundRect(Color.White, Offset(kx - kw / 2, 2f), Size(kw, size.height - 4f), cr)
+                // grip: two short dark lines
+                for (dx in listOf(-2.5f, 2.5f)) {
+                    val gx = kx + dx * density
+                    drawLine(Color(0xFF555555), Offset(gx, size.height / 2 - 4.dp.toPx()),
+                             Offset(gx, size.height / 2 + 4.dp.toPx()), strokeWidth = 1.5f * density)
+                }
+            }
         }
         Row(Modifier.fillMaxWidth()) {
             Text("%.1f°C".format(lo), color = Color(0xFFC9D1D9), fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
-            Text("%.1f".format((lo + hi) / 2f), color = Color(0xFFC9D1D9), fontSize = 12.sp)
+            Text("%.1f".format((lo + hi) / 2f) +
+                     (if (onGamma != null) "  γ%.2f".format(gamma) else ""),
+                 color = Color(0xFFC9D1D9), fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
             Text("%.1f°C".format(hi), color = Color(0xFFC9D1D9), fontSize = 12.sp)
         }
@@ -487,8 +566,9 @@ internal fun Readout(label: String, value: Float?, color: Color, on: Boolean,
                     onClick: () -> Unit) {
     val c = if (on) color else color.copy(alpha = 0.35f)
     Column(Modifier.clickable(onClick = onClick)) {
-        Text(label, color = c, fontSize = 11.sp)
-        Text(value?.let { "%.1f°C".format(it) } ?: "--", color = c, fontSize = 20.sp)
+        Text(label, color = c, fontSize = 11.sp, maxLines = 1, softWrap = false)
+        Text(value?.let { "%.1f°C".format(it) } ?: "--", color = c, fontSize = 20.sp,
+             maxLines = 1, softWrap = false)
     }
 }
 
@@ -827,6 +907,7 @@ private fun DrawerControls(vm: ViewerViewModel, onAlign: () -> Unit, onWizard: (
                valueRange = 0.2f..3f, steps = 27)
         Text(stringResource(R.string.min_span_hint), color = DIM, fontSize = 10.sp)
 
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.temporalDenoise, onCheckedChange = { vm.temporalDenoise = it })
             Text(stringResource(R.string.temporal_denoise), color = FG, modifier = Modifier.weight(1f))
@@ -1152,6 +1233,10 @@ private fun AlignSlider(label: String, value: Float, range: ClosedFloatingPointR
 
 /** String ids of the palettes' on-screen names (values/labels.xml); the pref keeps the
  *  internal name. */
+/** Colour-bar knob range: x = 0.5^γ for γ 3 … ⅓. */
+private const val BAR_X_MIN = 0.125f
+private const val BAR_X_MAX = 0.7937f
+
 private val PALETTE_LABELS = mapOf(
     "inferno" to R.string.palette_inferno, "ironbow" to R.string.palette_ironbow,
     "jet" to R.string.palette_jet, "gray" to R.string.palette_gray,

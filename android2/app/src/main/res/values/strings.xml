@@ -94,6 +94,7 @@
     <string name="zoom_offset">zoom ×%1$.2f · offset %2$+.3f / %3$+.3f</string>
     <string name="min_span">Minimum span (auto range)</string>
     <string name="min_span_hint">Auto range stretches the colours over the temperatures in view. When the whole scene lies within a fraction of a degree, that stretch paints the sensor\'s own noise as blotches and false texture (which Thermal SR then sharpens). The auto range never gets narrower than this; a flatter scene sits in the middle of the palette. Lower it to see very small differences; raise it if flat scenes look blotchy. Manual range is not limited.</string>
+    <string name="video_only">Camera\'s own picture — no temperature yet</string>
     <string name="temporal_denoise">Temporal denoise</string>
     <string name="spatial_denoise">Spatial denoise</string>
     <string name="detail_enhance">Detail enhancement (DDE)</string>
@@ -109,7 +110,7 @@
     <string name="copy_report">Copy report</string>
     <string name="n_report_copied">Report copied</string>
     <string name="disconnect">Disconnect</string>
-    <string name="help_live">Tap the image to place SPOT, long-press to clear.\nTap MIN / MAX / CTR / SPOT under the image to hide a marker.\nRed ring = MAX, green ring = MIN, blue cross = CTR (centre).</string>
+    <string name="help_live">Tap the image to place SPOT, drag a box for ROI (its mean), long-press to clear.\nTap MIN / MAX / CTR / SPOT under the image to hide a marker.\nRed ring = MAX, green ring = MIN, blue cross = CTR (centre).</string>
     <string name="calib_outside">Focus %1$s is outside the saved distances</string>
     <string name="align">Align</string>
     <string name="calib_outside_align">Focus %1$s is outside the saved distances — align on the centre object, then Save…</string>
@@ -144,7 +145,7 @@
     <string name="frame_n">frame %1$d / %2$d</string>
     <string name="prev">◀ prev</string>
     <string name="next">next ▶</string>
-    <string name="help_playback">Tap the image to read a temperature, long-press to clear.\nColour range follows each frame; the numbers are absolute °C as captured.</string>
+    <string name="help_playback">Tap the image to read a temperature, drag a box for its mean, long-press to clear.\nColour range follows each frame; the numbers are absolute °C as captured.</string>
     <string name="st_disconnected">disconnected</string>
     <string name="st_uvc_needs_camera">UVC camera %1$s: Android needs the Camera permission before it allows USB access — tap Allow</string>
     <string name="st_uvc_camera_denied">Camera permission denied — a UVC camera (Tiny2C) cannot connect without it; turn it on in the app\'s system settings</string>

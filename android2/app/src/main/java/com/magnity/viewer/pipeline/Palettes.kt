@@ -299,4 +299,25 @@ object Palettes {
         "nipy_spectral" -> NIPY_SPECTRAL
         else -> IRONBOW
     }
+
+    /**
+     * [lut] with a display gamma: entry i shows the palette colour at 255·(i/255)^(1/γ).
+     * γ > 1 spreads the cool end over more colours, γ < 1 the warm end; 1 = linear.
+     * Remapping the LUT (not the temperatures) works the same on every render path, and
+     * a colour bar drawn from it stays linear in °C. Cached per name + γ.
+     */
+    fun lut(name: String, gamma: Float): IntArray {
+        if (gamma == 1f) return lut(name)
+        val key = "$name@$gamma"
+        return synchronized(gammaCache) {
+            gammaCache.getOrPut(key) {
+                if (gammaCache.size > 16) gammaCache.clear()
+                val src = lut(name)
+                val inv = 1.0 / gamma
+                IntArray(256) { i -> src[(255.0 * Math.pow(i / 255.0, inv) + 0.5).toInt().coerceIn(0, 255)] }
+            }
+        }
+    }
+
+    private val gammaCache = HashMap<String, IntArray>()
 }

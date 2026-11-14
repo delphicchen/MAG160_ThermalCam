@@ -83,6 +83,9 @@ data class FrameResult(
     /** AF regions the HAL reports using, in the same coordinates as [afBox]
      *  (diagnostics). Null = not reported, fusion off or the crosshair is off. */
     val afHalBoxes: List<android.graphics.RectF>? = null,
+    /** The camera's own picture ([ThermalSource.videoFrame]): no temperatures — [temps]
+     *  is empty, min/max are NaN, readouts, markers and the colour bar stay off. */
+    val videoOnly: Boolean = false,
 )
 
 /**
@@ -200,6 +203,10 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var scaleHi: Float by pref("scale_hi", 100f, skipWrite = { autoScale })
     /** Auto range is never narrower than this (°C); see [ImageOps.autoRange]. */
     var minSpan: Float by pref("min_span", DEFAULT_MIN_SPAN)
+    /** Display gamma (contrast curve) of the palette, see [Palettes.lut]; display only. */
+    var displayGamma: Float by pref("display_gamma", 1f)
+    /** The palette LUT as shown: [paletteName] through [displayGamma]. */
+    fun displayLut(): IntArray = Palettes.lut(paletteName, displayGamma)
     // default = camera plugged straight into the phone's USB-C port, portrait UI
     var rotation by pref("rotation", 90)            // 0/90/180/270 clockwise
     var mirror by pref("mirror", true)
@@ -324,6 +331,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var appVisible = true
 
     var spot: Pair<Int, Int>? by mutableStateOf(null)   // oriented (x,y), null = none
+    /** Dragged area on the oriented grid (right/bottom exclusive); replaces [spot] and is
+     *  replaced by it — one ROI at a time. Cleared like SPOT: its readout or a long press. */
+    var roiBox: android.graphics.Rect? by mutableStateOf(null)
+
+    fun setSpot(x: Int, y: Int) { roiBox = null; spot = x to y }
+    fun setBox(r: android.graphics.Rect) { spot = null; roiBox = r }
+    fun clearRoi() { spot = null; roiBox = null }
 
     var lastFrame by mutableStateOf<FrameResult?>(null); private set
     var ffcBusy by mutableStateOf(false); private set
@@ -462,11 +476,14 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 connectedUsb = ThermalSources.idText(device) + " · " + when (sdk) {
                     is MagDeviceWrapper -> "MAG160"
                     is Hik4117Source -> "HIK 4117"
+                    is com.magnity.viewer.usb.Tiny1Source -> if (sdk.kind == "tiny1b") "Tiny1B" else "Tiny1C"
                     else -> "Tiny2C"
                 }
                 (sdk as? Hik4117Source)?.let { sdkLog = it.report() }
                 status = str(R.string.st_connected, sdk.width, sdk.height)
                 startSdkLoop()
+                // test builds: the stream test runs by itself, the tester only sends the report
+                if ((sdk as? Hik4117Source)?.autoTest == true) runHik4117Test()
             } catch (e: Throwable) {
                 Log.e(TAG, "connect failed", e)
                 status = str(R.string.st_connect_failed,
@@ -761,18 +778,28 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Another kind of camera than last time: each lens sits elsewhere on the phone and has
-     * its own field of view, so park this camera's registration under `<key>@<kind>` and
+     * its own field of view, so park this camera's mirror and registration under `<key>@<kind>` and
      * bring back the new camera's (the defaults on its first connect).
      */
     private fun switchCameraProfile(kind: String) {
         val old = cameraKind
-        if (kind == old) return
+        if (kind == old) {
+            // first connect since mirror became per camera: the HIK 4117's own picture
+            // is the right way round already (issue #4), the others keep what they had
+            if (!prefs.contains("mirror@$kind")) {
+                if (kind == "hik4117") mirror = false
+                prefs.edit().putBoolean("mirror@$kind", mirror).apply()
+            }
+            return
+        }
         prefs.edit()
+            .putBoolean("mirror@$old", mirror)
             .putFloat("fusion_zoom@$old", fusionZoom)
             .putFloat("fusion_dx@$old", fusionDx)
             .putFloat("fusion_dy@$old", fusionDy)
             .putString("fusion_calib@$old", fusionCalibJson)
             .apply()
+        mirror = prefs.getBoolean("mirror@$kind", kind != "hik4117")
         fusionZoom = prefs.getFloat("fusion_zoom@$kind", 1.6f)
         fusionDx = prefs.getFloat("fusion_dx@$kind", 0f)
         fusionDy = prefs.getFloat("fusion_dy@$kind", 0f)
@@ -1181,6 +1208,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             var lastSeen = 0L
             var lastSeenAt = startedAt
             var lastProcessed = -1L
+            var lastVideo = 0L
             var learnChecked = false
             rangeSnap = true
             while (isActive && connected) {
@@ -1199,6 +1227,21 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                 if (fc != lastSeen) { lastSeen = fc; lastSeenAt = now }
                 if (fc > 0L && !learnChecked) { learnChecked = true; learnTiny2c() }
 
+                // no temperatures from this camera: show its own picture instead
+                val vs = sdk.videoSeq
+                if (fc == 0L && vs > 0L) {
+                    if (vs == lastVideo) { delay(4); continue }
+                    lastVideo = vs
+                    val t0 = System.nanoTime()
+                    val bmp = sdk.videoFrame()
+                    if (bmp == null) { delay(20); continue }
+                    lastFrame = videoResult(bmp)
+                    tickFps()
+                    status = frameStatus(vs, t0) + " · video only"
+                    if (debugOsd) debugInfo = debugText()
+                    (sdk as? Hik4117Source)?.let { sdkLog = it.report() }
+                    continue
+                }
                 // process each SDK frame once, as soon as it lands (no fixed period)
                 if (fc == lastProcessed) { delay(4); continue }
                 val temp = sdk.getTemperatureData()
@@ -1330,6 +1373,21 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /** [ThermalSource.videoFrame] turned the way the thermal grid would be (rotation, then
+     *  mirror, as [orient]); the grid size stays the camera's, for taps and the layout. */
+    private fun videoResult(src: android.graphics.Bitmap): FrameResult {
+        val m = android.graphics.Matrix()
+        if (rotation != 0) m.postRotate(rotation.toFloat())
+        if (mirror) m.postScale(-1f, 1f)
+        val bmp = if (m.isIdentity) src
+                  else android.graphics.Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
+        val (ow, oh) = if (rotation % 180 == 0) sdk.width to sdk.height else sdk.height to sdk.width
+        return FrameResult(bitmap = bmp, w = ow, h = oh, tempMin = Float.NaN, tempMax = Float.NaN,
+                           minPos = 0, maxPos = 0, fpa = null, scaleLoC = Float.NaN,
+                           scaleHiC = Float.NaN, emissivity = emissivity, temps = FloatArray(0),
+                           videoOnly = true)
+    }
+
     /**
      * Upscale the (still scalar) field, then palette-map into display pixels — all on
      * the processing thread, so the UI only draws. Interpolating before colouring keeps
@@ -1354,7 +1412,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
                                      (if (it.vulkan) "Vulkan" else "CPU") + " · " + str(srTierLabel(it.tier)))
                     }
                 if (u != null) {
-                    val img = u.render(field, w, h, lo, hi, Palettes.lut(paletteName))
+                    val img = u.render(field, w, h, lo, hi, displayLut())
                     noteSrTimings(u)
                     srRendered = true
                     renderPath = "Thermal SR ${img.w}×${img.h}"
@@ -1374,7 +1432,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val gpu = anime4k ?: Anime4kGpu(getApplication()).also { anime4k = it }
                 return gpu.render(field, w, h, lo, hi, if (k >= 4) 2 else 1,
-                                  Palettes.lut(paletteName))
+                                  displayLut())
                     .also { renderPath = "Anime4K ${it.w}×${it.h}" }
             } catch (e: Throwable) {
                 Log.e(TAG, "Anime4K GPU failed — falling back to bicubic", e)
@@ -1385,7 +1443,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         val src = if (k > 1) ImageOps.resizeBicubic(field, w, h, w * k, h * k) else field
-        val pal = Palettes.lut(paletteName)
+        val pal = displayLut()
         if (pixBuf.size != src.size) pixBuf = IntArray(src.size)
         val img = pixBuf
         val inv = 255f / (hi - lo)
@@ -1639,6 +1697,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private fun debugText(): String {
         val sb = StringBuilder()
         sb.append("%.1f fps · %.1f ms/frame\n".format(fps, totalMs))
+        // what the bottom line no longer shows: camera, loop status, FPA
+        sb.append("USB ${connectedUsb ?: "—"} · FPA ${lastFrame?.fpa}\n$status\n")
         STAGES.indices.forEach { i ->
             sb.append("%s %.1f".format(STAGES[i], stageMs[i]))
             sb.append(if (i == 3) "\n" else if (i < STAGES.size - 1) " · " else "")
@@ -1659,7 +1719,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         srFrame = false
         // what the frame is made of: enough to tell a frozen or flat stream from a
         // display problem in a user's screenshot
-        sb.append("\n$paletteName · ${upscaler.name} ×$upscale → $renderPath")
+        sb.append("\n$paletteName γ%.2f · ${upscaler.name}".format(displayGamma) + " ×$upscale → $renderPath")
         lastFrame?.let {
             sb.append("\nT %.2f..%.2f °C · scale %.2f..%.2f · Δ %.3f °C"
                 .format(it.tempMin, it.tempMax, it.scaleLoC, it.scaleHiC, frameDiffC))
@@ -1691,7 +1751,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     private var thermalWriter: ThermalStream.Writer? = null
 
     private fun composite(fr: FrameResult) = FrameComposer.compose(
-        fr, Palettes.lut(paletteName), showMaxRoi, showMinRoi, spot, spotCelsius(),
+        fr, displayLut(), showMaxRoi, showMinRoi, spot, roiBox, roiCelsius(fr),
         if (showCenter) centerCelsius(fr) else null)
 
     fun takeScreenshot() {
@@ -1714,7 +1774,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Companion .mgt for a snapshot, when the option is on: the field behind the PNG. */
     private fun thermalSuffix(fr: FrameResult): String {
-        if (!saveThermalData) return ""
+        if (!saveThermalData || fr.videoOnly) return ""
         val name = ThermalStream.writeSingle(getApplication(), fr.temps, fr.w, fr.h,
                                              fr.emissivity)
         return if (name != null) " + $name" else " " + str(R.string.n_temp_file_failed)
@@ -1781,7 +1841,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             if (w != r.width || h != r.height) return     // rotated mid-recording: skip
             try {
                 r.addFrame(composite(fr))
-                thermalWriter?.takeIf { it.width == fr.w && it.height == fr.h }
+                thermalWriter?.takeIf { !fr.videoOnly && it.width == fr.w && it.height == fr.h }
                     ?.addFrame(fr.temps)
                 return
             } catch (e: Throwable) {
@@ -1829,6 +1889,13 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         val (x, y) = spot ?: return null
         if (x < 0 || y < 0 || x >= fr.w || y >= fr.h) return null
         return fr.temps.getOrNull(y * fr.w + x)
+    }
+
+    /** The ROI's reading: SPOT's pixel, or the mean of the dragged area. Raw °C. */
+    fun roiCelsius(fr: FrameResult? = lastFrame): Float? {
+        fr ?: return null
+        val r = roiBox ?: return if (spot != null) spotCelsius() else null
+        return ImageOps.boxMean(fr.temps, fr.w, fr.h, r)
     }
 
     /** CTR: mean of the pixels at the grid's geometric centre — the 2×2 block on an even

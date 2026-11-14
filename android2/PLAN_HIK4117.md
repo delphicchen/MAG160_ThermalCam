@@ -16,6 +16,21 @@ Android 一般 App 無法給 usb0 設固定 IP，不採用。
   控制傳輸每次 ≤512 B、每片 5 B 片頭 → 一張約 1–2 s。2047 = ROI 最高溫（小熱點會被稀釋）。
 - 2044/2045 體溫補償：預設開，皮膚段抬高約 3 °C → 要真實表面溫度須關。
 
+## 原廠 SDK 補充（HCUSBSDK V2.4.0.3 Android，2026-10-27 研究）
+
+只當規格參考（`HCUsbSDK.h`、開發指南、`libHCUSBSDK.so` 的命令表），App 不使用 SDK。
+
+- 2038/2039 `byVideoCodingType` 共 **1–11**：1 熱成像裸數據 · 2 全屏測溫 · 3 實時裸數據 · 4 熱圖 ·
+  5 熱成像實時流 · 6 YUV · 7 PS 封裝 MJPEG · 8 全屏測溫 + YUV · 9 YUV + 裸數據 · 10 僅 YUV ·
+  11 測溫頭 + YUV + 裸數據。手冊 2.6「實時獲取全屏測溫數據」= 方案 B 是官方用法。
+- 串流幀格式：`USB_THERMAL_STREAM_TEMP_S`（132 B 頭 + 溫度）/ `_TEMP_HOT`（頭 + 溫度 + JPEG），
+  魔術字 `"FRMI"`（註解寫 0x70827773 = 十進位 ASCII，位元組順序未驗證）；
+  `dwTmDataMode` 0 = f32、1 = u16 + scale/offset。SDK 本身不解析（回調只給 MJPEG 原始幀）。
+- 2048/2049（P2P）只有 `byJpegPicEnabled`，不是串流開關。
+- 命令 → {組, sub}（反組譯，已用 2046 / 2030 / 2038 對過）：2025 一鍵手動校正（FFC）2/4 ·
+  2023 背景校正 2/3 · 2031 測溫基本參數 SET 3/1（dwEmissivity 在第 16 byte）·
+  2014/2015 USB 模式（UVC/NCM）1/4 — **絕不寫**。
+
 ## 方案
 
 | | 即時畫面 | 溫度 | 狀態 |
@@ -26,7 +41,7 @@ Android 一般 App 無法給 usb0 設固定 IP，不採用。
 
 B 可行的話：160×120 與 MAG160 同尺寸，內建 SR 模型直接可用（`thermal_120x160`）。
 
-## 第 1 步 — 診斷版 2.8-alpha1（本分支）
+## 第 1 步 — 診斷版 2.8-alpha1
 
 `usb/Hik4117Source.kt`，不用原廠 SDK（`UsbDeviceConnection` 直接收 bulk、下 XU）：
 
@@ -43,14 +58,90 @@ B 可行的話：160×120 與 MAG160 同尺寸，內建 SR 模型直接可用（
 - 報告在抽屜，「複製報告」= 報告 + Debug 即時診斷行。
 - JVM 上用模擬的 4117（照協議文件）跑過：連線、2046、測試、還原、raw/無旗標 MJPEG 切幀。
 
+## 第 1b 步 — 2.9-alpha1（依原廠 SDK 補強）
+
+- 串流測試改掃 `byVideoCodingType` **1..11**（原 0..8；0 不是合法值，9/10/11 漏測）。
+- 分類器認得 `FRMI` 頭（四種位元組順序都找，且頭長須合理）：報告列出頭長、類型、資料長、
+  RT 資訊（寬高 / len / fps / 幀號）、`dwTmDataMode` / scale / offset / 凍結旗標，
+  再算頭後溫度資料的 u16 範圍與（mode 0 時）f32 範圍。Debug 行只顯示第一段。
+- **FFC**：2025（2/4），payload = 通道位元組，長度補到 GET_LEN 回報值（SDK 不帶參數，實際 payload 未知）。
+- **發射率**：讀 2030 → 改第 16 byte（ε × 100，1..100）→ 2031 寫回；斷線時寫回相機原值。
+- 兩者結果與錯誤碼都寫進報告。
+
 ### 給測試者
 
-1. 裝 `MagViewer-2.8-alpha4-beta.apk`（「MagViewer β」，與正式版並存；2.8-alpha2 起 Android 10 以上）。
+1. 裝 `MagViewer-2.9-alpha1-beta.apk`（「MagViewer β」，與正式版並存；Android 10 以上）。
 2. 插上 4117 → 允許「相機」權限 → 允許 USB。應出現溫度畫面（約 1 fps）。
-3. 按 Debug 截圖一張；開抽屜 →「執行串流測試」→ 等約 1 分鐘 →「複製報告」傳回來。
+3. 按 Debug 截圖一張；按一次 FFC；抽屜裡把發射率調到 0.90 再調回 1.00。
+4. 開抽屜 →「執行串流測試」→ 等約 1 分鐘 →「複製報告」傳回來。
+
+## 第 1c 步 — 2.9-alpha2（issue #4：舊韌體，版本探測回全 0）
+
+issue #4 的 TB-4117-3/S：sel4 回 `00 00 00 00`、所有 GET_LEN 為 0，但原廠 App 正常。
+拆它附的 APK（`com.example.hikmicroviewerr`，內含同一份 libHCUSBSDK 2.4.0.3）：
+`CUsbDeviceThermalV2::Open` → `DetectDeviceVersion`，"2.0" → `ProtocolStrategyUvc20`
+（hik-tb4117 文件描述、我們原本實作的那套）；**不符 → 對 sel3 SET_CUR `{00 05}`，改用
+`ProtocolStrategyUvc10`**。Uvc10 由反組譯得出（未上機）：
+
+- 無 sel5 選命令、無 GET_LEN。wValue = 組號 << 8、wIndex = 0x0a00。
+- 簡單 GET：OUT（bmRequestType 0x21，**bRequest 0x81**）資料 `{組, sub, 0, 通道=1}`
+  → IN（0xA1/0x81）≤512 B，前 3 byte 是頭。
+- 2046：A 段 OUT 0x21/**0x85** `{03 09 00 01}` → IN 0xA1/0x85 7 B（3 byte 頭 + u32 總長 N）；
+  B 段每片先重送 OUT 0x21/0x81 同命令，再 IN ≤512 B（3 byte 頭 + ≤509 B），收到 N − 3。
+  請求結構（時間戳）不送，只有通道位元組。資料內 {w,h,bytes} 的位置未知 → 用搜尋定位。
+- 寫入（Uvc10 WriteDataStrategy）未解，legacy 模式下補償 / ε / FFC / 2039 全關。
+
+報告要看：`legacy protocol` 行、各查詢的原始 hex、`legacy 2046 head` / `chunk head`、
+第一幀溫度範圍或錯誤訊息。
+
+## 第 1d 步 — 2.9-alpha4（issue #4 第二份報告）
+
+alpha2 報告：sel3 `{00 05}` 送出成功，但每個查詢都回我們送的 4 byte + 0（回音），2046 長度讀成 1。
+再看 SDK：命令組包（`CUsbControlTransfer::Excute()+0x650`）寫的是 `{組, 旗標, sub}`
+（旗標 0 = 讀、0x88 = 寫，2030 的 Excute 看得到），有通道的命令再加通道位元組；
+Uvc10 的 OUT 就把這段原樣送出、IN 用同一個 bRequest。alpha2 送的是 `{組, sub, 0, 1}`，順序反了。
+
+- 連線時用 2011 試五種：SDK 順序（含 / 不含通道）、+20 ms、讀兩次、alpha2 順序 +50 ms；
+  每種寫一行 `legacy try …`，第一個不是回音的就沿用（全回音則用 SDK 順序）。
+- 沒有溫度（通道鎖住，或 2046 連 3 次失敗且一張都沒成功）→ 顯示相機自己的 MJPEG
+  （`ThermalSource.videoSeq` / `videoFrame`；`FrameResult.videoOnly`：無讀數、標記、色條，
+  不存 .mgt）。
 
 ## 下一步（看報告決定）
 
+- 某個 coding 值出現 `FRMI` 頭、溫度範圍合理、fps 接近 25 → 做方案 B（解析該格式；mode 8 最理想：溫度 + YUV）。
 - 某個 coding 值讓串流變成 raw 且 f32 / u16 範圍像溫度、fps 接近 25 → 做方案 B（解析該格式）。
 - 都還是 JPEG → 方案 A：MJPEG 即時顯示 + 2046 疊溫度（`ThermalSource` 要加「只有畫面」的路徑）。
 - 2046 太慢 / 失敗 → 看錯誤碼與時間再議。
+
+## 2.9-alpha7（2026-11-11）— 舊韌體讀溫度第三次嘗試
+alpha4 報告：SDK 順序 {g 0 s ch} 拿到真的 2011 回應（`01 00 01` + "V5.5.4 build 200822"），
+但「read twice」與 alpha2 順序之後所有查詢都回 0 → 推測模組命令通道被弄亂（未證實）。
+- 只試 {g 0 s ch} / {g 0 s}；全 0 回應 → 重送 sel3 {00 05} 再問一次（報告記前 5 次）。
+- 2046 輪流送「只有命令頭」/「命令頭 + 2.0 的 13 B 請求」，成功就固定（Debug 顯示 ✓）。
+- 下一份報告要看：readInfo 是否不再是 0、`resync` 次數、`legacy 2046 head`、是否出現 ✓。
+
+## 2.9-alpha8（2026-11-12）— 2046 長度是 big-endian
+alpha7 報告：所有讀取都有真回應（resync 0），只有 2046 失敗：`legacy length -968556288, head 03 00 09 00 01 45 c6`。
+頭後 4 B 以 big-endian 讀是 83398 / 83230 / 83202 / 91826 ≈ 76800（120×160 f32）+ JPEG → 長度讀反了。
+- `legacyDoubleGet` 長度改 `be32`；chunk 提早結束時交出已收到的資料（由解析端檢查大小）。
+- 預期變慢：~83 KB ÷ 509 B ≈ 164 輪 OUT+IN，溫度畫面只有約 1 fps 或更低（「2.0」韌體的 2046 也是 ~1–2 s/幀）。
+- 要更高幀率只能走串流（2039 coding type，方案 B）；舊協定的寫入還沒解，下一步。
+- 下一份報告要看：`legacy 2046 head … → N B`、`chunk head`、`2046 first frame: … ms`、是否出現 ✓。
+
+## 2.9-alpha9（2026-11-12）— 串流測試自動執行、FRMI 溫度直接上畫面
+- 連上 4117 就自動跑串流測試（約 1 分鐘），測試者不用按任何東西。
+- 任何帶 120×160（或 160×120）溫度矩陣的 FRMI 幀都直接當溫度幀用（f32，或 u16 ÷ dwTmScale + dwTmOffset）。
+- 測試中溫度幀最快、且 ≥ 2 幀/s 的 coding/格式會留著用（live），並記在 prefs；下次連線直接進入，3 秒內沒溫度就退回 2046 再測一次。斷線時把 2038 還原。
+- 報告看：每列的 `TEMPS x/s`、`LIVE stream: …`；Debug 看 `live stream … temps/s`。
+- Tiny1B：實機 rowΔ 256:1 192:24 → 列長是 256，改回 256×192（之前照 demo 畫成 192×256 出現條紋）。
+
+## 2.9-alpha11（2026-11-12）— 舊韌體 2046 的矩陣是 160×120
+alpha9 報告：長度修正有效，2046 收到 ~97 KB，版面和「2.0」韌體相同：`01` + JPEG 長度 + w + h + 76800 + 10 B 保留 + JPEG + f32。
+但 w=160、h=120（橫向），findSizes 只認 120×160 → `no 120×160 sizes`。27 + 20776 + 76800 = 97603 與總長吻合。
+- 兩種順序都接受；用 rowΔ（列長 160 vs 120 哪個較平滑）判斷實際方向，橫向就順時針轉成直向。Debug 顯示 `matrix …`。
+- 舊韌體上 YUY2/H264 格式也都送 JPEG：沒有溫度串流，只能 2046（~97 KB/幀 ≈ 190 輪 control transfer）。
+
+## 2.9-alpha12（2026-11-14）— 新韌體串流成功，矩陣前 4 B
+另一位使用者（「2.0」韌體）：自動測試找到 coding=2 MJPEG 240x320，live 22.9 溫度幀/s。FRMI head 132、type 6、data 76804 = 76800 + 4。
+但 MIN 0.0 °C、邊緣一條斷續的線 → 4 B 在矩陣前面，從 k + head 讀晚了一格。改成 dwLen = 矩陣 + 4 時從 k + head + 4 讀。
