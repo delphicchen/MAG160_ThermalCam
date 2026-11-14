@@ -10,6 +10,7 @@
 ![Sensor](https://img.shields.io/badge/sensor-160×120%20%40%2015%20fps-orange)
 ![GPU](https://img.shields.io/badge/AI%20upscale-ncnn%20%2B%20Vulkan-purple)
 ![License](https://img.shields.io/badge/license-noncommercial-blue)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/delphicchen)
 
 </div>
 
@@ -206,3 +207,5 @@ Magnity **MAG-Mx / MAG-Cx** USB 熱像儀（VID `0x833C`）硬體很好，但原
 
 **幫這個 repository 按個星星**——這是我決定要不要繼續打磨它的依據。
 歡迎提 Issue 和 Pull Request。
+
+如果它救活了你的熱像儀，也可以[在 Ko-fi 請我喝杯咖啡 ☕](https://ko-fi.com/delphicchen)。

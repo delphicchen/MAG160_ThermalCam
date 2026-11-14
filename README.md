@@ -10,6 +10,7 @@
 ![Sensor](https://img.shields.io/badge/sensor-160×120%20%40%2015%20fps-orange)
 ![GPU](https://img.shields.io/badge/AI%20upscale-ncnn%20%2B%20Vulkan-purple)
 ![License](https://img.shields.io/badge/license-noncommercial-blue)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/delphicchen)
 
 </div>
 
@@ -243,6 +244,8 @@ Temperature readings are informational only; this is not a calibrated instrument
 
 **Give the repository a star** — it's how I decide whether to keep polishing it.
 Issues and pull requests are welcome.
+
+If it saved you a camera, you can also [buy me a coffee on Ko-fi ☕](https://ko-fi.com/delphicchen).
 
 ---
 
