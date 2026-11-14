@@ -145,6 +145,18 @@ object FusionCalibration {
             f == null || kotlin.math.abs(s.invZ - invZ) < 1e-4f || (focusD - f) * (invZ - s.invZ) >= 0f
         }
 
+    /**
+     * 1/Z of an alignment (dx, dy) from how far it sits from the [far] sample, with no
+     * measured distance (PLAN_CALIBRATION.md, simple wizard). The overlay offset is a
+     * fraction of the upright visible frame, so a lens spacing B shifts it by
+     * B·Δ(1/Z) / (2·tan(half FOV)) along each axis; with the straight-line spacing
+     * [baselineM] known, the size of the shift gives Δ(1/Z) whatever direction B points in.
+     * [tanX], [tanY]: tan of the visible camera's half field of view along upright x / y.
+     */
+    fun invZFromParallax(far: CalibSample, dx: Float, dy: Float,
+                         tanX: Float, tanY: Float, baselineM: Float): Float =
+        far.invZ + hypot(2f * tanX * (dx - far.dx), 2f * tanY * (dy - far.dy)) / baselineM
+
     /** Metres for an inverse distance; at or below the noise floor = ∞. */
     fun distanceM(invZ: Float): Float =
         if (invZ > 1e-4f) 1f / invZ else Float.POSITIVE_INFINITY

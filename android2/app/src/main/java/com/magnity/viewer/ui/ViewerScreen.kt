@@ -1050,41 +1050,68 @@ private fun distanceField(m: Float): String =
 @Composable
 private fun WizardPanel(vm: ViewerViewModel) {
     val step = vm.wizardStep ?: return
-    val n = ViewerViewModel.WIZARD_STEPS_M.size
+    val n = vm.wizardSteps.size
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         when {
-            step == 0 -> {
-                Text(stringResource(R.string.wizard_title), color = FG, fontWeight = FontWeight.Bold)
-                Text(stringResource(R.string.wizard_intro), color = DIM, fontSize = 11.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { vm.wizardCancel() }, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.cancel))
-                    }
-                    Button(onClick = { vm.wizardBegin() }, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.wizard_start))
-                    }
-                }
-            }
+            step == 0 -> WizardIntro(vm)
             step <= n -> WizardCapture(vm, step, n)
             else -> WizardSummary(vm)
         }
     }
 }
 
+/** Intro: the simple run (lens spacing from a ruler, nothing else measured) by default,
+ *  the measured four-distance run behind "Advanced". */
+@Composable
+private fun WizardIntro(vm: ViewerViewModel) {
+    val simpleOk = vm.wizardSimpleAvailable()
+    var adv by remember { mutableStateOf(!simpleOk) }
+    var cm by remember { mutableStateOf(vm.fusionBaselineCm.takeIf { it > 0f }
+        ?.let { "%.1f".format(java.util.Locale.ROOT, it) } ?: "") }
+    val spacing = cm.trim().replace(',', '.').toFloatOrNull()?.takeIf { it in 1f..40f }
+    Text(stringResource(R.string.wizard_title), color = FG, fontWeight = FontWeight.Bold)
+    if (adv) {
+        if (!simpleOk) Text(stringResource(R.string.wizard_no_optics), color = Color(0xFFD6A93D), fontSize = 11.sp)
+        Text(stringResource(R.string.wizard_intro_adv), color = DIM, fontSize = 11.sp)
+    } else {
+        Text(stringResource(R.string.wizard_intro), color = DIM, fontSize = 11.sp)
+        TextField(value = cm, onValueChange = { cm = it }, singleLine = true,
+                  label = { Text(stringResource(R.string.wizard_spacing)) },
+                  keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { vm.wizardCancel() }, modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.cancel))
+        }
+        if (simpleOk) OutlinedButton(onClick = { adv = !adv }, modifier = Modifier.weight(1f)) {
+            Text(stringResource(if (adv) R.string.wizard_simple else R.string.wizard_advanced))
+        }
+        Button(onClick = { if (!adv) vm.fusionBaselineCm = spacing!!; vm.wizardBegin(simple = !adv) },
+               enabled = adv || spacing != null, modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.wizard_start))
+        }
+    }
+}
+
 @Composable
 private fun WizardCapture(vm: ViewerViewModel, step: Int, n: Int) {
-    val suggest = ViewerViewModel.WIZARD_STEPS_M[step - 1]
+    val suggest = vm.wizardSteps[step - 1]
+    // simple run, past the far step: the distance comes from the alignment itself
+    val computed = vm.wizardSimple && step > 1
     var text by remember(step) { mutableStateOf(distanceField(suggest)) }
-    var dlg by remember(step) { mutableStateOf(true) }     // measure first, then align
-    val invZ = parseDistance(text)
+    var dlg by remember(step) { mutableStateOf(!computed) }     // measure first, then align
+    val invZ = if (computed) vm.wizardComputedInvZ() else parseDistance(text)
     Text(stringResource(R.string.wizard_step, step, n), color = FG, fontWeight = FontWeight.Bold)
-    Text(if (step == 1) stringResource(R.string.wizard_far_hint)
-         else stringResource(R.string.wizard_near_hint, distanceField(suggest) + " m"),
-         color = DIM, fontSize = 11.sp)
+    Text(when {
+             computed -> stringResource(R.string.wizard_simple_near_hint, distanceField(suggest) + " m")
+             step == 1 -> stringResource(R.string.wizard_far_hint)
+             else -> stringResource(R.string.wizard_near_hint, distanceField(suggest) + " m")
+         }, color = DIM, fontSize = 11.sp)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(stringResource(R.string.wizard_distance, invZ?.let { vm.distanceText(it) } ?: "?"),
+        Text(stringResource(if (computed) R.string.wizard_computed else R.string.wizard_distance,
+                            invZ?.let { vm.distanceText(it) } ?: "?"),
              color = ACCENT, fontSize = 12.sp)
-        TextButton(onClick = { dlg = true }) { Text(stringResource(R.string.wizard_edit), fontSize = 12.sp) }
+        if (!computed) TextButton(onClick = { dlg = true }) { Text(stringResource(R.string.wizard_edit), fontSize = 12.sp) }
         vm.suggestedInvZ()?.let {
             Text(stringResource(R.string.wizard_lens_estimate, vm.distanceText(it)), color = DIM, fontSize = 10.sp)
         }

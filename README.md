@@ -64,7 +64,7 @@ SDK, and grew from there to other modules.
 | 📸 **Snapshots** | One tap saves a PNG. |
 | 🎬 **Video recording** | Hardware **HEVC/H.265** encoding with automatic H.264 fallback. |
 | 🌡️ **Temperature captures** | Snapshots and recordings can also save a `.mgt` file holding every pixel's °C — reopen it in the app and read any position, in any frame. |
-| 🔀 **Visible-light fusion (beta)** | Overlay the phone camera's edges on the thermal image (MSX-style), blend, or search in the wide visible view — with alignment calibrated at several distances, a calibration wizard that fits the alignment over several measured distances, auto distance from centre-weighted lens focus (with a crosshair showing the patch it measures), and calibration export/import. |
+| 🔀 **Visible-light fusion (beta)** | Overlay the phone camera's edges on the thermal image (MSX-style), blend, or search in the wide visible view — with alignment calibrated at several distances, a calibration wizard (simple: enter the lens spacing from a ruler and align far and near, no distances to measure; advanced: a fit over several measured distances), auto distance from centre-weighted lens focus (with a crosshair showing the patch it measures), and calibration export/import. |
 | 📍 **Optional geo-tag** | Stamp precise GPS location into snapshots and videos — off until you turn it on. |
 | 🌐 **Interface language** | English, 繁體中文 or 简体中文, switched in the drawer (or follow the system). |
 | 💾 **Remembers your setup** | Palette, range, rotation, upscaler, emissivity and more survive restarts. |
@@ -104,6 +104,13 @@ SDK, and grew from there to other modules.
 
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
+
+### 2.11 — 2026-11-14
+- **Simpler fusion calibration** — the calibration wizard no longer needs measured distances:
+  enter the spacing between the phone's lens and the thermal lens (one ruler measurement), align
+  once far away and once or twice up close, and the app works the near distances out from the
+  parallax. The measured four-distance run is still there under **Advanced**, and existing
+  calibrations are untouched.
 
 ### 2.10 — 2026-11-14
 - **Sharper built-in Thermal SR, fewer invented hot spots** — all three sizes (full / medium /
