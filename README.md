@@ -105,6 +105,12 @@ SDK, and grew from there to other modules.
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.10 — 2026-11-14
+- **Sharper built-in Thermal SR, fewer invented hot spots** — all three sizes (full / medium /
+  lite) get new v5 weights: same network and speed, trained re-parameterised and distilled from a
+  40× larger teacher (`sr_train/PLAN_V5.md`). On held-out thermal frames: +0.1–0.2 dB PSNR and
+  5–18 % fewer invented peaks than 2.9's models.
+
 ### 2.9 — 2026-11-14
 - **InfiRay Tiny1C and Tiny1B** (256×192, USB) through InfiRay's IRUVC Android SDK 1.4.2:
   temperatures, FFC and emissivity.
