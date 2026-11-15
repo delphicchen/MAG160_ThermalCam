@@ -12,8 +12,8 @@ android {
         applicationId = "com.magnity.viewer"
         minSdk = 29
         targetSdk = 35
-        versionCode = 38
-        versionName = "2.11.2"
+        versionCode = 39
+        versionName = "2.11.3"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild {
             cmake { arguments += listOf("-DANDROID_STL=c++_shared") }
