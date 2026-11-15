@@ -286,7 +286,10 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                         Text(notice, color = Color(0xFFD6A93D), fontSize = 13.sp, maxLines = 1,
                              overflow = TextOverflow.Ellipsis)
                     } else {
-                        Text("${fr.w}×${fr.h} · " + "%.1f fps".format(vm.fps), color = ACCENT,
+                        // sensor grid → displayed size, when upscaling changes it (issue #4)
+                        val out = if (fr.bitmap.width != fr.w || fr.bitmap.height != fr.h)
+                            " → ${fr.bitmap.width}×${fr.bitmap.height}" else ""
+                        Text("${fr.w}×${fr.h}$out · " + "%.1f fps".format(vm.fps), color = ACCENT,
                              fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 } else {
