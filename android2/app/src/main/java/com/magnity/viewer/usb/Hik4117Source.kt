@@ -1134,6 +1134,16 @@ class Hik4117Source(val device: UsbDevice) : ThermalSource {
         }
         if (mode == 1 && c.average() > 150) for (i in c.indices) c[i] -= 273.15f
         if (c.count { !it.isFinite() || it < -60f || it > 1000f } * 100 > px) return null
+        // newer firmware: a few pixels (the first one at least) arrive as exactly 0 —
+        // MIN pinned at 0.0 °C in the top-left corner. Take the next real pixel instead.
+        if (mode != 1) {
+            val holes = c.count { it == 0f }
+            if (holes in 1..px / 100) {
+                val good = c.indexOfFirst { it != 0f && it.isFinite() }
+                var last = if (good >= 0) c[good] else 0f
+                for (i in c.indices) if (c[i] == 0f) c[i] = last else last = c[i]
+            }
+        }
         return IntArray(px) { i ->
             val x = i % W; val y = i / W
             val f = if (w == W) c[i] else c[(W - 1 - x) * H + y]

@@ -1224,6 +1224,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
             recorder?.also { recorder = null }?.stop()
             thermalWriter?.also { thermalWriter = null }?.close()
         }
+        recExec.shutdown()
         playback?.close(); playback = null
         anime4k?.close()
         ncnn?.close()
@@ -1868,23 +1869,39 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** One encoder thread: composing + encoding a 480×712 frame took ~30 ms on the
+     *  processing loop and halved the live fps. A frame arriving while the last one is
+     *  still encoding is skipped (the video gets fewer frames, the live view keeps its rate). */
+    private val recExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val recBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** Called on the processing thread right after a frame is built. */
     private fun feedRecorder(fr: FrameResult) {
         synchronized(recLock) {
             val r = recorder ?: return
             val (w, h) = FrameComposer.outSize(fr)
             if (w != r.width || h != r.height) return     // rotated mid-recording: skip
-            try {
-                r.addFrame(composite(fr))
+            runCatching {
                 thermalWriter?.takeIf { !fr.videoOnly && it.width == fr.w && it.height == fr.h }
                     ?.addFrame(fr.temps)
-                return
+            }.onFailure { Log.e(TAG, "temperature frame failed", it) }
+        }
+        if (!recBusy.compareAndSet(false, true)) return
+        recExec.execute {
+            var broke = false
+            try {
+                val bmp = composite(fr)
+                synchronized(recLock) {
+                    val r = recorder
+                    if (r != null && bmp.width == r.width && bmp.height == r.height) r.addFrame(bmp)
+                }
             } catch (e: Throwable) {
                 Log.e(TAG, "video frame failed", e)
                 notice = str(R.string.n_rec_stopped, e.message ?: "")
-            }
+                broke = true
+            } finally { recBusy.set(false) }
+            if (broke) stopRecording()   // encoder broke — finalise what we have
         }
-        stopRecording()          // encoder broke — finalise what we have
     }
 
     // ---- saved temperature captures --------------------------------------------
