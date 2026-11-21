@@ -105,6 +105,12 @@ SDK, and grew from there to other modules.
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.11.4 — 2026-11-21
+- **HIK 4117 (newer firmware): MIN no longer stuck at 0.0 °C in the top-left corner** — pixels
+  the module sends as exactly 0 are filled from their neighbours.
+- **Recording no longer drags the live frame rate down** — the video is composed and encoded on
+  its own thread; frames that arrive while it is busy are left out of the video only.
+
 ### 2.11.3 — 2026-11-15
 - **The bottom line shows the displayed resolution too** — e.g. `120×160 → 480×640`, so it is
   clear that upscaling is running; it used to show the sensor size alone.
