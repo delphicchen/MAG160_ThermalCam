@@ -105,6 +105,14 @@ SDK, and grew from there to other modules.
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.12 — 2026-11-27
+- **AUTO contrast (γ)** — an AUTO button at the end of the colour bar: γ follows the scene so its
+  median temperature gets the palette's middle colour (γ ½…2, glides smoothly). Dragging the
+  handle or double-tapping goes back to manual.
+- **Palette picker with previews** — the palette button shows the live picture in all eight
+  palettes as a 3×3 grid over the image; tap one to pick it (✕ closes). Without a temperature
+  picture the list shows a colour strip beside each name.
+
 ### 2.11.4 — 2026-11-21
 - **HIK 4117 (newer firmware): MIN no longer stuck at 0.0 °C in the top-left corner** — pixels
   the module sends as exactly 0 are filled from their neighbours.
