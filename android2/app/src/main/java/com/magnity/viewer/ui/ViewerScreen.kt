@@ -1332,12 +1332,14 @@ private const val BAR_X_MAX = 0.7937f
 private val PALETTE_LABELS = mapOf(
     "inferno" to R.string.palette_inferno, "ironbow" to R.string.palette_ironbow,
     "jet" to R.string.palette_jet, "gray" to R.string.palette_gray,
+    "black_hot" to R.string.palette_black_hot,
     "hot" to R.string.palette_hot, "viridis" to R.string.palette_viridis,
     "rainbow" to R.string.palette_rainbow, "nipy_spectral" to R.string.palette_nipy_spectral,
 )
 
 /** The palette picker: the frame's temperatures in each palette (same range and γ as
- *  the picture), 3×3 over the image; the 9th cell closes it. Native grid only — no
+ *  the picture), 3×3 over the image (a cell past the last palette closes it; so does the
+ *  palette button). Native grid only — no
  *  upscaling, so it stays cheap enough to follow the live frame. */
 @Composable
 private fun PaletteGrid(fr: FrameResult, current: String, gamma: Float, modifier: Modifier,
