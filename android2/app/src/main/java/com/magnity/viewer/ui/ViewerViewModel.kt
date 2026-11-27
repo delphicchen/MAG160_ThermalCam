@@ -51,6 +51,8 @@ import com.magnity.viewer.usb.ThermalSource
 import com.magnity.viewer.usb.ThermalSources
 import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -136,6 +138,8 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         private const val FUSION_DUMP_FRAMES = 10
         /** Auto range time constant: the 1–99 % range glides instead of jumping per frame. */
         private const val RANGE_TAU_S = 0.4f
+        /** AUTO γ glides slower than the range, or the two together make the picture pump. */
+        private const val GAMMA_TAU_S = 1.0f
         /** Default [minSpan], °C: a few times an uncooled core's noise (~50 mK), still
          *  narrow enough to show half-degree differences in the middle of the palette. */
         const val DEFAULT_MIN_SPAN = 1.0f
@@ -210,8 +214,17 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
     var minSpan: Float by pref("min_span", DEFAULT_MIN_SPAN)
     /** Display gamma (contrast curve) of the palette, see [Palettes.lut]; display only. */
     var displayGamma: Float by pref("display_gamma", 1f)
-    /** The palette LUT as shown: [paletteName] through [displayGamma]. */
-    fun displayLut(): IntArray = Palettes.lut(paletteName, displayGamma)
+    /** AUTO γ (the colour bar's AUTO button): γ follows the scene so its median
+     *  temperature gets the palette's middle colour; a manual γ turns it off. */
+    var autoGamma by pref("auto_gamma", false)
+    /** The γ AUTO picked last (0.05 steps, glides like the range). */
+    var autoGammaValue by mutableFloatStateOf(1f); private set
+    private var gammaGlide = 1f
+    private var gammaAt = 0L
+    /** The γ the picture uses: AUTO's or the manual one. */
+    val shownGamma: Float get() = if (autoGamma) autoGammaValue else displayGamma
+    /** The palette LUT as shown: [paletteName] through [shownGamma]. */
+    fun displayLut(): IntArray = Palettes.lut(paletteName, shownGamma)
     // default = camera plugged straight into the phone's USB-C port, portrait UI
     var rotation by pref("rotation", 90)            // 0/90/180/270 clockwise
     var mirror by pref("mirror", true)
@@ -1370,6 +1383,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         // the readouts and the EDGES gate keep using [oriented]; only the picture changes
         val shown = if (detailEnhance) detailFilter.apply(oriented, ow, oh, slo, shi)
                     else oriented
+        if (autoGamma) updateAutoGamma(shown, slo, shi)
 
         t = lap(ST_RNG, t)
 
@@ -1698,6 +1712,22 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
 
     // auto range glide state (processing thread); snapped on each new stream
     @Volatile private var rangeSnap = true
+
+    /** AUTO γ: the median's place m in the range gets the middle colour, m^(1/γ) = ½ →
+     *  γ = ln m / ln ½ (the bar's knob then sits on the median). m is held to 0.25..0.71
+     *  (γ 2 … ½) so a nearly empty scene is not pushed to an extreme. */
+    private fun updateAutoGamma(a: FloatArray, lo: Float, hi: Float) {
+        val med = ImageOps.percentileRange(a, 50f, 50f).first
+        val m = ((med - lo) / (hi - lo)).coerceIn(0.25f, 0.71f)
+        val target = ln(m) / ln(0.5f)
+        val now = System.nanoTime()
+        if (gammaAt == 0L) gammaGlide = target
+        else gammaGlide += (1f - exp(-((now - gammaAt) / 1e9f).coerceIn(0f, 1f) / GAMMA_TAU_S)) *
+                           (target - gammaGlide)
+        gammaAt = now
+        val q = (gammaGlide * 20f).roundToInt() / 20f
+        if (q != autoGammaValue) autoGammaValue = q
+    }
     private var rangeAt = 0L
 
     /** Motion-adaptive temporal IIR on the display field (history resets on orientation
@@ -1755,7 +1785,7 @@ class ViewerViewModel(app: Application) : AndroidViewModel(app) {
         srFrame = false
         // what the frame is made of: enough to tell a frozen or flat stream from a
         // display problem in a user's screenshot
-        sb.append("\n$paletteName γ%.2f · ${upscaler.name}".format(displayGamma) + " ×$upscale → $renderPath")
+        sb.append("\n$paletteName γ%.2f${if (autoGamma) " AUTO" else ""} · ${upscaler.name}".format(shownGamma) + " ×$upscale → $renderPath")
         lastFrame?.let {
             sb.append("\nT %.2f..%.2f °C · scale %.2f..%.2f · Δ %.3f °C"
                 .format(it.tempMin, it.tempMax, it.scaleLoC, it.scaleHiC, frameDiffC))
