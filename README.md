@@ -105,6 +105,10 @@ SDK, and grew from there to other modules.
 Full notes and the APK for each version are in
 [Releases](https://github.com/delphicchen/MAG160_ThermalCam/releases).
 
+### 2.12.1 — 2026-11-27
+- **New palette: black hot** — gray reversed, hot is black (after gray in the list). The
+  palette grid is now full 3×3; tap the palette button again to close it.
+
 ### 2.12 — 2026-11-27
 - **AUTO contrast (γ)** — an AUTO button at the end of the colour bar: γ follows the scene so its
   median temperature gets the palette's middle colour (γ ½…2, glides smoothly). Dragging the
