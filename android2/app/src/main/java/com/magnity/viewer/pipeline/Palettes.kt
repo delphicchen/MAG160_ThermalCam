@@ -6,7 +6,7 @@ package com.magnity.viewer.pipeline
  * so both apps render pixels the same colours. Entries are 0xFFRRGGBB.
  */
 object Palettes {
-    val NAMES = listOf("inferno", "ironbow", "jet", "gray", "hot", "viridis", "rainbow", "nipy_spectral")
+    val NAMES = listOf("inferno", "ironbow", "jet", "gray", "black_hot", "hot", "viridis", "rainbow", "nipy_spectral")
 
     private val INFERNO = intArrayOf(
         -16777213, -16777212, -16777210, -16711673, -16711415, -16711413, -16645874, -16645616, 
@@ -288,11 +288,15 @@ object Palettes {
         -3384228, -3380116, -3376004, -3371892, -3367780, -3363668, -3359556, -3355444,
     )
 
+    /** Black hot: [GRAY] reversed — hot is black (the usual thermal-scope / military look). */
+    private val BLACK_HOT = GRAY.reversedArray()
+
     fun lut(name: String): IntArray = when (name) {
         "inferno" -> INFERNO
         "ironbow" -> IRONBOW
         "jet" -> JET
         "gray" -> GRAY
+        "black_hot" -> BLACK_HOT
         "hot" -> HOT
         "viridis" -> VIRIDIS
         "rainbow" -> RAINBOW
