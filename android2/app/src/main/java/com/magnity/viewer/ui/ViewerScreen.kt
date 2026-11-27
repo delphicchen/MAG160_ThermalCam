@@ -6,11 +6,14 @@ import android.hardware.camera2.CaptureResult
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -24,6 +27,8 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -99,6 +104,10 @@ fun ViewerScreen(vm: ViewerViewModel = viewModel()) {
 @Composable
 private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
     val fr = vm.lastFrame
+    // palette button → 3×3 grid over the picture, each cell the live frame in one palette
+    var pickPalette by remember { mutableStateOf(false) }
+    val canPreview = fr != null && !fr.videoOnly && fr.temps.size >= fr.w * fr.h
+    if (!canPreview) pickPalette = false
     Column(
         Modifier.fillMaxSize().background(Color(0xFF0D1117))
             .safeDrawingPadding().padding(horizontal = 10.dp, vertical = 4.dp),
@@ -124,6 +133,12 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.size(dispWdp, dispHdp)) {
                         ThermalImage(vm, fr, dispW, dispH, Modifier.fillMaxSize())
+                        if (pickPalette) {
+                            PaletteGrid(fr, vm.paletteName, vm.shownGamma, Modifier.fillMaxSize()) { n ->
+                                if (n != null) vm.paletteName = n
+                                pickPalette = false
+                            }
+                        }
                         // on-screen timing: over the image, so it never shrinks it
                         if (vm.debugOsd && vm.debugInfo.isNotEmpty()) {
                             Text(vm.debugInfo, color = Color.White, fontSize = 10.sp,
@@ -137,8 +152,9 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                     if (fr.videoOnly) {
                         Text(stringResource(R.string.video_only), color = DIM, fontSize = 11.sp)
                     } else {
-                        ColorBar(vm.paletteName, vm.displayGamma, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp),
-                                 onGamma = { vm.displayGamma = it })
+                        ColorBar(vm.paletteName, vm.shownGamma, fr.scaleLoC, fr.scaleHiC, Modifier.width(dispWdp),
+                                 onGamma = { vm.autoGamma = false; vm.displayGamma = it },
+                                 auto = vm.autoGamma, onAuto = { vm.autoGamma = !vm.autoGamma })
                     }
                 }
             } else {
@@ -227,13 +243,15 @@ private fun MainPane(vm: ViewerViewModel, onMenu: () -> Unit) {
                            modifier = Modifier.size(ACTION_H)) { Text("☰") }
             var exp by remember { mutableStateOf(false) }
             Box {
-                OutlinedButton(onClick = { exp = true }, modifier = Modifier.height(ACTION_H),
+                OutlinedButton(onClick = { if (canPreview) pickPalette = !pickPalette else exp = true },
+                               modifier = Modifier.height(ACTION_H),
                                contentPadding = PaddingValues(horizontal = 10.dp)) {
                     Text(paletteLabel(vm.paletteName), fontSize = 12.sp)
                 }
                 DropdownMenu(expanded = exp, onDismissRequest = { exp = false }) {
                     Palettes.NAMES.forEach { n ->
-                        DropdownMenuItem(text = { Text(paletteLabel(n)) }, onClick = {
+                        DropdownMenuItem(text = { Text(paletteLabel(n)) },
+                                         leadingIcon = { PaletteSwatch(n, vm.shownGamma) }, onClick = {
                             vm.paletteName = n; exp = false
                         })
                     }
@@ -539,7 +557,8 @@ private fun Float.clampTo(lo: Float, hi: Float) = if (hi < lo) lo else coerceIn(
 
 @Composable
 internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modifier: Modifier,
-                      onGamma: ((Float) -> Unit)? = null) {
+                      onGamma: ((Float) -> Unit)? = null,
+                      auto: Boolean = false, onAuto: (() -> Unit)? = null) {
     val lut = remember(palette, gamma) {
         android.graphics.Bitmap.createBitmap(Palettes.lut(palette, gamma), 256, 1,
             android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
@@ -556,7 +575,9 @@ internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modif
             }
         }
         .pointerInput(Unit) { detectTapGestures(onDoubleTap = { setGamma?.invoke(1f) }) }
-    Column(modifier) {
+    // [onAuto]: an AUTO γ switch right after the bar's end
+    Row(modifier, verticalAlignment = Alignment.Top) {
+    Column(Modifier.weight(1f)) {
         // with a knob the canvas is taller than the bar: the handle sticks out above and
         // below it (a thin line on the bar was easy to miss), and is easier to grab
         val pad = if (onGamma != null) 6.dp else 0.dp
@@ -591,6 +612,16 @@ internal fun ColorBar(palette: String, gamma: Float, lo: Float, hi: Float, modif
             Spacer(Modifier.weight(1f))
             Text("%.1f°C".format(hi), color = Color(0xFFC9D1D9), fontSize = 12.sp)
         }
+    }
+    if (onAuto != null) {
+        Spacer(Modifier.width(6.dp))
+        Text("AUTO", color = if (auto) Color.Black else DIM, fontSize = 11.sp,
+             fontWeight = FontWeight.Bold,
+             modifier = Modifier.padding(top = 3.dp)
+                 .background(if (auto) ACCENT else Color(0xFF30363D), RoundedCornerShape(4.dp))
+                 .clickable { onAuto() }
+                 .padding(horizontal = 6.dp, vertical = 4.dp))
+    }
     }
 }
 
@@ -1304,6 +1335,56 @@ private val PALETTE_LABELS = mapOf(
     "hot" to R.string.palette_hot, "viridis" to R.string.palette_viridis,
     "rainbow" to R.string.palette_rainbow, "nipy_spectral" to R.string.palette_nipy_spectral,
 )
+
+/** The palette picker: the frame's temperatures in each palette (same range and γ as
+ *  the picture), 3×3 over the image; the 9th cell closes it. Native grid only — no
+ *  upscaling, so it stays cheap enough to follow the live frame. */
+@Composable
+private fun PaletteGrid(fr: FrameResult, current: String, gamma: Float, modifier: Modifier,
+                        onPick: (String?) -> Unit) {
+    Column(modifier.background(Color(0xE60D1117)).padding(2.dp)) {
+        for (row in 0 until 3) Row(Modifier.weight(1f).fillMaxWidth()) {
+            for (col in 0 until 3) {
+                val name = Palettes.NAMES.getOrNull(row * 3 + col)
+                Box(Modifier.weight(1f).fillMaxHeight().padding(2.dp)
+                        .then(if (name == current) Modifier.border(2.dp, ACCENT) else Modifier)
+                        .clickable { onPick(name) },
+                    contentAlignment = Alignment.Center) {
+                    if (name != null) {
+                        val img = remember(fr, name, gamma) { paletteThumb(fr, Palettes.lut(name, gamma)) }
+                        Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
+                              filterQuality = FilterQuality.Low)
+                        Text(paletteLabel(name), color = Color.White, fontSize = 11.sp,
+                             modifier = Modifier.align(Alignment.BottomCenter)
+                                 .background(Color(0x99000000)).padding(horizontal = 4.dp))
+                    } else {
+                        Text("✕", color = DIM, fontSize = 22.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun paletteThumb(fr: FrameResult, lut: IntArray): ImageBitmap {
+    val lo = fr.scaleLoC
+    val k = 255f / (fr.scaleHiC - lo).coerceAtLeast(0.1f)
+    val t = fr.temps
+    val px = IntArray(fr.w * fr.h) { lut[((t[it] - lo) * k).toInt().coerceIn(0, 255)] }
+    return android.graphics.Bitmap.createBitmap(px, fr.w, fr.h,
+        android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+}
+
+/** A small strip of the palette, for the dropdown (no temperature frame to preview). */
+@Composable
+private fun PaletteSwatch(name: String, gamma: Float) {
+    val img = remember(name, gamma) {
+        android.graphics.Bitmap.createBitmap(Palettes.lut(name, gamma), 256, 1,
+            android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
+    Image(img, null, Modifier.size(48.dp, 14.dp), contentScale = ContentScale.FillBounds,
+          filterQuality = FilterQuality.Low)
+}
 
 @Composable
 private fun paletteLabel(name: String): String =
